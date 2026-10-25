@@ -1,0 +1,37 @@
+# ============================================================
+# Secretos y credenciales — NUNCA commitear (regla #2 del README)
+# ============================================================
+local.properties
+google-services.json
+*.jks
+*.keystore
+*.pem
+*.p12
+.env
+.env.*
+**/secrets.properties
+ghp_*
+
+# ============================================================
+# Android / Gradle (preparado para Fase 1)
+# ============================================================
+*.apk
+*.aab
+*.ap_
+*.dex
+build/
+*/build/
+.gradle/
+captures/
+.externalNativeBuild/
+.cxx/
+*.hprof
+
+# ============================================================
+# IDE / sistema
+# ============================================================
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
