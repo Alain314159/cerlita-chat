@@ -11,6 +11,14 @@ google-services.json
 .env.*
 **/secrets.properties
 ghp_*
+sbp_*
+
+# ============================================================
+# Backend — artefactos de build (el código fuente SÍ se commitea)
+# node_modules y bundles se regeneran con: bun install && deploy_functions.py
+# ============================================================
+backend/node_modules/
+backend/build/
 
 # ============================================================
 # Android / Gradle (preparado para Fase 1)

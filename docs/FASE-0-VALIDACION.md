@@ -42,3 +42,19 @@ curl -o /dev/null -s -w "DNS: %{time_namelookup}s  Conexión: %{time_connect}s  
 3. Dominio propio delante del backend cuando exista, para no depender de `*.supabase.co`.
 4. El protocolo completo (2 endpoints, JSON compacto) es portable a cualquier servidor en
    ~300 líneas.
+
+## Anti-pausa: estado (26-oct-2026)
+
+- ✅ **Edge Function `heartbeat` desplegada y verificada** (200 OK): hace un write real
+  en `app_heartbeat` en cada invocación.
+- ✅ **pg_cron interno activo**: `heartbeat-anti-pausa` cada 6h (minuto 17).
+- ⏳ **Cron externo** (cron-job.org o similar, gratis): llamar a
+  `https://wuptkddnkahmknolpxtp.supabase.co/functions/v1/heartbeat` cada 3 días.
+  Es la capa principal (pg_cron no cuenta garantizado como "actividad" ante una pausa).
+  Crear la cuenta cuando toque; no bloquea nada.
+
+## Backend desplegado (26-oct-2026)
+
+Migración SQL aplicada (17/17 statements) y 4 Edge Functions verificadas E2E con el
+smoke test de 23 checks — ver [../backend/README.md](../backend/README.md). BD limpia
+(0 usuarios: los 2 reales se registran desde la app con el código de invitación).

@@ -3,7 +3,7 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: pre-código. Fase 0 en curso — ítem 1 validado (Supabase accesible desde Cuba, 26-oct-2026).
+**Estado**: backend Fase 1 desplegado y verificado en producción (26-oct-2026). App Android pendiente.
 
 ## Documentación
 
@@ -12,6 +12,15 @@
 | [docs/PLAN-MAESTRO.md](docs/PLAN-MAESTRO.md) | Fases 0-3: stack, cripto, transporte, cronograma |
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
+| [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
+
+## Estado (26-oct-2026)
+
+- ✅ **Fase 0 ítem 1**: Supabase accesible desde Cuba
+- ✅ **Backend Fase 1 desplegado y verificado E2E (23/23)**: SQL + auth/sync/outbox/heartbeat
+  en `https://wuptkddnkahmknolpxtp.supabase.co/functions/v1` — BD limpia, lista para los
+  2 usuarios reales (se registran desde la app con código de invitación)
+- ⏳ Pendiente: app Android (Fase 1 cliente), Firebase (push), cron externo, decisiones P1-P4
 
 ## Reglas de trabajo (acordadas 26-oct-2026)
 

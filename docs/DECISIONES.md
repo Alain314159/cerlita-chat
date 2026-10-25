@@ -29,6 +29,13 @@ objeción; se ratifican al escribir código).
 | D17 | Repo | GitHub **privado**; regla permanente: commit + push en cada sesión de trabajo | Usuario 26-oct |
 | D18 | Nombre | PENDIENTE — se elige después; el repo se renombra cuando toque | Usuario 26-oct |
 | D19 | Código | Sin escribir código hasta nueva orden explícita | Usuario 26-oct |
+| D20 | Registro | Protegido por código de invitación (secret REG_INVITE_CODE) + tope duro de 10 usuarios | Análisis 26-oct (evita registros de extraños que conozcan la URL) |
+| D21 | Password servidor | Argon2id m=32MiB t=3 p=1 calculado en la Edge Function (noble, embebido en bundle), formato PHC propio | Implementación 26-oct |
+| D22 | Sesiones | Token propio 32B, se guarda SHA-256(tok), expira a 90 días, revocable. verify_jwt=false en las 4 funciones | Implementación 26-oct |
+| D23 | Conversación | Auto-creada con par ordenado (user_lo < user_hi, UNIQUE) al primer mensaje. Escala a más usuarios sin migración | Implementación 26-oct |
+| D24 | Lockout login | 5 fallos → 30s × 2^(n-5), máx 1h | Implementación 26-oct |
+| D25 | Deploy | Únicamente vía endpoint multipart (el legacy de body base64 produce BOOT_ERROR). noble empotrado con bun; postgres externo npm:postgres@3.4.9. Ver backend/README «Hallazgos» | Implementación 26-oct |
+| D26 | gzip | El servidor gzip si > 1 KB; Cloudflare comprime en tránsito según Accept-Encoding. OkHttp lo gestiona solo. Doble capa, sin coste | Implementación 26-oct |
 
 ## Pendientes (bloquean el arranque de Fase 1)
 
@@ -45,3 +52,10 @@ objeción; se ratifican al escribir código).
 
 Ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md). Ítem 1 (Supabase accesible): ✅.
 Ítems 2-5: pendientes de confirmar.
+
+## Backend — estado (26-oct-2026)
+
+**Desplegado y verificado E2E (23/23)**: migración SQL aplicada, 4 Edge Functions en
+producción (auth/sync/outbox/heartbeat), pg_cron anti-pausa activo, smoke test completo
+en verde y BD limpia. Detalle técnico y hallazgos del deploy: [backend/README.md](../backend/README.md).
+Pendiente del lado servidor: solo el cron externo (cron-job.org) y FCM (fase Firebase).
