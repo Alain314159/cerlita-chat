@@ -7,9 +7,14 @@ import cu.alain.chat.db.AppDatabase
 import cu.alain.chat.db.Message
 import cu.alain.chat.db.OutboxMsg
 import cu.alain.chat.db.PendingMsg
+import cu.alain.chat.db.Profile
 import cu.alain.chat.db.Room
+import cu.alain.chat.db.RoomPeer
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.net.SyncRow
+import cu.alain.chat.profile.Photos
+import cu.alain.chat.profile.ProfileMsg
+import cu.alain.chat.vault.Session
 import cu.alain.chat.vault.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.min
 import kotlin.random.Random
 
@@ -51,6 +57,7 @@ class ChatEngine(
     private val db: AppDatabase,
     private val store: SessionStore,
     private val api: cu.alain.chat.net.Api,
+    private val avatarsDir: File,
     private val onNewMessages: (Int) -> Unit,
 ) {
 
@@ -166,6 +173,8 @@ class ChatEngine(
             store.putRoomKey(roomId, roomKey, roomSalt)
             keys = keys + (roomId to (roomKey to roomSalt))
             _keysVersion.value += 1
+            // anunciar mi perfil: los que entren después lo verán en el historial (D61)
+            db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
             Result.success(RoomJoined(room, Crypto.encodeInvite(roomSalt, roomKey), sas))
         } catch (e: Exception) {
             Result.failure(e)
@@ -198,6 +207,8 @@ class ChatEngine(
             keys = keys + (roomId to (roomKey to roomSalt))
             _keysVersion.value += 1
             drainPendingForRoom(roomId) // mensajes que llegaron antes de la clave
+            // presentarme a los que ya están en la sala (D61)
+            db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
             Result.success(RoomJoined(room, "", sas))
         } catch (e: Exception) {
             Result.failure(e)
@@ -217,6 +228,10 @@ class ChatEngine(
         keys = keys + (roomId to (roomKey to roomSalt))
         _keysVersion.value += 1
         drainPendingForRoom(roomId)
+        // re-presentarme: los presentes no vieron nada de este teléfono (D61)
+        store.session?.let { s ->
+            db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
+        }
         return Result.success(roomId)
     }
 
@@ -234,9 +249,123 @@ class ChatEngine(
         store.clearRoomKeys()
         scope.launch {
             db.roomDao().wipe(); db.msgDao().wipe(); db.outboxDao().wipe(); db.pendingDao().wipe()
+            db.profileDao().wipe(); db.roomPeerDao().wipe()   // perfiles + pares (D61)
+            avatarsDir.deleteRecursively()                     // fotos propias y de pares
             db.metaDao().setLong("last_seq", 0)
         }
         refreshState()
+    }
+
+    // ────────────────────────── perfiles (D61) ──────────────────────────
+
+    /**
+     * Guarda el perfil propio y lo anuncia cifrado a todas las salas con
+     * clave. foto: bytes nuevos | null+keepPhoto=true (no tocar) | null+false (quitar).
+     */
+    suspend fun saveProfile(
+        displayName: String,
+        avatarJson: String,
+        photoBytes: ByteArray?,
+        keepPhoto: Boolean = false,
+    ): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val name = displayName.trim()
+        if (name.isEmpty() || name.length > ProfileMsg.MAX_NAME) {
+            return Result.failure(IllegalArgumentException("El nombre debe tener entre 1 y ${ProfileMsg.MAX_NAME} caracteres"))
+        }
+        val ts = System.currentTimeMillis()
+        val photoNow: Boolean
+        if (photoBytes != null) {
+            Photos.saveProfilePhoto(avatarsDir, s.uid, photoBytes)
+            photoNow = true
+        } else if (!keepPhoto) {
+            Photos.saveProfilePhoto(avatarsDir, s.uid, null)
+            photoNow = false
+        } else {
+            photoNow = Photos.photoFile(avatarsDir, s.uid).exists()
+        }
+        db.profileDao().upsert(
+            Profile(s.uid, name, avatarJson.take(ProfileMsg.MAX_JSON), photoNow, ts)
+        )
+        broadcastProfile()
+        return Result.success(Unit)
+    }
+
+    /** Anuncia el perfil propio a todas las salas con clave (tras editarlo). */
+    private suspend fun broadcastProfile() {
+        val s = store.session ?: return
+        val p = db.profileDao().get(s.uid) ?: return
+        var sent = false
+        db.roomDao().all().forEach { room ->
+            if (hasKey(room.roomId)) { announceProfileTo(room.roomId, p); sent = true }
+        }
+        if (sent) poke()
+    }
+
+    /** Anuncia a salas concretas (p. ej. donde apareció un par desconocido). */
+    private suspend fun announceToRooms(roomIds: Collection<String>) {
+        val s = store.session ?: return
+        val p = db.profileDao().get(s.uid) ?: return
+        var sent = false
+        roomIds.forEach { rid ->
+            if (hasKey(rid)) { announceProfileTo(rid, p); sent = true }
+        }
+        if (sent) poke()
+    }
+
+    /**
+     * Encola el anuncio del perfil a una sala: un mensaje cifrado MÁS (kind=1,
+     * invisible en el chat). Si con foto no cabe en el presupuesto del servidor,
+     * reintenta sin foto — el nombre y el avatar nunca se sacrifican.
+     */
+    private suspend fun announceProfileTo(roomId: String, p: Profile) {
+        val s = store.session ?: return
+        val key = keys[roomId.lowercase()] ?: return
+        val photoB64: String? = if (p.photo) {
+            Photos.photoFile(avatarsDir, s.uid).takeIf { it.exists() }?.readBytes()
+                ?.let { Photos.bytesToB64(it) }
+        } else null
+
+        val msgId = Crypto.uuid7()
+        val ts = System.currentTimeMillis()
+        val convKey = Crypto.convKey(key.first, roomId)
+        val mk = Crypto.msgKey(convKey, msgId)
+        val aad = Crypto.aad(msgId, s.uid, roomId)
+
+        var (nonce, ct) = Crypto.seal(mk, Crypto.frame(ProfileMsg.encode(p.displayName, p.avatarJson, photoB64, p.updatedAt)), aad)
+        if (ct.size > C.MAX_CT) {
+            // foto fuera de presupuesto: anuncio sin foto (no debería ocurrir: Photos degrada)
+            val (n2, c2) = Crypto.seal(mk, Crypto.frame(ProfileMsg.encode(p.displayName, p.avatarJson, null, p.updatedAt)), aad)
+            nonce = n2; ct = c2
+        }
+        if (ct.size < C.MIN_CT || ct.size > C.MAX_CT) return
+
+        db.msgDao().insert(
+            Message(
+                msgId, roomId, s.uname, mine = true, body = p.displayName, ts = ts,
+                state = C.ST_SENDING, kind = 1, senderUid = s.uid,
+            )
+        )
+        db.outboxDao().insert(OutboxMsg(msgId, roomId, b64(ct), b64(nonce), ts))
+    }
+
+    /**
+     * Aplica un anuncio descifrado: la versión (ts) mayor gana. El eco propio
+     * en un teléfono NUEVO restaura el perfil desde el historial; el eco en el
+     * teléfono que lo envió no pasa del guard de exists().
+     */
+    private suspend fun applyProfile(uid: String, p: ProfileMsg.Parsed) {
+        try {
+            val existing = db.profileDao().get(uid)
+            if (existing != null && existing.updatedAt >= p.ts) return
+            val photoBytes = p.photoB64?.let { Photos.b64ToBytes(it) }
+            Photos.saveProfilePhoto(avatarsDir, uid, photoBytes) // null → borra foto vieja
+            db.profileDao().upsert(
+                Profile(uid, p.name, p.avatarJson, photoBytes != null, p.ts)
+            )
+        } catch (_: Exception) {
+            // un anuncio corrupto jamás rompe la sincronización
+        }
     }
 
     // ────────────────────────── envío ──────────────────────────
@@ -263,7 +392,12 @@ class ChatEngine(
             return Result.failure(IllegalArgumentException("El mensaje es demasiado largo"))
         }
 
-        db.msgDao().insert(Message(msgId, roomId, s.uname, mine = true, body = text, ts = ts, state = C.ST_SENDING))
+        db.msgDao().insert(
+            Message(
+                msgId, roomId, s.uname, mine = true, body = text, ts = ts,
+                state = C.ST_SENDING, senderUid = s.uid,
+            )
+        )
         db.outboxDao().insert(OutboxMsg(msgId, roomId, b64(ct), b64(nonce), ts))
         poke()
         return Result.success(msgId)
@@ -321,17 +455,21 @@ class ChatEngine(
         val s = store.session ?: return -1
         var lastSeq = db.metaDao().getLong("last_seq") ?: 0
         var total = 0
+        val newPeerRooms = mutableSetOf<String>()
         try {
             while (true) {
                 val resp = api.sync(s.token, lastSeq)
                 if (resp.rows.isEmpty()) break
                 for (row in resp.rows) {
-                    if (ingest(row, s)) total++
+                    if (ingest(row, s, newPeerRooms)) total++
                 }
                 lastSeq = resp.nextSeq
                 db.metaDao().setLong("last_seq", lastSeq)
                 if (resp.rows.size < C.SYNC_LIMIT) break
             }
+            // pares desconocidos vistos → presentarme en esas salas (D61:
+            // con last_seq global no pueden verme mensajes previos a su join)
+            if (newPeerRooms.isNotEmpty()) announceToRooms(newPeerRooms)
             if (total > 0) { lastSyncResult.value = total; onNewMessages(total) }
             return total
         } catch (e: ApiException) {
@@ -341,11 +479,18 @@ class ChatEngine(
 
     /**
      * Procesa una fila del sync. Devuelve true si es un mensaje nuevo LEGIBLE
-     * (los de salas sin clave van a pending y no cuentan como "nuevos": el
-     * usuario no podría leerlos todavía).
+     * de texto (los de salas sin clave van a pending y los anuncios de perfil
+     * no cuentan: no deben notificar ni aparecer en el chat).
      */
-    private suspend fun ingest(row: SyncRow, s: cu.alain.chat.vault.Session): Boolean {
+    private suspend fun ingest(row: SyncRow, s: Session, newPeerRooms: MutableSet<String>): Boolean {
         if (db.msgDao().exists(row.msgId)) return false // eco de un mensaje propio ya en Room
+        // par visto en la sala → lista de chats con SU nombre/avatar (D61).
+        // Si es la 1ª vez: me presento (los mensajes previos a mi join no los vi).
+        if (!row.senderId.equals(s.uid, ignoreCase = true) &&
+            db.roomPeerDao().insertIfMissing(RoomPeer(row.roomId, row.senderId)) != -1L
+        ) {
+            newPeerRooms.add(row.roomId)
+        }
         val key = keys[row.roomId.lowercase()]
         if (key == null) {
             // sala sin clave en este teléfono (2º dispositivo, clave perdida):
@@ -356,8 +501,8 @@ class ChatEngine(
             return false
         }
         val msg = decryptRow(row, s, key.first)
-        if (msg != null) db.msgDao().insert(msg)
-        return true
+        db.msgDao().insert(msg)
+        return msg.kind == 0
     }
 
     private suspend fun decryptRow(
@@ -370,19 +515,24 @@ class ChatEngine(
             val convKey = Crypto.convKey(roomKey, row.roomId)
             val mk = Crypto.msgKey(convKey, row.msgId)
             val wire = Crypto.open(mk, b64d(row.nonceB64), b64d(row.ctB64), Crypto.aad(row.msgId, row.senderId, row.roomId))
-            val body = if (wire != null) (Crypto.unframe(wire) ?: "[mensaje con formato desconocido]") else "[no se pudo descifrar]"
-            Message(
-                msgId = row.msgId,
-                roomId = row.roomId,
-                senderUname = row.senderUname,
-                mine = mine,
-                body = body,
-                ts = row.ts,
-                state = if (wire != null) C.ST_RECEIVED else C.ST_UNREADABLE,
-                seq = row.seq,
-            )
+            if (wire == null) {
+                Message(row.msgId, row.roomId, row.senderUname, mine, "[no se pudo descifrar]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
+            } else {
+                val body = Crypto.unframe(wire)
+                    ?: return Message(row.msgId, row.roomId, row.senderUname, mine, "[mensaje con formato desconocido]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
+                // anuncio de perfil (D61): actualiza el perfil del emisor (o el
+                // propio, en un teléfono nuevo) y NO se muestra en el chat
+                if (ProfileMsg.isProfile(body)) {
+                    val p = ProfileMsg.parse(body)
+                    if (p != null) {
+                        applyProfile(row.senderId, p)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, 1, row.senderId)
+                    }
+                }
+                Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, row.seq, 0, row.senderId)
+            }
         } catch (_: Exception) {
-            Message(row.msgId, row.roomId, row.senderUname, mine, "[error]", row.ts, C.ST_UNREADABLE, row.seq)
+            Message(row.msgId, row.roomId, row.senderUname, mine, "[error]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
         }
     }
 

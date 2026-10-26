@@ -24,10 +24,11 @@ EE. UU. servir a residentes en Cuba; Supabase es empresa de EE. UU.).
 Ítems 2 y 5 pendientes → ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md).
 
 Regla del plan original adaptada: el BACKEND ya está escrito, desplegado y verificado
-(37/37) y la APP Android **v0.3.0 "Cerlita Chat"** está migrada al modelo rooms
-(D54 completada) con import del respaldo (D58) y anti-pausa server-side (D59):
-22/22 tests JVM (18 cripto + 4 import) + E2E del protocolo cliente 22/22 contra
-producción.
+(37/37) y la APP Android **v0.4.0 "Cerlita Chat"** está migrada al modelo rooms
+(D54 completada) con import del respaldo (D58), anti-pausa server-side (D59) y
+**perfiles E2EE con avatares por capas** (D61: el perfil viaja cifrado como un
+mensaje más — cero cambios de backend): 33/33 tests JVM (18 cripto + 4 import +
+11 perfiles) + E2E del protocolo cliente 22/22 contra producción.
 
 ---
 

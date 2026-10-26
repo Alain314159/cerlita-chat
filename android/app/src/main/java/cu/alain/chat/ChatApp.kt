@@ -43,6 +43,7 @@ class ChatApp : Application() {
             db = db,
             store = store,
             api = api,
+            avatarsDir = java.io.File(filesDir, "avatars"), // fotos de perfil (D61)
             onNewMessages = { /* el polling foreground refresca la UI por Room Flow */ },
         )
 

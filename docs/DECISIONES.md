@@ -68,6 +68,7 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D58 | Import del export | **Ajustes → Copia de seguridad → Importar respaldo** (v0.3.0): lee el .e2ee con SAF, descifra (misma derivación compartida `HistoryExport.exportKey` — una sola fuente de verdad) y restaura salas + claves (vault) + historial. Fusión no destructiva: no pisa nombres locales, claves solo si faltan, mensajes INSERT OR IGNORE; `sending`→`failed` (el outbox no viaja). Acepta el AAD legacy de v0.2.0. Testeado JVM con derivación inyectada (argon2kt es JNI — D38): 4 tests del contrato de formato | Implementación v0.3.0 |
 | D59 | Anti-pausa | **Server-side**: pg_cron + pg_net llaman por HTTPS a la Edge Function `heartbeat` cada 6 h (`backend/scripts/setup_anti_pausa.py`). La invocación pasa por el gateway → cuenta como actividad REAL del proyecto (los writes internos de pg_cron NO cuentan). Sustituye al plan de cron-job.org: cero dependencias externas. Job único `anti-pausa-http` | Implementación 26-oct |
 | D60 | Icono/branding | Adaptive icon (fondo violeta #2A1E4F, burbuja crema #F2E8D5, candado con cerradura de corazón #F08CA0) + variante monocroma para iconos temáticos + PNGs legacy regenerados (API 24-25 no usan adaptive: clave en Cuba). El AAD del export pasa a `cerlita-chat-export-v2` (import acepta también el legacy) | Implementación v0.3.0 |
+| D61 | Perfiles E2EE | **El perfil (nombre + foto/avatar) viaja como un mensaje cifrado MÁS de la sala** (kind=1, invisible en el chat; plaintext = `\u0000P`+JSON `{n,a,p,t}`): el servidor NUNCA ve nombres ni fotos — cero cambios de backend. Foto: JPEG cuadrado con degradación adaptativa 128→96→64 px hasta ≤5 KB (presupuesto del ct de 8 KB). **Anuncios convergentes**: al crear/unirse/recuperar sala + al detectar un par NUEVO en sync (crítico: con seq global, los mensajes previos al join son invisibles para quien ya tenía last_seq avanzado) + al editar el perfil (broadcast a todas las salas). El eco propio restaura el perfil en un teléfono nuevo desde el historial (re-sync desde 0). Avatar por capas `AvatarConfig` JSON (`base`/`clothes`/`acc` por slot) con **2 bases placeholder (Cerdita y Koalita), 5 ropas y 5 accesorios**; los ids desconocidos se ignoran → listo para avatares creados por usuarios. DB v3 con migración REAL 2→3 (kind+senderUid en messages, tablas profiles y room_peer; ya hay teléfonos reales). El export excluye kind=1 (se auto-restaura del historial). 11 tests JVM nuevos (33/33 total) | Implementación v0.4.0 |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
@@ -99,12 +100,15 @@ HTTPS a `heartbeat` (verificado 200 + tabla al día). Detalle técnico y hallazg
 deploy: [backend/README.md](../backend/README.md). Sin Firebase (D44); las
 notificaciones (ntfy, D45) se implementan en fase posterior.
 
-## Cliente Android — estado (26-oct-2026, v0.3.0)
+## Cliente Android — estado (26-oct-2026, v0.4.0)
 
-**"Cerlita Chat" (D18), migrada al modelo rooms (D54) y firmada**: APK release
-**2.6 MB**. Emparejamiento por código de invitación (D42) con pantalla de SAS (D43),
-outbox/sync por sala, vault de roomKeys sellado por Keystore (D55), export v2 con
-historial + claves (D47) **+ import del respaldo (D58)**, recuperación de sala sin
-clave en 2º dispositivo (re-pegar el código). Icono propio con cerradura de corazón
-(D60). Validación: 22/22 tests JVM (18 cripto + 4 import) + E2E del protocolo 22/22
-contra producción. Ver [android/README.md](../android/README.md).
+**"Cerlita Chat" (D18), modelo rooms (D54) + perfiles E2EE (D61), firmada**: APK
+release **2.7 MB** (misma firma que v0.2.0/v0.3.0 → actualiza sin desinstalar).
+Emparejamiento por código de invitación (D42) con pantalla de SAS (D43),
+outbox/sync por sala, vault de roomKeys sellado por Keystore (D55), export v2
+(D47) + import del respaldo (D58), icono propio (D60). **v0.4.0**: onboarding y
+editor de perfil (nombre + foto subida O avatar por capas — Cerdita/Koalita
+placeholder con ropa y accesorios), lista de chats y burbujas con el nombre y
+avatar del par, cabecera del chat con avatar. Validación: 33/33 tests JVM (18
+cripto + 4 import + 11 perfiles) + E2E del protocolo 22/22 contra producción.
+Ver [android/README.md](../android/README.md).

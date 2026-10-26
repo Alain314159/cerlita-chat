@@ -9,6 +9,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 // ─────────────────────────── entidades (v2: modelo rooms, D54) ───────────────────────────
@@ -34,6 +36,8 @@ data class Message(
     val ts: Long,
     val state: Int,             // C.ST_*: sending/sent/failed/received/unreadable
     val seq: Long? = null,
+    val kind: Int = 0,          // 0=texto · 1=evento de perfil (D61; invisible en el chat)
+    val senderUid: String = "", // uid del emisor (perfiles/avatares; "" en filas pre-v3)
 )
 
 /** Mensaje pendiente de enviar (persiste el ciphertext hasta el ack del servidor). */
@@ -67,6 +71,35 @@ data class PendingMsg(
 @Entity(tableName = "meta")
 data class MetaRow(@PrimaryKey val k: String, val v: String)
 
+// ───────────── entidades v3 (perfiles, D61) ─────────────
+
+/**
+ * Perfil de un usuario (el mío y el de los pares que anunciaron en mis salas).
+ * El avatar es UNA de dos cosas, con prioridad foto:
+ *  - photo=1  → archivo local avatars/<uid>.jpg (llegó E2EE dentro del anuncio)
+ *  - avatarJson → configuración del avatar por capas (base/ropa/accesorios)
+ * Llega SIEMPRE cifrado como mensaje kind=1: el servidor jamás ve nombres ni fotos.
+ */
+@Entity(tableName = "profiles")
+data class Profile(
+    @PrimaryKey val uid: String,
+    val displayName: String,    // 1..40 chars, lo que el usuario quiere que vean
+    val avatarJson: String,     // AvatarConfig JSON ("" si no hay avatar)
+    val photo: Boolean,         // true → existe avatars/<uid>.jpg
+    val updatedAt: Long,        // versión: gana el anuncio con ts mayor
+)
+
+/**
+ * Quién hemos visto en cada sala (de los mensajes recibidos). Da el par de una
+ * sala 1-a-1 para la lista de chats (nombre + avatar del OTRO, no el nombre
+ * local de la sala). Se reconstruye solo: el re-sync desde 0 lo repobla.
+ */
+@Entity(tableName = "room_peer", primaryKeys = ["roomId", "uid"])
+data class RoomPeer(
+    val roomId: String,
+    val uid: String,
+)
+
 // ─────────────────────────── DAOs ───────────────────────────
 
 @Dao
@@ -94,19 +127,23 @@ interface RoomDao {
     @Query("SELECT COUNT(*) FROM rooms")
     suspend fun count(): Int
 
+    @Query("SELECT COUNT(*) FROM rooms")
+    fun observeCount(): Flow<Int>
+
     @Query("DELETE FROM rooms")
     suspend fun wipe()
 }
 
 @Dao
 interface MsgDao {
-    @Query("SELECT * FROM messages WHERE roomId = :room ORDER BY ts ASC, msgId ASC")
+    @Query("SELECT * FROM messages WHERE roomId = :room AND kind = 0 ORDER BY ts ASC, msgId ASC")
     fun observeChat(room: String): Flow<List<Message>>
 
-    @Query("SELECT * FROM messages WHERE roomId = :room ORDER BY ts ASC, msgId ASC")
+    @Query("SELECT * FROM messages WHERE roomId = :room AND kind = 0 ORDER BY ts ASC, msgId ASC")
     suspend fun chat(room: String): List<Message>
 
-    @Query("SELECT * FROM messages ORDER BY ts ASC")
+    /** Todo el historial TEXTO (el export excluye eventos de perfil, D61). */
+    @Query("SELECT * FROM messages WHERE kind = 0 ORDER BY ts ASC")
     suspend fun all(): List<Message>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -118,10 +155,10 @@ interface MsgDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE msgId = :id)")
     suspend fun exists(id: String): Boolean
 
-    // Lista de conversaciones: último mensaje por sala (JOIN para respetar orden de rooms)
+    // Lista de conversaciones: último mensaje TEXTO por sala
     @Query(
         """SELECT m.* FROM messages m
-           INNER JOIN (SELECT roomId AS r, MAX(ts) AS mx FROM messages GROUP BY roomId) t
+           INNER JOIN (SELECT roomId AS r, MAX(ts) AS mx FROM messages WHERE kind = 0 GROUP BY roomId) t
            ON m.roomId = t.r AND m.ts = t.mx
            ORDER BY m.ts DESC"""
     )
@@ -180,11 +217,137 @@ interface MetaDao {
     suspend fun setLong(k: String, v: Long) = set(MetaRow(k, v.toString()))
 }
 
+// ───────────── DAOs v3 (perfiles) ─────────────
+
+@Dao
+interface ProfileDao {
+    @Query("SELECT * FROM profiles WHERE uid = :uid LIMIT 1")
+    suspend fun get(uid: String): Profile?
+
+    @Query("SELECT * FROM profiles WHERE uid = :uid LIMIT 1")
+    fun observe(uid: String): Flow<Profile?>
+
+    @Query("SELECT * FROM profiles")
+    fun observeAll(): Flow<List<Profile>>
+
+    /** true si la fila era NUEVA (lo usa el trigger de anuncio a par desconocido). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfMissing(p: Profile): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(p: Profile)
+
+    @Query("DELETE FROM profiles")
+    suspend fun wipe()
+}
+
+@Dao
+interface RoomPeerDao {
+    /** Inserta (roomId, uid) si no existe. Devuelve true si era nuevo. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfMissing(peer: RoomPeer): Long
+
+    @Query("SELECT COUNT(*) FROM room_peer WHERE roomId = :room")
+    suspend fun countFor(room: String): Int
+
+    @Query("DELETE FROM room_peer")
+    suspend fun wipe()
+}
+
+/** Fila de la lista de chats: sala + perfil del par + último mensaje texto. */
+data class RoomListItem(
+    val roomId: String,
+    val name: String,
+    val owner: Boolean,
+    val createdAt: Long,
+    val sas: String,
+    val peerUid: String?,
+    val peerName: String?,
+    val peerAvatarJson: String?,
+    val peerPhoto: Boolean?,
+    val lastBody: String?,
+    val lastTs: Long?,
+    val lastMine: Boolean?,
+)
+
+/** Cabecera del chat abierto: avatar + nombre del par (o nombre local de sala). */
+data class RoomHeader(
+    val roomId: String,
+    val name: String,
+    val peerName: String?,
+    val peerAvatarJson: String?,
+    val peerPhoto: Boolean?,
+    val peerUid: String?,
+)
+
+@Dao
+interface RoomListDao {
+    /**
+     * Lista de chats con el perfil del par (1-a-1: cualquier par de la sala).
+     * Salas nuevas (sin mensajes) arriba; el resto por último mensaje.
+     * kind=0: los eventos de perfil nunca son vista previa.
+     */
+    @Query(
+        """SELECT r.roomId AS roomId, r.name AS name, r.owner AS owner, r.createdAt AS createdAt,
+           r.sas AS sas,
+           (SELECT COUNT(*) FROM room_peer rp2 WHERE rp2.roomId = r.roomId) > 0 AS hasPeers,
+           p.uid AS peerUid,
+           p.displayName AS peerName, p.avatarJson AS peerAvatarJson, p.photo AS peerPhoto,
+           (SELECT m.body FROM messages m WHERE m.roomId = r.roomId AND m.kind = 0
+              ORDER BY m.ts DESC, m.msgId DESC LIMIT 1) AS lastBody,
+           (SELECT m.ts FROM messages m WHERE m.roomId = r.roomId AND m.kind = 0
+              ORDER BY m.ts DESC, m.msgId DESC LIMIT 1) AS lastTs,
+           (SELECT m.mine FROM messages m WHERE m.roomId = r.roomId AND m.kind = 0
+              ORDER BY m.ts DESC, m.msgId DESC LIMIT 1) AS lastMine
+           FROM rooms r
+           LEFT JOIN room_peer rp ON rp.roomId = r.roomId AND rp.uid != :meUid
+           LEFT JOIN profiles p ON p.uid = rp.uid
+           GROUP BY r.roomId
+           ORDER BY (lastTs IS NULL) DESC, lastTs DESC, r.createdAt ASC"""
+    )
+    fun observeRoomList(meUid: String): Flow<List<RoomListItem>>
+
+    /** Cabecera de UNA sala (título del chat: avatar + nombre del par). */
+    @Query(
+        """SELECT r.roomId AS roomId, r.name AS name,
+           p.displayName AS peerName, p.avatarJson AS peerAvatarJson,
+           p.photo AS peerPhoto, p.uid AS peerUid
+           FROM rooms r
+           LEFT JOIN room_peer rp ON rp.roomId = r.roomId AND rp.uid != :meUid
+           LEFT JOIN profiles p ON p.uid = rp.uid
+           WHERE r.roomId = :roomId
+           GROUP BY r.roomId LIMIT 1"""
+    )
+    fun observeRoomHeader(roomId: String, meUid: String): Flow<RoomHeader?>
+}
+
 // ─────────────────────────── DB ───────────────────────────
 
+/**
+ * v2 → v3 (D61, perfiles): columnas kind/senderUid en messages + tablas
+ * profiles y room_peer. Migración REAL (ya hay teléfonos reales con v0.3.0):
+ * no se puede ser destructivo desde aquí en adelante.
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE messages ADD COLUMN senderUid TEXT NOT NULL DEFAULT ''")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `profiles` (" +
+                "`uid` TEXT NOT NULL PRIMARY KEY, `displayName` TEXT NOT NULL, " +
+                "`avatarJson` TEXT NOT NULL, `photo` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `room_peer` (" +
+                "`roomId` TEXT NOT NULL, `uid` TEXT NOT NULL, PRIMARY KEY(`roomId`, `uid`))"
+        )
+    }
+}
+
 @Database(
-    entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class],
-    version = 2,
+    entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class,
+        Profile::class, RoomPeer::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -193,14 +356,16 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun outboxDao(): OutboxDao
     abstract fun pendingDao(): PendingDao
     abstract fun metaDao(): MetaDao
+    abstract fun profileDao(): ProfileDao
+    abstract fun roomPeerDao(): RoomPeerDao
+    abstract fun roomListDao(): RoomListDao
 
     companion object {
         fun build(ctx: Context): AppDatabase =
             // androidx.room.Room (calificado: la entidad local se llama Room)
             androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                // v2 pre-lanzamiento sin usuarios reales: destructivo aceptable
-                // (el protocolo rooms es incompatible con v1: mensajes por par
-                // de usernames). Con usuarios reales → migraciones obligatorias.
+                .addMigrations(MIGRATION_2_3)
+                // Solo para rutas FUTURAS desconocidas; 2→3 tiene migración real.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

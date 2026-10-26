@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.VisualTransformation
 import cu.alain.chat.ChatApp
 import cu.alain.chat.core.C
+import cu.alain.chat.db.Message
+import cu.alain.chat.db.Profile
+import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.work.WorkSync
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -53,6 +56,7 @@ import java.util.Locale
 fun ChatScreen(app: ChatApp, roomId: String) {
 
     val messages by app.db.msgDao().observeChat(roomId).collectAsState(initial = emptyList())
+    val profiles by app.db.profileDao().observeAll().collectAsState(initial = emptyList())
     var draft by remember { mutableStateOf("") }
     var sendError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -73,7 +77,9 @@ fun ChatScreen(app: ChatApp, roomId: String) {
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
         ) {
             items(messages, key = { it.msgId }) { m ->
-                MessageBubble(m)
+                val idx = messages.indexOfFirst { it.msgId == m.msgId }
+                val prev = messages.getOrNull(idx - 1)
+                MessageBubble(m, prev, profiles)
             }
         }
 
@@ -130,15 +136,42 @@ fun ChatScreen(app: ChatApp, roomId: String) {
 }
 
 @Composable
-private fun MessageBubble(m: cu.alain.chat.db.Message) {
+private fun MessageBubble(m: Message, prev: Message?, profiles: List<Profile>) {
     val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(m.ts))
     val mine = m.mine
+
+    // perfil del emisor (mensajes viejos pre-v3 no traen uid → fallback a inicial)
+    val profile = profiles.firstOrNull { it.uid.equals(m.senderUid, ignoreCase = true) }
+    val senderName = profile?.displayName ?: m.senderUname
+    // nombre/avatar solo cuando cambia el emisor respecto al mensaje anterior
+    val showHeader = !mine && (prev == null || prev.mine ||
+        !prev.senderUid.equals(m.senderUid, ignoreCase = true) ||
+        (prev.senderUid.isEmpty() && prev.senderUname != m.senderUname))
 
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
     ) {
+        if (!mine) {
+            AvatarView(
+                photoUid = if (m.senderUid.isEmpty()) null else m.senderUid,
+                photo = profile?.photo == true,
+                avatarJson = profile?.avatarJson,
+                fallbackInitial = senderName,
+                size = 32.dp,
+                photoVersion = profile?.updatedAt ?: 0L,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
         Column(horizontalAlignment = if (mine) Alignment.End else Alignment.Start) {
+            if (showHeader) {
+                Text(
+                    senderName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
+                )
+            }
             Surface(
                 color = when {
                     mine -> MaterialTheme.colorScheme.primary

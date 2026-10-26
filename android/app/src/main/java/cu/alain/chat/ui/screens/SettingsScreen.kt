@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,10 +49,11 @@ import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.export.HistoryExport
 import cu.alain.chat.export.HistoryImport
+import cu.alain.chat.ui.AvatarView
 import kotlinx.coroutines.launch
 
 @Composable
-fun SettingsScreen(app: ChatApp) {
+fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val session = app.engine.session
@@ -83,6 +85,10 @@ fun SettingsScreen(app: ChatApp) {
     var ping by remember { mutableStateOf<String?>(null) }
     var pinging by remember { mutableStateOf(false) }
 
+    // perfil propio (D61): tarjeta con avatar + nombre elegido
+    val myProfile by app.db.profileDao().observe(app.engine.session?.uid ?: "")
+        .collectAsState(initial = null)
+
     Column(
         Modifier
             .fillMaxSize()
@@ -90,20 +96,44 @@ fun SettingsScreen(app: ChatApp) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        // ── cuenta ──
+        // ── perfil ──
         Card(
             Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("Cuenta", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text("Usuario: ${session?.uname ?: "—"}", style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "Sesión válida 90 días; luego pide entrar de nuevo.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AvatarView(
+                        photoUid = app.engine.session?.uid,
+                        photo = myProfile?.photo == true,
+                        avatarJson = myProfile?.avatarJson,
+                        fallbackInitial = myProfile?.displayName ?: session?.uname ?: "?",
+                        size = 56.dp,
+                        photoVersion = myProfile?.updatedAt ?: 0L,
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            myProfile?.displayName ?: session?.uname ?: "—",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "@${session?.uname ?: "—"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Sesión válida 90 días; luego pide entrar de nuevo.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onEditProfile) {
+                    Text("Editar perfil (nombre, foto, avatar)")
+                }
             }
         }
 
@@ -218,7 +248,7 @@ fun SettingsScreen(app: ChatApp) {
         }
 
         Text(
-            "v0.3.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes",
+            "v0.4.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),

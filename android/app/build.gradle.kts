@@ -22,8 +22,8 @@ android {
         applicationId = "cu.alain.chat"
         minSdk = 24          // D/P1: máximo alcance; requiere desugaring
         targetSdk = 36       // D/P2: un nivel por detrás del último — comportamiento probado
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         vectorDrawables { useSupportLibrary = true }
     }
 

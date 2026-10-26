@@ -3,9 +3,10 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: Fase 1 COMPLETA — backend desplegado (37/37) y app Android **v0.3.0 "Cerlita
-Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58). APK release
-2.6 MB firmado. **Sin Firebase** (decisión del usuario).
+**Estado**: Fase 1 COMPLETA — backend desplegado (37/37) y app Android **v0.4.0 "Cerlita
+Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58) y
+**perfiles E2EE con avatares** (D61). APK release 2.7 MB firmado. **Sin Firebase**
+(decisión del usuario).
 
 ## Documentación
 
@@ -15,7 +16,7 @@ Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58). APK
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.3.0: modelo rooms, cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.4.0: modelo rooms, perfiles, cripto, build, tests |
 
 ## Estado (26-oct-2026)
 
@@ -29,16 +30,20 @@ Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58). APK
 - ✅ **Anti-pausa server-side (D59)**: pg_cron + pg_net llaman por HTTPS a `heartbeat`
   cada 6 h — actividad REAL del gateway, sin depender de servicios externos
   (cron-job.org dejó de ser necesario)
-- ✅ **App Android v0.3.0 "Cerlita Chat" (D18/D54/D58)**: emparejamiento por código de
+- ✅ **App Android v0.4.0 "Cerlita Chat" (D18/D54/D58/D61)**: emparejamiento por código de
   invitación + SAS por voz, outbox/sync por sala, vault de roomKeys sellado por
   Keystore (sin frase E2EE), export v2 con historial + claves **e import del respaldo**
   (recuperación completa en teléfono nuevo), recuperación de sala en 2º dispositivo.
-  Icono propio (burbuja + candado con cerradura de corazón). APK release **2.6 MB**
-  firmado. Validación: 22/22 tests JVM (18 cripto con KATs cruzados Python↔Kotlin +
-  4 del import) + E2E del protocolo cliente **22/22** contra producción
+  Icono propio (burbuja + candado con cerradura de corazón). **Perfiles E2EE**: nombre +
+  foto subida o avatar por capas (Cerdita y Koalita placeholder con ropa y accesorios),
+  viajan cifrados como mensajes más — el servidor jamás ve nombres ni fotos y no hubo
+  que tocar el backend. APK release **2.7 MB** firmado (misma firma: actualiza encima).
+  Validación: 33/33 tests JVM (18 cripto con KATs cruzados Python↔Kotlin + 4 del import
+  + 11 de perfiles) + E2E del protocolo cliente **22/22** contra producción
 - ❌ **Sin Firebase** (orden del usuario): no FCM, no google-services.json
-- ⏳ Pendiente: pruebas en los 2 móviles reales, TTFB desde SIM (ítem 5), notificaciones
-  (ntfy, fase posterior — tema derivado de roomKey, publicado por el móvil emisor)
+- ⏳ Pendiente: pruebas en los 2 móviles reales, TTFB desde SIM (ítem 5), arte real de
+  los avatares (hoy placeholders), notificaciones (ntfy, fase posterior — tema derivado
+  de roomKey, publicado por el móvil emisor)
 
 ## Reglas de trabajo (acordadas 26-oct-2026)
 

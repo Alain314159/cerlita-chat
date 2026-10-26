@@ -1,10 +1,11 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.3.0 "Cerlita
-Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60).
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.4.0 "Cerlita
+Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60) +
+**sistema de perfiles E2EE con avatares (D61)**.
 
-## Qué hace (Fase 1 — MVP, modelo rooms D41-D60)
+## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
 - **E2EE por sala**: cada sala nace con `roomKey` aleatoria de 32 B que NUNCA
   sale del teléfono (salvo dentro del código de invitación, D42). Cifrado
@@ -33,6 +34,13 @@ Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60).
   duplicar. Acepta respaldos de la v0.2.0 (AAD legacy).
 - **Notificaciones locales** al recibir mensajes con la app cerrada (D9; sin
   Firebase por D44 — ntfy queda para fase posterior, D45).
+- **Perfiles E2EE** (D61): nombre + **foto subida** O **avatar por capas**
+  (2 bases placeholder: Cerdita y Koalita; 5 ropas, 5 accesorios). El perfil
+  viaja CIFRADO como un mensaje más de la sala (kind=1, invisible): el servidor
+  jamás ve nombres ni fotos, y **no hizo falta tocar el backend**. Onboarding al
+  entrar sin perfil; editable en Ajustes. La lista de chats, las burbujas y la
+  cabecera muestran el nombre/avatar del par. En un teléfono nuevo el perfil se
+  auto-restaura del historial de anuncios (re-sync desde 0).
 
 ## Flujo criptográfico (D41-D43, D56)
 
@@ -56,8 +64,8 @@ y verificados E2E contra producción (`backend/scripts/e2e_rooms_client.py`, 22 
 export JAVA_HOME=/home/z/jdk21                                  # JDK 21 COMPLETO (JRE no vale)
 export ANDROID_HOME=/home/z/android-sdk                         # platform 37.0 + build-tools 37
 cd android
-./gradlew :app:testDebugUnitTest   # tests de cripto (18, JVM puro)
-./gradlew :app:assembleRelease     # APK firmado + R8 (2.6 MB)
+./gradlew :app:testDebugUnitTest   # tests JVM (33: cripto + import + perfiles)
+./gradlew :app:assembleRelease     # APK firmado + R8 (2.7 MB)
 ```
 
 La firma release lee `android/keystore.properties` (gitignored) que apunta a
@@ -85,25 +93,36 @@ app/src/main/java/cu/alain/chat/
   vault/SessionStore.kt ss.bin (sesión) + rooms.bin (roomKeys selladas)
   net/Api.kt            OkHttp: auth (reg/in/out/room_new/room_join/rooms),
                         sync, outbox {room}, heartbeat; errores → español
-  db/Db.kt              Room v2: rooms, messages, outbox, pending (sin clave), meta
+  db/Db.kt              Room v3: rooms, messages (kind/senderUid), outbox, pending,
+                        meta, profiles, room_peer · migración REAL 2→3
   engine/ChatEngine.kt  claves por sala en RAM · createRoom/joinRoom/restoreRoomKey ·
-                        send/syncOnce/drainOutbox · drainPending por sala · polling
+                        send/syncOnce/drainOutbox · drainPending por sala · polling ·
+                        perfiles: saveProfile + anuncios convergentes (D61)
   work/Workers.kt       SyncWorker 15 min + OutboxWorker con jitter
+  profile/Profile.kt    AvatarConfig (capas) + ProfileMsg (formato cable \u0000P)
+  profile/Photos.kt     foto cuadrada JPEG con degradación 128→96→64 ≤5 KB + EXIF
   export/…              export .e2ee v2 (historial + claves) + import (D58)
-  ui/…                  Compose M3: Login, Salas (crear/unir + SAS + código),
-                        Chat, Ajustes
+  ui/AvatarView.kt      catálogo + renderizador por capas (foto|avatar|inicial)
+  ui/…                  Compose M3: Login, Perfil (onboarding+edición), Salas
+                        (crear/unir + SAS + código), Chat, Ajustes
 app/src/test/java/cu/alain/chat/
   CryptoRoomsTest.kt    18 tests: base32 RFC4648, roundtrip invite, CRC, KATs
                         roomId/SAS (validados contra Python + RFC 5869), AAD, framing
   HistoryImportTest.kt  4 tests del import: roundtrip completo (gzip + claves),
                         AAD legacy v0.2.0, frase incorrecta, archivos inválidos
                         (derivación inyectada: argon2kt es JNI, D38)
+  ProfileTest.kt        11 tests: prefijo NUL+P, límites, corruptos → texto,
+                        roundtrip AvatarConfig, ids futuros desconocidos
 ```
 
 ## Pendiente (siguientes pasos)
 
-1. Probar en los 2 móviles reales (instalar el APK release v0.3.0): registrar
-   ambos usuarios, crear sala, compartir código, verificar SAS por voz
+1. Probar en los 2 móviles reales (instalar el APK release v0.4.0 — actualiza
+   encima de v0.3.0, misma firma): registrar ambos usuarios, configurar los
+   perfiles (nombre + Cerdita/Koalita o foto), crear sala, compartir código,
+   verificar SAS por voz y que cada uno VEA el perfil del otro
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
-3. Notificaciones ntfy (D45, fase posterior) — el cron externo anti-pausa ya
+3. Avatares reales: sustituir los drawables placeholder (el catálogo y el
+   AvatarConfig por capas ya son agnósticos al arte — D61)
+4. Notificaciones ntfy (D45, fase posterior) — el cron externo anti-pausa ya
    quedó resuelto server-side (D59: pg_cron + pg_net → heartbeat cada 6 h)

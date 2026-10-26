@@ -100,7 +100,9 @@ class RoomsViewModel(private val app: ChatApp) : AndroidViewModel(app) {
 
 // ───────────────────────────── Pantalla ─────────────────────────────
 
-/** Lista de salas + crear sala / unirse con código de invitación (D41-D43). */
+/** Lista de salas + crear sala / unirse con código de invitación (D41-D43).
+ *  Desde v0.4.0 cada fila muestra el PERFIL del par (nombre elegido + foto o
+ *  avatar, D61) cuando lo conocemos; si no, el nombre local de la sala. */
 @Composable
 fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
 
@@ -108,8 +110,8 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     val ctx = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    val rooms by app.db.roomDao().observeAll().collectAsState(initial = emptyList())
-    val lastMsgs by app.db.msgDao().observeChats().collectAsState(initial = emptyList())
+    val meUid = app.engine.session?.uid ?: ""
+    val items by app.db.roomListDao().observeRoomList(meUid).collectAsState(initial = emptyList())
     val keysVersion by app.engine.keysVersion.collectAsState()
 
     var showAdd by remember { mutableStateOf(false) }
@@ -127,7 +129,7 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     val busy = vm.busy.value
 
     Box(Modifier.fillMaxSize()) {
-        if (rooms.isEmpty()) {
+        if (items.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -148,18 +150,15 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
             }
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
-                items(rooms, key = { it.roomId }) { room ->
-                    val last = lastMsgs.firstOrNull { it.roomId == room.roomId }
+                items(items, key = { it.roomId }) { item ->
                     // keysVersion: leerlo aquí registra la dependencia → el candado
                     // de la sala se refresca al cambiar el vault (join/restore/logout)
-                    val hasKey = keysVersion.let { app.engine.hasKey(room.roomId) }
-                    RoomRow(
-                        room = room,
-                        hasKey = hasKey,
-                        lastBody = last?.body ?: "",
-                        lastTs = last?.ts,
-                        unread = last?.state == C.ST_RECEIVED,
-                    ) {
+                    val hasKey = keysVersion.let { app.engine.hasKey(item.roomId) }
+                    val room = Room(
+                        roomId = item.roomId, name = item.name, owner = item.owner,
+                        sas = item.sas, createdAt = item.createdAt,
+                    )
+                    RoomRow(item = item, hasKey = hasKey) {
                         if (hasKey) onOpenRoom(room)
                         else { lockedRoom = room; restoreCode = ""; restoreError = null }
                     }
@@ -407,29 +406,30 @@ private fun sasLabel(sas: String): String =
 
 @Composable
 private fun RoomRow(
-    room: Room,
+    item: cu.alain.chat.db.RoomListItem,
     hasKey: Boolean,
-    lastBody: String,
-    lastTs: Long?,
-    unread: Boolean,
     onClick: () -> Unit,
 ) {
+    val title = (item.peerName ?: item.name).let { if (hasKey) it else "$it (sin clave)" }
+    val unread = item.lastTs != null && item.lastMine == false
     Row(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape) {
-            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                if (hasKey) {
-                    Text(
-                        room.name.take(1).uppercase(),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                } else {
+        if (hasKey) {
+            cu.alain.chat.ui.AvatarView(
+                photoUid = item.peerUid,
+                photo = item.peerPhoto == true,
+                avatarJson = item.peerAvatarJson,
+                fallbackInitial = title,
+                size = 48.dp,
+            )
+        } else {
+            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape) {
+                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                     Icon(
                         Icons.Default.Lock, "Sin clave",
                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -440,20 +440,20 @@ private fun RoomRow(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (hasKey) room.name else "${room.name} (sin clave)",
+                title,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
             )
-            if (lastBody.isNotEmpty()) {
+            if (!item.lastBody.isNullOrEmpty()) {
                 Text(
-                    lastBody,
+                    item.lastBody,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                 )
             }
         }
-        lastTs?.let {
+        item.lastTs?.let {
             Text(
                 SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(it)),
                 style = MaterialTheme.typography.bodySmall,
