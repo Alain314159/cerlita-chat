@@ -36,6 +36,14 @@ objeción; se ratifican al escribir código).
 | D24 | Lockout login | 5 fallos → 30s × 2^(n-5), máx 1h | Implementación 26-oct |
 | D25 | Deploy | Únicamente vía endpoint multipart (el legacy de body base64 produce BOOT_ERROR). noble empotrado con bun; postgres externo npm:postgres@3.4.9. Ver backend/README «Hallazgos» | Implementación 26-oct |
 | D26 | gzip | El servidor gzip si > 1 KB; Cloudflare comprime en tránsito según Accept-Encoding. OkHttp lo gestiona solo. Doble capa, sin coste | Implementación 26-oct |
+| D33 | convKey salt | Par ORDENADO de usernames `"lo\|hi"` (ambos extremos lo conocen sin lookup; el servidor ya conoce ambos → misma seguridad que conversation_id, que es aleatorio y no predecible por el cliente) | Cliente 26-oct |
+| D34 | AAD formato | `"v1\|<msgId>\|<senderUid>\|<lo>\|<hi>"` UTF-8 (D12 con separadores anti-ambigüedad) | Cliente 26-oct |
+| D35 | Framing plaintext | `[flag 1B][payload]`: flag 0 = UTF-8 crudo, 1 = gzip (solo si texto > 512 B). Compresión SIEMPRE antes del AEAD | Cliente 26-oct |
+| D36 | Verificación frase | check = HMAC-SHA256(HKDF(rootKey, info="e2ee-check"), constante) — valida la frase sin servidor ni Keystore. Sesión (token) cifrada en ss.bin con clave AES-256-GCM de AndroidKeyStore | Cliente 26-oct |
+| D37 | Toolchain Android | AGP 9.1.1 (Kotlin INTEGRADO: no se aplica kotlin-android; KGP 2.4.20 fijado por buildscript classpath) · Gradle 9.8.2 · KSP 2.3.12 · Compose BOM 2026.08.00 · compileSdk 37 · targetSdk 36 · minSdk 24 · desugaring 2.1.5 · R8 ON desde v1 | Verificado 26-oct |
+| D38 | argon2kt | CORRECCIÓN de D5: 1.6.0 usa JNI con .so embebidos (4 ABIs, ~350 KB comprimidos), NO es "JVM puro". Funciona igual: 0 configuración, carga fuera del hilo principal | Verificado 26-oct |
+| D39 | sync payload | Filas extendidas: `[msg_id, conv_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]` — el receptor necesita sender_uname para derivar convKey (D33) y ts_ms para mostrar la hora. Smoke test 24/24 | Servidor 26-oct |
+| D40 | Firma APK | Keystore PKCS12 en secrets/app-release.jks (FUERA del repo; contraseñas en secrets/keystore-info.txt — RESPALDARLO). Release 2.6 MB con R8+shrinkResources. mapping.txt v1 en secrets/mappings/ | Cliente 26-oct |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 

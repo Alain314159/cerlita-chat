@@ -44,7 +44,9 @@ curl -X POST .../auth -d '{"a":"out"}' -H "Auth..."     → 200 {ok:true}
 
 ```bash
 curl ".../sync?s=4821&l=100" -H "Authorization: Bearer <tok>"
-→ 200 {"n":4903,"m":[[msg_id,conv_id,sender_id,seq,nonce_b64,ct_b64],...]}
+→ 200 {"n":4903,"m":[[msg_id,conv_id,sender_id,seq,nonce_b64,ct_b64,sender_uname,ts_ms],...]}
+        # sender_uname: nombre del emisor (el receptor deriva convKey con él — D33)
+        # ts_ms: coalesce(client_ts, created_at) epoch ms
         header x-next-seq: 4903 · gzip si > 1 KB (y Cloudflare comprime en tránsito
         siempre que el cliente envíe Accept-Encoding: gzip — OkHttp lo hace solo)
 → 204 sin cuerpo si no hay nada nuevo

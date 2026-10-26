@@ -1,0 +1,9 @@
+<resources>
+    <color name="bg">#0B1220</color>
+
+    <style name="Theme.Chat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+    </style>
+</resources>
