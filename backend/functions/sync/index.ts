@@ -1,6 +1,9 @@
 // Edge Function: sync — GET incremental de mensajes desde un seq
 // GET /functions/v1/sync?s=<seq>&l=<limit>  (Bearer token de sesión)
-// 200 JSON compacto {n: next_seq, m: [[msg_id, conv_id, sender_id, seq, nonce_b64, ct_b64], ...]}
+// 200 JSON compacto {n: next_seq, m: [[msg_id, conv_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms], ...]}
+//   sender_uname: nombre del emisor — el receptor lo necesita para derivar convKey
+//                 (salt = par ordenado de usernames) sin lookup adicional
+//   ts_ms:        coalesce(client_ts, created_at) en epoch ms — hora de muestra
 // 204 si no hay nada nuevo (0 bytes de cuerpo)
 // gzip cuando el cuerpo supera 1 KB (OkHttp lo descomprime solo)
 import postgres from "npm:postgres@3.4.9";
@@ -53,8 +56,10 @@ Deno.serve(async (req) => {
     const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("l") ?? "100", 10) || 100));
 
     const rows = await sql`
-      select m.msg_id, m.conversation_id, m.sender_id, m.nonce, m.ciphertext, m.seq
+      select m.msg_id, m.conversation_id, m.sender_id, m.nonce, m.ciphertext, m.seq,
+             su.username as suname, coalesce(m.client_ts, m.created_at) as ts
       from messages m
+      join users su on su.id = m.sender_id
       where m.conversation_id in (
             select id from conversations where user_lo = ${me.uid} or user_hi = ${me.uid})
         and m.seq > ${since}
@@ -67,6 +72,7 @@ Deno.serve(async (req) => {
     const msgs = rows.map((r) => [
       r.msg_id, r.conversation_id, r.sender_id, Number(r.seq),
       b64(new Uint8Array(r.nonce)), b64(new Uint8Array(r.ciphertext)),
+      r.suname, new Date(r.ts).getTime(),
     ]);
     const body = enc.encode(JSON.stringify({ n: nextSeq, m: msgs }));
     const headers: Record<string, string> = {

@@ -163,6 +163,9 @@ def main() -> int:
           f"{st} n={sync1.get('n')} msgs={len(sync1.get('m', []))}")
     next_seq = sync1.get("n", 0)
     check("header x-next-seq correcto", h.get("x-next-seq") == str(next_seq), f"{h.get('x-next-seq')} vs {next_seq}")
+    row = sync1.get("m", [])[0] if sync1.get("m") else []
+    check("payload trae sender_uname + ts_ms", len(row) >= 8 and row[6] == "alice_t" and isinstance(row[7], int) and row[7] > 0,
+          f"len={len(row)} suname={row[6] if len(row) > 6 else '?'} ts={row[7] if len(row) > 7 else '?'}")
 
     # 10. no hay nada nuevo → 204
     st, _, raw = req("GET", f"/sync?s={next_seq}", token=bob.get("tok", ""))
