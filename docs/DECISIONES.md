@@ -37,16 +37,18 @@ objeción; se ratifican al escribir código).
 | D25 | Deploy | Únicamente vía endpoint multipart (el legacy de body base64 produce BOOT_ERROR). noble empotrado con bun; postgres externo npm:postgres@3.4.9. Ver backend/README «Hallazgos» | Implementación 26-oct |
 | D26 | gzip | El servidor gzip si > 1 KB; Cloudflare comprime en tránsito según Accept-Encoding. OkHttp lo gestiona solo. Doble capa, sin coste | Implementación 26-oct |
 
-## Pendientes (bloquean el arranque de Fase 1)
+## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
-| # | Área | Opciones | Recomendación |
-|---|------|----------|---------------|
-| P1 | minSdk | 24 / 26 / 21 / 28 | 24 (máximo alcance; Tink soporta 24+; requiere desugaring) |
-| P2 | Estilo UI | oscuro+auto / claro M3 / solo oscuro / ultra ligero | Oscuro por defecto, sigue al sistema |
-| P3 | rootKey en dispositivo | Keystore wrap / re-derivar siempre / configurable | Keystore (derivación 1 vez; luego desbloqueo instantáneo) |
-| P4 | Extras día 1 | export cifrado / indicador de red / bloqueo bio / modo ahorro | Export cifrado (riesgo documentado en el plan) |
-| P5 | applicationId / package | — | Esperar al nombre de la app |
-| P6 | Licencia | propietaria / MIT / Apache-2.0 / AGPL | Propietaria (uso personal) salvo publicación |
+| # | Área | Decisión | Origen |
+|---|------|----------|--------|
+| P1 | minSdk | **24** (máximo alcance en Cuba; Tink soporta 24+; requiere core library desugaring) | Recomendada, confirmada |
+| P2 | Estilo UI | **Oscuro por defecto, sigue al sistema** (Material 3 dynamic color cuando esté disponible) | Recomendada, confirmada |
+| P3 | rootKey en dispositivo | **Keystore wrap** — Argon2id se calcula 1 vez al configurar; rootKey envuelto por clave AES hardware-backed; desbloqueo instantáneo después | Recomendada, confirmada |
+| P4 | Extras día 1 | **Export cifrado del historial** (riesgo de pérdida documentado en el plan) + indicador de red como parte natural del estado de sincronización | Recomendada, confirmada |
+| P5 | applicationId | **`cu.alain.chat`** — package de trabajo acordado; independiente del nombre visible (D18); renombrable antes de publicación | Acordado + recomendada |
+| P6 | Licencia | **Propietaria** (uso personal, 2 usuarios); revisar solo si se publica | Recomendada, confirmada |
+
+Sin decisiones pendientes. Próximo hito: Fase 1 cliente Android.
 
 ## Fase 0 — estado del checklist
 
