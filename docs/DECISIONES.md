@@ -61,7 +61,10 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D51 | Alcance V1 | Sin media ni "escribiendo..." (una foto a 1 KB/s = 2-4 min; el indicador no aporta con 500 ms de RTT y gasta bytes). Voz en v3: preferir chunks Opus por HTTPS antes que WebRTC (evita 10-20 KB de handshake) — decidir antes de v3 | Doc v2 |
 | D52 | Onboarding | La primera ejecución: < 60 segundos y < 5 toques. Invertir en onboarding antes que en features — el riesgo #1 es humano (que ella no instale/teclee/espere), no técnico | Doc v2 |
 | D53 | Oracle Cloud | Free Tier DESCARTADO como Plan C: Oracle recupera VMs idle (CPU < 20% durante 7 días; un bot al 2% lo borran) y pide tarjeta + teléfono. Plan C real = VPS europeo (Hetzner/OVH) | Doc v2 |
-| D54 | Migración app → rooms | La app Android v1 (frase compartida, outbox `{"to": username}`, convKey por par de usernames) queda OBSOLETA frente al backend rooms desplegado (D41-D43). Pendiente de adaptación: emparejamiento por código de invitación, SAS, outbox `{"room": room_id}`, vault con roomKey, AAD con roomId | Fusión 26-oct |
+| D54 | Migración app → rooms | **COMPLETADA (26-oct, v0.2.0)**: la app usa emparejamiento por código de invitación (base32, D42), SAS por voz (D43), outbox `{"room": room_id}`, vault con roomKey sellado por Keystore y AAD con roomId. 18/18 tests de cripto + E2E del protocolo cliente 22/22 contra producción (`backend/scripts/e2e_rooms_client.py`) | Fusión 26-oct |
+| D55 | Vault sin frase | La frase E2EE DESAPARECE del flujo (rol histórico de D36): las roomKeys se guardan en `rooms.bin` sellado por la clave hardware del Keystore (P3) y se recargan a RAM al arrancar — desbloqueo instantáneo (mejor D52). Las pantallas Setup/Unlock y el botón "Bloquear" se eliminan: en reposo protegen el cifrado de disco de Android + el bloqueo de pantalla del sistema. El export sigue con contraseña independiente (D47) | Implementación D54 |
+| D56 | Detalles de formato rooms | `convKey = HKDF(roomKey, salt=roomId_string, info="conv-v1")` · `AAD = "v1|msgId|senderId|roomId"` (pipe, minúsculas) · `inviteCode = base32("V1"‖salt‖key‖CRC32)` sin padding, grupos de 5 con guion (104 chars) · `SAS = HKDF(key,salt,"sas")[0..4]` UInt-BE mod 10⁶ · roomId = HKDF(...,"room-id")[0..16] como UUID hex (sin bits de versión). Fijado por KATs cruzados Python↔Kotlin | Implementación D54 |
+| D57 | Validación del cliente | Doble verificación: (1) tests JVM `CryptoRoomsTest` (18) con vectores conocidos calculados con una implementación Python independiente verificada contra RFC 5869; (2) E2E `e2e_rooms_client.py` (22 checks) que replica el protocolo exacto de la app contra producción y limpia la BD. Encontró y corrigió el bug de `sas6` con Int con signo (SAS negativo cuando el byte alto ≥ 0x80) | Implementación D54 |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
@@ -74,7 +77,7 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | P5 | applicationId | **`cu.alain.chat`** — package de trabajo acordado; independiente del nombre visible (D18); renombrable antes de publicación | Acordado + recomendada |
 | P6 | Licencia | **Propietaria** (uso personal, 2 usuarios); revisar solo si se publica | Recomendada, confirmada |
 
-Sin decisiones pendientes. Próximo hito: **adaptar la app Android al modelo rooms** (D54).
+Sin decisiones pendientes. ~~Próximo hito: adaptar la app Android al modelo rooms (D54)~~ **D54 completada**. Próximo hito: **pruebas en los 2 móviles reales** (instalar `chat-e2ee-v0.2.0-release.apk`, emparejar por código de invitación, verificar SAS por voz y entrega con red lenta) + ítems 2/5 de Fase 0.
 
 ## Fase 0 — estado del checklist
 
@@ -92,10 +95,10 @@ BD limpia. Detalle técnico y hallazgos del deploy: [backend/README.md](../backe
 Pendiente del lado servidor: cron externo (cron-job.org). Sin Firebase (D44); las
 notificaciones (ntfy, D45) se implementan en fase posterior.
 
-## Cliente Android — estado (26-oct-2026)
+## Cliente Android — estado (26-oct-2026, v0.2.0)
 
-**v1 construida y firmada** (APK release 2.6 MB, D37/D40): auth, cripto PSK con frase,
-chat, outbox/sync, export cifrado, workers. **PENDIENTE DE ADAPTACIÓN al modelo rooms**
-(D54): el backend desplegado ya solo acepta `{"room": room_id}` en outbox y salas con
-membresía — la app v1 usa el protocolo anterior (par de usernames). Ver
-[android/README.md](../android/README.md).
+**Migrada al modelo rooms (D54) y firmada**: APK release **2.6 MB**. Emparejamiento por
+código de invitación (D42) con pantalla de SAS (D43), outbox/sync por sala, vault de
+roomKeys sellado por Keystore (D55), export v2 con historial + claves (D47), recuperación
+de sala sin clave en 2º dispositivo (re-pegar el código). Validación: 18/18 tests JVM +
+E2E del protocolo 22/22 contra producción. Ver [android/README.md](../android/README.md).

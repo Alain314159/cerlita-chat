@@ -50,9 +50,9 @@ import java.util.Locale
 
 /** Pantalla de conversación: burbujas + composer. Offline-first: escribir siempre funciona. */
 @Composable
-fun ChatScreen(app: ChatApp, peer: String) {
+fun ChatScreen(app: ChatApp, roomId: String) {
 
-    val messages by app.db.msgDao().observeChat(peer).collectAsState(initial = emptyList())
+    val messages by app.db.msgDao().observeChat(roomId).collectAsState(initial = emptyList())
     var draft by remember { mutableStateOf("") }
     var sendError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -109,7 +109,7 @@ fun ChatScreen(app: ChatApp, peer: String) {
                     if (text.isEmpty()) return@IconButton
                     draft = ""
                     scope.launch {
-                        app.engine.send(peer, text)
+                        app.engine.send(roomId, text)
                             .onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
                             .onFailure { e ->
                                 sendError = e.message ?: "No se pudo encolar el mensaje"

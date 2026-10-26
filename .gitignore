@@ -10,6 +10,8 @@ google-services.json
 .env
 .env.*
 **/secrets.properties
+keystore.properties
+**/keystore.properties
 ghp_*
 sbp_*
 

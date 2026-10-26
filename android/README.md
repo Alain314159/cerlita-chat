@@ -1,51 +1,71 @@
 # App Android — Chat E2EE offline-first
 
-Cliente del chat privado 1-a-1 para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (renombrable — D18/P5). **v0.1.0**.
+Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
+`cu.alain.chat` (renombrable — D18/P5). **v0.2.0 — modelo rooms**.
 
-## Qué hace (Fase 1 — MVP)
+## Qué hace (Fase 1 — MVP, modelo rooms D41-D54)
 
-- **E2EE real**: Argon2id (64 MiB) → HKDF → ChaCha20-Poly1305 (Tink). El servidor
-  jamás ve la frase, las claves ni el plaintext. Ver `crypto/Crypto.kt`.
+- **E2EE por sala**: cada sala nace con `roomKey` aleatoria de 32 B que NUNCA
+  sale del teléfono (salvo dentro del código de invitación, D42). Cifrado
+  ChaCha20-Poly1305 (Tink) con claves derivadas por HKDF-SHA256. Ver `crypto/Crypto.kt`.
+- **Emparejamiento por código de invitación** (D42): A crea la sala → la app
+  muestra el código (104 chars, base32+CRC32) con botones Copiar/Compartir →
+  B lo pega (con o sin guiones, mayúsculas o minúsculas) y entra. El servidor
+  jamás ve el código: solo el `roomId` derivado (capability 2^128).
+- **SAS por voz** (D43): número de 6 dígitos idéntico en ambos teléfonos; se
+  compara en persona o por llamada. Sin `sas_confirmed` al servidor.
+- **Vault sellado por Keystore** (D55): las roomKeys viven en `rooms.bin`
+  cifrado con clave AES-256-GCM respaldada por hardware. Sin frase E2EE que
+  teclear: arranque instantáneo (mejor UX para D52).
 - **Offline-first**: escribir siempre funciona (Room + outbox persistente con
-  reintentos con backoff + jitter). Leer también: los mensajes se guardan
-  descifrados en Room y la UI observa por Flow.
-- **Transporte HTTP** (D2): `GET /sync` incremental + `POST /outbox` idempotente.
-  Polling adaptativo en foreground (5 s → 5 min) + worker periódico de 15 min.
-- **Fase E2EE separada del login** (D6): el login es usuario/contraseña contra
-  el servidor; la frase de cifrado NUNCA sale del teléfono.
-- **Export cifrado** del historial (P4): archivo `.e2ee` con frase propia.
-- **Notificaciones locales** (fallback hasta que llegue FCM — D9).
+  reintentos con backoff + jitter). Polling adaptativo (5 s → 5 min) + worker
+  periódico de 15 min.
+- **Multi-dispositivo**: el servidor lista tus salas; en un teléfono nuevo se
+  ven con candado y se recuperan re-pegando el código de invitación (E2EE: las
+  claves no viajan). Los mensajes que lleguen antes de la clave quedan cifrados
+  en `pending` y se descifran solos al recuperarla.
+- **Export cifrado v2** (P4/D47): archivo `.e2ee` con historial Y claves de
+  sala, cifrado con Argon2id y una contraseña independiente.
+- **Notificaciones locales** al recibir mensajes con la app cerrada (D9; sin
+  Firebase por D44 — ntfy queda para fase posterior, D45).
+
+## Flujo criptográfico (D41-D43, D56)
+
+```
+roomKey = CSPRNG(32 B) · roomSalt = CSPRNG(16 B)              [creador de la sala]
+roomId = UUID( HKDF(roomKey, salt=roomSalt, info="room-id")[0..16] )
+inviteCode = base32("V1" ‖ roomSalt ‖ roomKey ‖ CRC32)        [el código ES el secreto]
+SAS = 6 dígitos de HKDF(roomKey, salt=roomSalt, info="sas")   [comparación por voz]
+convKey = HKDF(roomKey, salt=roomId, info="conv-v1")
+msgKey  = HKDF(convKey, salt=msg_id, info="msg-v1")
+ct      = ChaCha20-Poly1305(msgKey, nonce, pt=[flag][texto|gzip], aad="v1|msgId|senderId|roomId")
+```
+
+Formatos fijados por KATs cruzados Python↔Kotlin (`CryptoRoomsTest`, 18 tests)
+y verificados E2E contra producción (`backend/scripts/e2e_rooms_client.py`, 22 checks).
 
 ## Cómo compilar
 
 ```bash
 # Requisitos del entorno de esta máquina (ajusta rutas si cambian):
-export JAVA_HOME=/home/z/my-project/jdk-21.0.13+9        # JDK 21 COMPLETO (JRE no vale: falta javac)
-export ANDROID_HOME=/home/z/my-project/android-sdk
-export GRADLE_USER_HOME=/home/z/my-project/gradle-home
-
+export JAVA_HOME=/home/z/jdk21                                  # JDK 21 COMPLETO (JRE no vale)
+export ANDROID_HOME=/home/z/android-sdk                         # platform 37.0 + build-tools 37
 cd android
-./gradlew assembleDebug     # APK de desarrollo
-./gradlew assembleRelease   # APK firmado + R8 (2.6 MB)
+./gradlew :app:testDebugUnitTest   # tests de cripto (18, JVM puro)
+./gradlew :app:assembleRelease     # APK firmado + R8 (2.6 MB)
 ```
 
 La firma release lee `android/keystore.properties` (gitignored) que apunta a
-`/home/z/my-project/secrets/app-release.jks`. **Respaldar ese keystore**: sin él
-no se puede actualizar la app instalada (no hay Play Store — distribución directa).
+`../../secrets/chat-release.keystore`. Ese keystore **y su contraseña** viven en
+`/home/z/my-project/secrets/` (fuera del repo, sobrevive a reinicios del entorno).
+**RESPALDARLO fuera de esta máquina**: sin él no se puede actualizar la app
+instalada (no hay Play Store — distribución directa). Nota: el keystore se
+regeneró el 26-oct-2026 tras un reinicio del entorno (la v0.1.0 firmada antes
+con otra clave requiere desinstalar antes de instalar v0.2.0 — el cambio de
+protocolo igual requiere instalación limpia).
 
-## Herramientas / decisiones de build
-
-| Pieza | Valor | Nota |
-|---|---|---|
-| AGP | 9.1.1 | Kotlin INTEGRADO desde AGP 9: no aplicar `kotlin-android`; KGP se fija con buildscript classpath (D37) |
-| Gradle | 9.8.2 | wrapper incluido |
-| Kotlin | 2.4.20 | compilador fijado por classpath |
-| KSP | 2.3.12 | Room 2.8.5 |
-| Compose BOM | 2026.08.00 | requiere compileSdk 37 |
-| compileSdk / target / min | 37 / 36 / 24 | desugaring 2.1.5 activo |
-| RAM | 3.9 GB host | `kotlin.compiler.execution.strategy=in-process` OBLIGATORIO: con daemon Kotlin aparte el OOM mata el build |
-| R8 | ON desde v1 | reglas mínimas en `app/proguard-rules.pro`; mapping.txt v1 en `secrets/mappings/` |
+RAM del host: 3.9 GB sin swap → `gradle.properties` fijado a `-Xmx2048m`,
+`in-process` y `workers.max=1` (con 2.5 GB el OOM mataba el daemon en R8).
 
 ## Estructura
 
@@ -54,32 +74,28 @@ app/src/main/java/cu/alain/chat/
   ChatApp.kt            Application + Prefs (service locator manual)
   MainActivity.kt       única Activity; enciende/apaga el polling en onStart/onStop
   core/C.kt             constantes espejo del servidor
-  crypto/Crypto.kt      Uuid7 · Argon2id · HKDF · ChaCha20-Poly1305 · framing gzip
+  crypto/Crypto.kt      Uuid7 · HKDF · base32 · inviteCode · SAS · roomId ·
+                        ChaCha20-Poly1305 · framing gzip (Argon2id solo para export)
   crypto/KeyVault.kt    wrap AndroidKeyStore AES-256-GCM (P3)
-  vault/SessionStore.kt ss.bin (sesión cifrada) + kx.bin (salt+check de la frase)
-  net/Api.kt            OkHttp: auth/sync/outbox/heartbeat; errores → español
-  db/Db.kt              Room: messages, outbox, pending (bloqueado), meta (last_seq)
-  engine/ChatEngine.kt  rootKey en RAM · send/syncOnce/drainOutbox · polling
+  vault/SessionStore.kt ss.bin (sesión) + rooms.bin (roomKeys selladas)
+  net/Api.kt            OkHttp: auth (reg/in/out/room_new/room_join/rooms),
+                        sync, outbox {room}, heartbeat; errores → español
+  db/Db.kt              Room v2: rooms, messages, outbox, pending (sin clave), meta
+  engine/ChatEngine.kt  claves por sala en RAM · createRoom/joinRoom/restoreRoomKey ·
+                        send/syncOnce/drainOutbox · drainPending por sala · polling
   work/Workers.kt       SyncWorker 15 min + OutboxWorker con jitter
-  export/…              export .e2ee (P4)      notify/…  notificación local
-  ui/…                  Compose M3: Auth (login/setup/unlock), Chats, Chat, Ajustes
+  export/…              export .e2ee v2 (historial + claves)   notify/…  notificación
+  ui/…                  Compose M3: Login, Salas (crear/unir + SAS + código),
+                        Chat, Ajustes
+app/src/test/java/cu/alain/chat/
+  CryptoRoomsTest.kt    18 tests: base32 RFC4648, roundtrip invite, CRC, KATs
+                        roomId/SAS (validados contra Python + RFC 5869), AAD, framing
 ```
-
-## Flujo criptográfico (D3, D33-D35)
-
-```
-rootKey = Argon2id(frase, salt16, t=3, m=64MiB, p=1)          [RAM solo]
-convKey = HKDF(rootKey, salt="lo|hi" usernames, info="conv-v1")
-msgKey  = HKDF(convKey, salt=msg_id, info="msg-v1")
-ct      = ChaCha20-Poly1305(msgKey, nonce, pt=[flag][texto|gzip], aad="v1|…")
-```
-
-Ambos teléfonos derivan lo mismo con solo: su frase compartida + ambos usernames.
-La conversación se auto-crea en el servidor al primer mensaje (par ordenado).
 
 ## Pendiente (siguientes pasos)
 
-1. Probar en los 2 móviles reales (instalar `download/chat-e2ee-v0.1.0-release.apk`)
-2. Firebase/FCM cuando el usuario pase `google-services.json` (push instantáneo)
-3. Import del export .e2ee, auto-lock por inactividad, multi-contacto
-4. Cron externo anti-pausa (cron-job.org) — ver docs/FASE-0-VALIDACION.md
+1. Probar en los 2 móviles reales (instalar el APK release v0.2.0): registrar
+   ambos usuarios, crear sala, compartir código, verificar SAS por voz
+2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
+3. Import del export .e2ee (restaurar en otro teléfono)
+4. Notificaciones ntfy (D45, fase posterior) + cron externo anti-pausa

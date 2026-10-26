@@ -14,9 +14,10 @@ import java.util.concurrent.TimeUnit
 /** Respuesta exitosa de /sync (204 → rows vacías). */
 data class SyncResp(val nextSeq: Long, val rows: List<SyncRow>)
 
-/** Fila de /sync: [msg_id, conv_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]. */
+/** Fila de /sync: [msg_id, room_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]. */
 data class SyncRow(
     val msgId: String,
+    val roomId: String,
     val senderId: String,
     val seq: Long,
     val nonceB64: String,
@@ -37,8 +38,11 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
             "bad_credentials" -> "Usuario o contraseña incorrectos"
             "locked" -> "Demasiados intentos fallidos; espera un poco"
             "user_cap" -> "El servidor alcanzó el máximo de usuarios"
-            "no_user" -> "Ese usuario no existe"
-            "self" -> "No puedes escribirte a ti mismo"
+            "bad_room" -> "Identificador de sala inválido"
+            "no_room" -> "Esa sala no existe todavía. Quien la creó debe abrirla primero."
+            "room_taken" -> "Esa sala ya existe y pertenece a otra persona"
+            "room_full" -> "La sala alcanzó el máximo de miembros"
+            "room_cap" -> "Alcanzaste el máximo de salas que puedes crear"
             "too_many" -> "Lote demasiado grande; inténtalo de nuevo"
             "unauthorized" -> "Tu sesión expiró; inicia sesión de nuevo"
             "network" -> "Sin conexión o el servidor no responde"
@@ -48,6 +52,9 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
 
 /** Respuesta de login/registro. */
 data class AuthResp(val uid: String, val uname: String, val token: String, val exp: String)
+
+/** Sala listada por el servidor: [room_id, owner(0/1)]. */
+data class ServerRoom(val roomId: String, val owner: Boolean)
 
 /**
  * Cliente HTTP de las Edge Functions (D2: polling HTTP, nada de WebSocket).
@@ -118,6 +125,33 @@ class Api(private val baseUrl: () -> String) {
         try { post("/auth", JSONObject().put("a", "out"), token) } catch (_: Exception) { }
     }
 
+    // ---------- salas (D41-D43) ----------
+
+    /** Crea la sala: room_id lo genera el CLIENTE (HKDF de roomKey). Idempotente. */
+    suspend fun roomNew(token: String, roomId: String) = withContext(Dispatchers.IO) {
+        val (code, j) = post("/auth", JSONObject().put("a", "room_new").put("r", roomId), token)
+        if (code != 201) throw ApiException(code, j.errOr("room_new_failed"))
+    }
+
+    /** B se une con el room_id derivado del código de invitación. */
+    suspend fun roomJoin(token: String, roomId: String) = withContext(Dispatchers.IO) {
+        val (code, j) = post("/auth", JSONObject().put("a", "room_join").put("r", roomId), token)
+        if (code != 200) throw ApiException(code, j.errOr("room_join_failed"))
+    }
+
+    /** Salas propias según el servidor (multi-dispositivo: sin roomKey no se descifra nada). */
+    suspend fun rooms(token: String): List<ServerRoom> = withContext(Dispatchers.IO) {
+        val (code, j) = post("/auth", JSONObject().put("a", "rooms"), token)
+        if (code != 200) throw ApiException(code, j.errOr("rooms_failed"))
+        val arr: JSONArray = j.getJSONArray("rooms")
+        buildList {
+            for (i in 0 until arr.length()) {
+                val r = arr.getJSONArray(i)
+                add(ServerRoom(r.getString(0), r.getInt(1) == 1))
+            }
+        }
+    }
+
     // ---------- sync ----------
 
     suspend fun sync(token: String, sinceSeq: Long, limit: Int = C.SYNC_LIMIT): SyncResp =
@@ -134,6 +168,7 @@ class Api(private val baseUrl: () -> String) {
                             add(
                                 SyncRow(
                                     msgId = r.getString(0),
+                                    roomId = r.getString(1),
                                     senderId = r.getString(2),
                                     seq = r.getLong(3),
                                     nonceB64 = r.getString(4),
@@ -155,8 +190,8 @@ class Api(private val baseUrl: () -> String) {
 
     // ---------- outbox ----------
 
-    /** Envía un lote a UN destinatario: m = [[msg_id, ct_b64, nonce_b64, ts_ms], ...]. Devuelve los acked. */
-    suspend fun outbox(token: String, to: String, msgs: List<Array<Any>>): List<String> =
+    /** Envía un lote a UNA sala: m = [[msg_id, ct_b64, nonce_b64, ts_ms], ...]. Devuelve los acked. */
+    suspend fun outbox(token: String, room: String, msgs: List<Array<Any>>): List<String> =
         withContext(Dispatchers.IO) {
             val m = JSONArray()
             msgs.forEach { row ->
@@ -164,7 +199,7 @@ class Api(private val baseUrl: () -> String) {
                 row.forEach { a.put(it) }
                 m.put(a)
             }
-            val (code, j) = post("/outbox", JSONObject().put("to", to).put("m", m), token)
+            val (code, j) = post("/outbox", JSONObject().put("room", room).put("m", m), token)
             when (code) {
                 200 -> {
                     val acked = j.getJSONArray("a")

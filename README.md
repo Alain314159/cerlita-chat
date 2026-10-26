@@ -3,8 +3,8 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: backend Fase 1 desplegado y verificado en producción (37/37, modelo rooms,
-26-oct-2026). App Android pendiente. **Sin Firebase** (decisión del usuario).
+**Estado**: Fase 1 COMPLETA — backend desplegado (37/37) y app Android v0.2.0 migrada
+al modelo rooms (D54), APK release 2.6 MB firmado. **Sin Firebase** (decisión del usuario).
 
 ## Documentación
 
@@ -14,6 +14,7 @@
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
+| [android/README.md](android/README.md) | App v0.2.0: modelo rooms, cripto, build, tests |
 
 ## Estado (26-oct-2026)
 
@@ -24,9 +25,16 @@
   (`room_state`). Funciones: `auth` (+ salas), `sync`, `outbox`, `heartbeat` en
   `https://wuptkddnkahmknolpxtp.supabase.co/functions/v1` — BD limpia, lista para los
   2 usuarios reales (se registran desde la app con código de invitación)
+- ✅ **App Android v0.2.0 migrada al modelo rooms (D54)**: emparejamiento por código de
+  invitación + SAS por voz, outbox/sync por sala, vault de roomKeys sellado por
+  Keystore (sin frase E2EE), export v2 con historial + claves, recuperación de sala
+  en 2º dispositivo. APK release **2.6 MB** firmado. Validación: 18/18 tests de
+  cripto (KATs cruzados Python↔Kotlin) + E2E del protocolo cliente **22/22** contra
+  producción
 - ❌ **Sin Firebase** (orden del usuario): no FCM, no google-services.json
-- ⏳ Pendiente: app Android (Fase 1 cliente), cron externo, notificaciones (ntfy, fase
-  posterior — tema derivado de roomKey, publicado por el móvil emisor)
+- ⏳ Pendiente: pruebas en los 2 móviles reales, TTFB desde SIM (ítem 5), cron externo,
+  notificaciones (ntfy, fase posterior — tema derivado de roomKey, publicado por el
+  móvil emisor)
 
 ## Reglas de trabajo (acordadas 26-oct-2026)
 

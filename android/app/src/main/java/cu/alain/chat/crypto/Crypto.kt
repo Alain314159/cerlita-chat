@@ -10,21 +10,29 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.zip.CRC32
 import java.util.zip.Deflater
 import java.util.zip.Inflater
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Cifrado de extremo a extremo (D3, D12, D14, D33, D34, D35 — docs/DECISIONES.md).
+ * Cifrado de extremo a extremo — modelo ROOMS (D41-D43, D54 — docs/DECISIONES.md).
  *
- * rootKey = Argon2id(frase E2EE, salt 16B, t=3, m=64MiB, p=1)          [solo en el cliente]
- * convKey = HKDF-SHA256(rootKey, salt="lo|hi" (usernames ordenados), info="conv-v1")
- * msgKey  = HKDF-SHA256(convKey, salt=msg_id, info="msg-v1")
- * AEAD    = ChaCha20-Poly1305 con AAD = "v1|msgId|senderUid|lo|hi"
+ * 1. El CREADOR genera: roomKey = CSPRNG(32 B), roomSalt = CSPRNG(16 B).
+ * 2. roomId = UUID( HKDF-SHA256(roomKey, salt=roomSalt, info="room-id")[0..16] )
+ *    → el servidor SOLO conoce roomId (capability de membresía, 2^128).
+ * 3. inviteCode = base32("V1" ‖ roomSalt ‖ roomKey ‖ CRC32) [D42]
+ *    → El código ES el secreto: la roomKey viaja EN CLARO dentro, sin cifrado
+ *      adicional. NUNCA al servidor; se comparte por canal controlado.
+ * 4. SAS = 6 dígitos de HKDF(roomKey, salt=roomSalt, info="sas") [D43]
+ *    → Se compara SOLO entre los dos clientes (voz / en persona).
+ * 5. convKey = HKDF-SHA256(roomKey, salt=roomId, info="conv-v1")
+ * 6. msgKey  = HKDF-SHA256(convKey, salt=msg_id, info="msg-v1")
+ *    AAD = "v1|msgId|senderId|roomId" · AEAD = ChaCha20-Poly1305 (Tink).
  *
- * El servidor NUNCA ve la frase, rootKey, convKey ni msgKey: solo nonce + ciphertext.
- * Ambos extremos derivan la misma convKey con solo conocerse por username — sin lookup.
+ * El servidor NUNCA ve roomKey, convKey ni msgKey: solo nonce + ciphertext.
+ * El export (D47) usa Argon2id con contraseña INDEPENDIENTE.
  */
 object Crypto {
 
@@ -40,19 +48,130 @@ object Crypto {
         for (i in 6..15) b[i] = rnd.nextInt(256).toByte()
         b[6] = ((b[6].toInt() and 0x0F) or 0x70).toByte() // versión 7
         b[8] = ((b[8].toInt() and 0x3F) or 0x80).toByte() // variante 10
-        val h = buildString(36) {
-            for (i in b.indices) {
-                append("0123456789abcdef"[(b[i].toInt() ushr 4) and 0xF])
-                append("0123456789abcdef"[b[i].toInt() and 0xF])
-                if (i == 3 || i == 5 || i == 7 || i == 9) append('-')
-            }
-        }
-        return h
+        return hexUuid(b)
     }
 
-    // ---------- Derivación de claves ----------
+    private fun hexUuid(b: ByteArray): String = buildString(36) {
+        for (i in b.indices) {
+            append("0123456789abcdef"[(b[i].toInt() ushr 4) and 0xF])
+            append("0123456789abcdef"[b[i].toInt() and 0xF])
+            if (i == 3 || i == 5 || i == 7 || i == 9) append('-')
+        }
+    }
 
-    /** Argon2id de la frase E2EE. Tarda ~1-3 s en móvil (64 MiB): solo al configurar/desbloquear. */
+    // ---------- material de sala ----------
+
+    fun newRoomKey(): ByteArray = ByteArray(32).also(rnd::nextBytes)
+
+    fun newSalt16(): ByteArray = ByteArray(16).also(rnd::nextBytes)
+
+    /** roomId (D41): HKDF(roomKey, salt=roomSalt, info="room-id")[0..16] como UUID. */
+    fun roomId(roomKey: ByteArray, roomSalt: ByteArray): String =
+        hexUuid(hkdf(roomKey, roomSalt, "room-id", 16))
+
+    /** SAS de 6 dígitos (D43): primeros 4 B de HKDF(...info="sas") como UInt BE mod 10^6. */
+    fun sas6(roomKey: ByteArray, roomSalt: ByteArray): String {
+        val d = hkdf(roomKey, roomSalt, "sas", 4)
+        // Long sin signo: con Int con signo, byte alto >= 0x80 daría resto NEGATIVO
+        val v = ((d[0].toLong() and 0xFF) shl 24) or ((d[1].toLong() and 0xFF) shl 16) or
+            ((d[2].toLong() and 0xFF) shl 8) or (d[3].toLong() and 0xFF)
+        return "%06d".format(v % 1_000_000L)
+    }
+
+    // ---------- código de invitación (D42) ----------
+    // payload = "V1"(2B ASCII) ‖ roomSalt(16B) ‖ roomKey(32B) ‖ CRC32(payload)(4B BE)
+    // código  = base32 RFC4648 sin padding, MAYÚSCULAS, grupos de 5 con "-".
+    // 54 B → 87 caracteres: largo a propósito de teclear; el camino natural es
+    // copiar/compartir (WhatsApp, en persona). El CRC detecta errores de tecleo.
+
+    private const val B32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    private val B32_REV = IntArray(128) { -1 }.also {
+        for (i in B32_ALPHABET.indices) it[B32_ALPHABET[i].code] = i
+    }
+    private val INVITE_MAGIC = byteArrayOf(0x56, 0x31) // "V1"
+    private const val INVITE_LEN = 2 + 16 + 32 + 4 // 54
+
+    fun encodeInvite(roomSalt: ByteArray, roomKey: ByteArray): String {
+        require(roomSalt.size == 16 && roomKey.size == 32)
+        val body = INVITE_MAGIC + roomSalt + roomKey
+        val crc = CRC32().apply { update(body) }
+        val payload = body + byteArrayOf(
+            ((crc.value ushr 24) and 0xFF).toByte(),
+            ((crc.value ushr 16) and 0xFF).toByte(),
+            ((crc.value ushr 8) and 0xFF).toByte(),
+            (crc.value and 0xFF).toByte(),
+        )
+        val b32 = base32Encode(payload)
+        return buildString(b32.length + b32.length / 5) {
+            for (i in b32.indices) {
+                append(b32[i])
+                if ((i + 1) % 5 == 0 && i + 1 < b32.length) append('-')
+            }
+        }
+    }
+
+    /** null si el código está corrupto (CRC), trunco o con magic incorrecto. */
+    fun decodeInvite(code: String): Pair<ByteArray, ByteArray>? {
+        val clean = buildString(code.length) {
+            for (ch in code.uppercase()) if (ch.code < 128 && B32_REV[ch.code] >= 0) append(ch)
+        }
+        val payload = base32Decode(clean) ?: return null
+        if (payload.size != INVITE_LEN) return null
+        if (payload[0] != INVITE_MAGIC[0] || payload[1] != INVITE_MAGIC[1]) return null
+        val body = payload.copyOfRange(0, INVITE_LEN - 4)
+        val crc = CRC32().apply { update(body) }
+        val expect = byteArrayOf(
+            ((crc.value ushr 24) and 0xFF).toByte(),
+            ((crc.value ushr 16) and 0xFF).toByte(),
+            ((crc.value ushr 8) and 0xFF).toByte(),
+            (crc.value and 0xFF).toByte(),
+        )
+        val got = payload.copyOfRange(INVITE_LEN - 4, INVITE_LEN)
+        if (!MessageDigest.isEqual(expect, got)) return null
+        val salt = payload.copyOfRange(2, 18)
+        val key = payload.copyOfRange(18, 50)
+        return key to salt
+    }
+
+    // ---------- base32 (RFC4648, sin padding) ----------
+
+    fun base32Encode(data: ByteArray): String {
+        val sb = StringBuilder((data.size * 8 + 4) / 5)
+        var buf = 0        // acumulador de bits
+        var bits = 0
+        for (byte in data) {
+            buf = (buf shl 8) or (byte.toInt() and 0xFF)
+            bits += 8
+            while (bits >= 5) {
+                sb.append(B32_ALPHABET[(buf ushr (bits - 5)) and 0x1F])
+                bits -= 5
+            }
+        }
+        if (bits > 0) sb.append(B32_ALPHABET[(buf shl (5 - bits)) and 0x1F])
+        return sb.toString()
+    }
+
+    fun base32Decode(s: String): ByteArray? {
+        val out = ByteArrayOutputStream(s.length * 5 / 8 + 1)
+        var buf = 0
+        var bits = 0
+        for (ch in s) {
+            if (ch.code >= 128) return null
+            val v = B32_REV[ch.code]
+            if (v < 0) return null
+            buf = (buf shl 5) or v
+            bits += 5
+            if (bits >= 8) {
+                out.write((buf ushr (bits - 8)) and 0xFF)
+                bits -= 8
+            }
+        }
+        return out.toByteArray()
+    }
+
+    // ---------- derivación de claves ----------
+
+    /** Argon2id SOLO para la contraseña del export (D47) — independiente de todo. */
     fun deriveRootKey(passphrase: CharArray, salt16: ByteArray): ByteArray {
         val pw = String(passphrase).toByteArray(StandardCharsets.UTF_8)
         return try {
@@ -80,23 +199,17 @@ object Crypto {
             len,
         )
 
-    /** Clave de conversación: el salt es el par ordenado de usernames (D33). */
-    fun convKey(rootKey: ByteArray, unameA: String, unameB: String): ByteArray {
-        val (lo, hi) = sortPair(unameA, unameB)
-        return hkdf(rootKey, "$lo|$hi".toByteArray(StandardCharsets.UTF_8), "conv-v1")
-    }
+    /** Clave de conversación: la madre es roomKey y el salt es el roomId (D41). */
+    fun convKey(roomKey: ByteArray, roomId: String): ByteArray =
+        hkdf(roomKey, roomId.lowercase().toByteArray(StandardCharsets.UTF_8), "conv-v1")
 
     fun msgKey(convKey: ByteArray, msgId: String): ByteArray =
         hkdf(convKey, msgId.lowercase().toByteArray(StandardCharsets.UTF_8), "msg-v1")
 
-    /** AAD (D12/D34): liga el ciphertext a mensaje, emisor y conversación. */
-    fun aad(msgId: String, senderUid: String, unameA: String, unameB: String): ByteArray {
-        val (lo, hi) = sortPair(unameA, unameB)
-        return "v1|$msgId|${senderUid.lowercase()}|$lo|$hi".toByteArray(StandardCharsets.UTF_8)
-    }
-
-    private fun sortPair(a: String, b: String): Pair<String, String> =
-        if (a <= b) a to b else b to a
+    /** AAD (D41): liga el ciphertext a mensaje, emisor y sala. */
+    fun aad(msgId: String, senderId: String, roomId: String): ByteArray =
+        "v1|$msgId|${senderId.lowercase()}|${roomId.lowercase()}"
+            .toByteArray(StandardCharsets.UTF_8)
 
     // ---------- AEAD: ChaCha20-Poly1305 (Tink) ----------
     // Tink devuelve nonce(12)||ct||tag; el protocolo guarda nonce y ct por separado.
@@ -171,21 +284,7 @@ object Crypto {
         return out.toByteArray()
     }
 
-    // ---------- Verificación local de la frase (D36) ----------
-    // check = HMAC-SHA256(HKDF(rootKey, info="e2ee-check"), constante).
-    // Permite validar la frase SIN servidor y SIN depender del Keystore.
-
-    fun checkValue(rootKey: ByteArray): ByteArray {
-        val k = hkdf(rootKey, ByteArray(0), "e2ee-check")
-        val mac = Mac.getInstance("HmacSHA256").apply {
-            init(SecretKeySpec(k, "HmacSHA256"))
-        }
-        return mac.doFinal("alain-chat-check-v1".toByteArray(StandardCharsets.UTF_8))
-    }
-
     fun constEq(a: ByteArray, b: ByteArray): Boolean = MessageDigest.isEqual(a, b)
-
-    fun newSalt16(): ByteArray = ByteArray(16).also(rnd::nextBytes)
 
     fun zero(b: ByteArray?) { b?.fill(0) }
 }

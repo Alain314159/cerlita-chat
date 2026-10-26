@@ -8,22 +8,31 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
-import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.flow.Flow
 
-// ─────────────────────────── entidades ───────────────────────────
+// ─────────────────────────── entidades (v2: modelo rooms, D54) ───────────────────────────
+
+/** Sala local: metadatos. La roomKey NO vive aquí (vault sellado por Keystore). */
+@Entity(tableName = "rooms")
+data class Room(
+    @PrimaryKey val roomId: String,
+    val name: String,
+    val owner: Boolean,
+    val sas: String,            // 6 dígitos, se muestra en la sala (D43)
+    val createdAt: Long,
+)
 
 /** Mensaje descifrado (o marcado ilegible) para la UI. */
 @Entity(tableName = "messages")
 data class Message(
     @PrimaryKey val msgId: String,
-    val peerUname: String,     // con quién hablo (aunque yo sea el emisor)
+    val roomId: String,         // sala a la que pertenece (emisor o receptor)
     val senderUname: String,
     val mine: Boolean,
     val body: String,
     val ts: Long,
-    val state: Int,            // C.ST_*: sending/sent/failed/received/unreadable
+    val state: Int,             // C.ST_*: sending/sent/failed/received/unreadable
     val seq: Long? = null,
 )
 
@@ -31,19 +40,21 @@ data class Message(
 @Entity(tableName = "outbox")
 data class OutboxMsg(
     @PrimaryKey val msgId: String,
-    val peerUname: String,
+    val roomId: String,
     val ctB64: String,
     val nonceB64: String,
     val ts: Long,
 )
 
 /**
- * Fila cruda recibida por sync MIENTRAS la app está bloqueada: se guarda
- * cifrada tal cual y se descifra al desbloquear (la rootKey nunca persiste).
+ * Fila cruda recibida por sync de una sala SIN clave en este teléfono (p. ej.
+ * segundo dispositivo antes de re-introducir el código de invitación): se
+ * guarda cifrada tal cual y se descifra en cuanto llegue la roomKey.
  */
 @Entity(tableName = "pending")
 data class PendingMsg(
     @PrimaryKey val msgId: String,
+    val roomId: String,
     val senderUname: String,
     val senderId: String,
     val nonceB64: String,
@@ -59,12 +70,41 @@ data class MetaRow(@PrimaryKey val k: String, val v: String)
 // ─────────────────────────── DAOs ───────────────────────────
 
 @Dao
-interface MsgDao {
-    @Query("SELECT * FROM messages WHERE peerUname = :peer OR (senderUname = :peer AND mine = 0) ORDER BY ts ASC, msgId ASC")
-    fun observeChat(peer: String): Flow<List<Message>>
+interface RoomDao {
+    @Query("SELECT * FROM rooms ORDER BY createdAt ASC")
+    fun observeAll(): Flow<List<Room>>
 
-    @Query("SELECT * FROM messages WHERE peerUname = :peer OR (senderUname = :peer AND mine = 0) ORDER BY ts ASC, msgId ASC")
-    suspend fun chat(peer: String): List<Message>
+    @Query("SELECT * FROM rooms ORDER BY createdAt ASC")
+    suspend fun all(): List<Room>
+
+    @Query("SELECT * FROM rooms WHERE roomId = :id LIMIT 1")
+    suspend fun get(id: String): Room?
+
+    /** Insert o update completo (crear sala / unirme: datos completos en mano). */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(r: Room)
+
+    /** Fusión desde el servidor: NO pisa el nombre local (solo añade las nuevas). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun addMissing(rooms: List<Room>)
+
+    @Query("DELETE FROM rooms WHERE roomId = :id")
+    suspend fun delete(id: String)
+
+    @Query("SELECT COUNT(*) FROM rooms")
+    suspend fun count(): Int
+
+    @Query("DELETE FROM rooms")
+    suspend fun wipe()
+}
+
+@Dao
+interface MsgDao {
+    @Query("SELECT * FROM messages WHERE roomId = :room ORDER BY ts ASC, msgId ASC")
+    fun observeChat(room: String): Flow<List<Message>>
+
+    @Query("SELECT * FROM messages WHERE roomId = :room ORDER BY ts ASC, msgId ASC")
+    suspend fun chat(room: String): List<Message>
 
     @Query("SELECT * FROM messages ORDER BY ts ASC")
     suspend fun all(): List<Message>
@@ -75,17 +115,14 @@ interface MsgDao {
     @Query("UPDATE messages SET state = :state WHERE msgId = :id")
     suspend fun setState(id: String, state: Int)
 
-    @Query("UPDATE messages SET body = :body, state = :state WHERE msgId = :id")
-    suspend fun setBodyState(id: String, body: String, state: Int)
-
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE msgId = :id)")
     suspend fun exists(id: String): Boolean
 
-    // Lista de conversaciones: último mensaje por peer
+    // Lista de conversaciones: último mensaje por sala (JOIN para respetar orden de rooms)
     @Query(
         """SELECT m.* FROM messages m
-           INNER JOIN (SELECT peerUname AS p, MAX(ts) AS mx FROM messages GROUP BY peerUname) t
-           ON m.peerUname = t.p AND m.ts = t.mx
+           INNER JOIN (SELECT roomId AS r, MAX(ts) AS mx FROM messages GROUP BY roomId) t
+           ON m.roomId = t.r AND m.ts = t.mx
            ORDER BY m.ts DESC"""
     )
     fun observeChats(): Flow<List<Message>>
@@ -120,6 +157,9 @@ interface PendingDao {
     @Query("SELECT * FROM pending ORDER BY seq ASC")
     suspend fun all(): List<PendingMsg>
 
+    @Query("SELECT * FROM pending WHERE roomId = :room ORDER BY seq ASC")
+    suspend fun forRoom(room: String): List<PendingMsg>
+
     @Query("DELETE FROM pending WHERE msgId IN (:ids)")
     suspend fun delete(ids: List<String>)
 
@@ -143,11 +183,12 @@ interface MetaDao {
 // ─────────────────────────── DB ───────────────────────────
 
 @Database(
-    entities = [Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class],
-    version = 1,
+    entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun roomDao(): RoomDao
     abstract fun msgDao(): MsgDao
     abstract fun outboxDao(): OutboxDao
     abstract fun pendingDao(): PendingDao
@@ -155,9 +196,11 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         fun build(ctx: Context): AppDatabase =
-            Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                // v1 pre-lanzamiento sin usuarios: destructivo aceptable;
-                // con usuarios reales → migraciones obligatorias (regla del skill)
+            // androidx.room.Room (calificado: la entidad local se llama Room)
+            androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
+                // v2 pre-lanzamiento sin usuarios reales: destructivo aceptable
+                // (el protocolo rooms es incompatible con v1: mensajes por par
+                // de usernames). Con usuarios reales → migraciones obligatorias.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

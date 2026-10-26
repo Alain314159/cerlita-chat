@@ -21,27 +21,26 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import cu.alain.chat.ChatApp
+import cu.alain.chat.db.Room
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.ui.screens.AuthScreens
 import cu.alain.chat.ui.screens.ChatScreen
-import cu.alain.chat.ui.screens.ChatsScreen
+import cu.alain.chat.ui.screens.RoomsScreen
 import cu.alain.chat.ui.screens.SettingsScreen
 
 /** Navegación interna de la zona Main (pila simple). */
 private sealed interface Screen {
     data object Home : Screen
-    data class Chat(val peer: String) : Screen
+    data class Chat(val room: Room) : Screen
     data object Settings : Screen
 }
 
 /**
- * Raíz de la UI: el AppState del motor decide la pantalla (login/setup/unlock/main).
+ * Raíz de la UI: el AppState del motor decide la pantalla (login/main).
  * Dentro de Main hay una pila de navegación mínima, sin librería de nav
  * (app de 3 pantallas: la nav manual pesa menos y no tiene sorpresas).
  */
@@ -64,21 +63,11 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
     }
 
     when (state) {
-        AppState.Login, AppState.Setup, AppState.Unlock -> AuthScreens(state, app)
+        AppState.Login -> AuthScreens(state, app)
 
         AppState.Main -> {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
-            val chatPeer = remember { mutableStateOf<String?>(null) }
-
-            // abrir un chat desde fuera (p. ej. al añadir contacto)
-            LaunchedEffect(chatPeer.value) {
-                chatPeer.value?.let { p ->
-                    stack.removeAll { it is Screen.Chat }
-                    stack.add(Screen.Chat(p))
-                    chatPeer.value = null
-                }
-            }
 
             Scaffold(
                 topBar = {
@@ -87,7 +76,7 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                             Text(
                                 when (val c = current) {
                                     Screen.Home -> "Chats"
-                                    is Screen.Chat -> c.peer
+                                    is Screen.Chat -> c.room.name
                                     Screen.Settings -> "Ajustes"
                                 }
                             )
@@ -116,10 +105,11 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                     verticalArrangement = Arrangement.Center,
                 ) {
                     when (val c = current) {
-                        Screen.Home -> ChatsScreen(app) { peer ->
-                            chatPeer.value = peer
+                        Screen.Home -> RoomsScreen(app) { room ->
+                            stack.removeAll { it is Screen.Chat }
+                            stack.add(Screen.Chat(room))
                         }
-                        is Screen.Chat -> ChatScreen(app, c.peer)
+                        is Screen.Chat -> ChatScreen(app, c.room.roomId)
                         Screen.Settings -> SettingsScreen(app)
                     }
                 }

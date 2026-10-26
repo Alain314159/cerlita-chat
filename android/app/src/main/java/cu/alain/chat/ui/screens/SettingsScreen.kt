@@ -14,7 +14,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.UploadFile
@@ -98,8 +97,9 @@ fun SettingsScreen(app: ChatApp) {
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Exporta todo el historial a un archivo cifrado con una frase que elijas. " +
-                        "Guárdalo fuera del teléfono (USB, tarjeta). El archivo no se puede leer sin la frase.",
+                    "Exporta el historial Y las claves de tus salas a un archivo cifrado con una " +
+                        "frase que elijas. Guárdalo fuera del teléfono (USB, tarjeta): con él " +
+                        "recuperas todo en un teléfono nuevo.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(10.dp))
@@ -160,18 +160,13 @@ fun SettingsScreen(app: ChatApp) {
                 Text("Seguridad", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Bloquear borra la clave de la memoria: para leer de nuevo necesitas la frase. " +
-                        "Cerrar sesión borra además los mensajes de este teléfono.",
+                    "Las claves de las salas están cifradas en este teléfono con el almacén de " +
+                        "claves de Android: no se pueden copiar a otro dispositivo. Cierra sesión para " +
+                        "borrarlas junto con los mensajes.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(10.dp))
                 Row {
-                    OutlinedButton(onClick = { app.engine.lock() }) {
-                        Icon(Icons.Default.Lock, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Bloquear ahora")
-                    }
-                    Spacer(Modifier.width(12.dp))
                     OutlinedButton(
                         onClick = { showLogout = true },
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
@@ -185,7 +180,7 @@ fun SettingsScreen(app: ChatApp) {
         }
 
         Text(
-            "v0.1.0 · cifrado Argon2id + ChaCha20-Poly1305 · el servidor nunca ve tus mensajes",
+            "v0.2.0 · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -200,7 +195,9 @@ fun SettingsScreen(app: ChatApp) {
             text = {
                 Column {
                     Text(
-                        "Elige una frase para cifrar el archivo. Guárdala aparte: sin ella el archivo es irrecuperable.",
+                        "Elige una frase para cifrar el archivo (no uses la de tu cuenta). " +
+                            "Incluye historial y claves de salas: quien tenga el archivo Y la frase " +
+                            "lee todo. Guárdala aparte.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(10.dp))
@@ -225,7 +222,7 @@ fun SettingsScreen(app: ChatApp) {
                         scope.launch {
                             val uri = try {
                                 HistoryExport.export(
-                                    ctx, app.db,
+                                    ctx, app.db, app.store,
                                     app.engine.session?.uname ?: "?",
                                     exportPass.toCharArray(),
                                 )
@@ -274,8 +271,10 @@ fun SettingsScreen(app: ChatApp) {
             title = { Text("¿Cerrar sesión?") },
             text = {
                 Text(
-                    "Se cierra la sesión y se BORRAN de este teléfono los mensajes descifrados " +
-                        "y la frase guardada. La otra persona conserva su copia.",
+                    "Se cierra la sesión y se BORRAN de este teléfono los mensajes, las salas y " +
+                        "sus claves. La otra persona conserva su copia; tú puedes volver a entrar " +
+                        "con tu usuario y recuperar las salas con los códigos de invitación " +
+                        "o el archivo de respaldo.",
                 )
             },
             confirmButton = {

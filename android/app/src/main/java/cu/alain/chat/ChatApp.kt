@@ -12,8 +12,8 @@ import java.util.UUID
 
 /**
  * Application: service locator manual (app pequeña, sin framework DI).
- * Vida del proceso ↔ vida de la app; la rootKey NO sobrevive aquí
- * porque nunca se persiste — tras muerte del proceso la app pide la frase.
+ * Vida del proceso ↔ vida de la app; las roomKeys en RAM se recargan del
+ * vault sellado (Keystore) al arrancar — no hay frase que teclear.
  */
 class ChatApp : Application() {
 
@@ -43,13 +43,13 @@ class ChatApp : Application() {
             db = db,
             store = store,
             api = api,
-            savedPeer = { prefs.peerUname },
             onNewMessages = { /* el polling foreground refresca la UI por Room Flow */ },
         )
 
         Notifier.ensureChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
         engine.refreshState()
+        engine.onProcessStart() // sesión viva tras reinicio: claves a RAM + salas del servidor
     }
 }
 
@@ -60,10 +60,6 @@ class Prefs(ctx: Context) {
     var baseUrl: String
         get() = sp.getString("base_url", cu.alain.chat.core.C.DEFAULT_BASE)!!
         set(v) = sp.edit().putString("base_url", v).apply()
-
-    var peerUname: String?
-        get() = sp.getString("peer", null)
-        set(v) = sp.edit().putString("peer", v).apply()
 
     /** ID de dispositivo estable por instalación (lo pide el backend en auth). */
     val deviceId: String

@@ -22,8 +22,8 @@ android {
         applicationId = "cu.alain.chat"
         minSdk = 24          // D/P1: máximo alcance; requiere desugaring
         targetSdk = 36       // D/P2: un nivel por detrás del último — comportamiento probado
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -95,4 +95,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.tink.android)
     implementation(libs.argon2kt)
+
+    testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
+    testImplementation("junit:junit:4.13.2")
 }

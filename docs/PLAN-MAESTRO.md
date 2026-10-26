@@ -24,7 +24,8 @@ EE. UU. servir a residentes en Cuba; Supabase es empresa de EE. UU.).
 Ítems 2 y 5 pendientes → ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md).
 
 Regla del plan original adaptada: el BACKEND ya está escrito, desplegado y verificado
-(37/37) — la app Android v1 (frase compartida) requiere adaptación al modelo rooms (D54).
+(37/37) y la APP Android v0.2.0 está migrada al modelo rooms (D54 completada):
+18/18 tests de cripto + E2E del protocolo cliente 22/22 contra producción.
 
 ---
 
