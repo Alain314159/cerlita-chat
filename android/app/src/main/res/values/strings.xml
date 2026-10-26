@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Chat</string>
+    <string name="app_name">Cerlita Chat</string>
     <string name="channel_messages">Mensajes</string>
     <string name="channel_messages_desc">Avisos de mensajes nuevos</string>
 </resources>

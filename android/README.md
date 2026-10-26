@@ -1,9 +1,10 @@
-# App Android — Chat E2EE offline-first
+# App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (renombrable — D18/P5). **v0.2.0 — modelo rooms**.
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.3.0 "Cerlita
+Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60).
 
-## Qué hace (Fase 1 — MVP, modelo rooms D41-D54)
+## Qué hace (Fase 1 — MVP, modelo rooms D41-D60)
 
 - **E2EE por sala**: cada sala nace con `roomKey` aleatoria de 32 B que NUNCA
   sale del teléfono (salvo dentro del código de invitación, D42). Cifrado
@@ -24,8 +25,12 @@ Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
   ven con candado y se recuperan re-pegando el código de invitación (E2EE: las
   claves no viajan). Los mensajes que lleguen antes de la clave quedan cifrados
   en `pending` y se descifran solos al recuperarla.
-- **Export cifrado v2** (P4/D47): archivo `.e2ee` con historial Y claves de
-  sala, cifrado con Argon2id y una contraseña independiente.
+- **Export cifrado v2 + IMPORT** (P4/D47/D58): archivo `.e2ee` (nombre
+  `cerlita-chat-<fecha>.e2ee`) con historial Y claves de sala, cifrado con
+  Argon2id y una contraseña independiente. **Ajustes → Importar respaldo** lo
+  restaura completo en cualquier teléfono (o tras una limpieza): fusión no
+  destructiva — no pisa nombres locales, claves solo si faltan, mensajes sin
+  duplicar. Acepta respaldos de la v0.2.0 (AAD legacy).
 - **Notificaciones locales** al recibir mensajes con la app cerrada (D9; sin
   Firebase por D44 — ntfy queda para fase posterior, D45).
 
@@ -61,8 +66,8 @@ La firma release lee `android/keystore.properties` (gitignored) que apunta a
 **RESPALDARLO fuera de esta máquina**: sin él no se puede actualizar la app
 instalada (no hay Play Store — distribución directa). Nota: el keystore se
 regeneró el 26-oct-2026 tras un reinicio del entorno (la v0.1.0 firmada antes
-con otra clave requiere desinstalar antes de instalar v0.2.0 — el cambio de
-protocolo igual requiere instalación limpia).
+con otra clave requiere desinstalar antes de instalar v0.3.0; la v0.2.0 se
+actualiza encima sin desinstalar: misma firma y mismo protocolo).
 
 RAM del host: 3.9 GB sin swap → `gradle.properties` fijado a `-Xmx2048m`,
 `in-process` y `workers.max=1` (con 2.5 GB el OOM mataba el daemon en R8).
@@ -84,18 +89,21 @@ app/src/main/java/cu/alain/chat/
   engine/ChatEngine.kt  claves por sala en RAM · createRoom/joinRoom/restoreRoomKey ·
                         send/syncOnce/drainOutbox · drainPending por sala · polling
   work/Workers.kt       SyncWorker 15 min + OutboxWorker con jitter
-  export/…              export .e2ee v2 (historial + claves)   notify/…  notificación
+  export/…              export .e2ee v2 (historial + claves) + import (D58)
   ui/…                  Compose M3: Login, Salas (crear/unir + SAS + código),
                         Chat, Ajustes
 app/src/test/java/cu/alain/chat/
   CryptoRoomsTest.kt    18 tests: base32 RFC4648, roundtrip invite, CRC, KATs
                         roomId/SAS (validados contra Python + RFC 5869), AAD, framing
+  HistoryImportTest.kt  4 tests del import: roundtrip completo (gzip + claves),
+                        AAD legacy v0.2.0, frase incorrecta, archivos inválidos
+                        (derivación inyectada: argon2kt es JNI, D38)
 ```
 
 ## Pendiente (siguientes pasos)
 
-1. Probar en los 2 móviles reales (instalar el APK release v0.2.0): registrar
+1. Probar en los 2 móviles reales (instalar el APK release v0.3.0): registrar
    ambos usuarios, crear sala, compartir código, verificar SAS por voz
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
-3. Import del export .e2ee (restaurar en otro teléfono)
-4. Notificaciones ntfy (D45, fase posterior) + cron externo anti-pausa
+3. Notificaciones ntfy (D45, fase posterior) — el cron externo anti-pausa ya
+   quedó resuelto server-side (D59: pg_cron + pg_net → heartbeat cada 6 h)

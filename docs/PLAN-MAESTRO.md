@@ -24,8 +24,10 @@ EE. UU. servir a residentes en Cuba; Supabase es empresa de EE. UU.).
 Ítems 2 y 5 pendientes → ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md).
 
 Regla del plan original adaptada: el BACKEND ya está escrito, desplegado y verificado
-(37/37) y la APP Android v0.2.0 está migrada al modelo rooms (D54 completada):
-18/18 tests de cripto + E2E del protocolo cliente 22/22 contra producción.
+(37/37) y la APP Android **v0.3.0 "Cerlita Chat"** está migrada al modelo rooms
+(D54 completada) con import del respaldo (D58) y anti-pausa server-side (D59):
+22/22 tests JVM (18 cripto + 4 import) + E2E del protocolo cliente 22/22 contra
+producción.
 
 ---
 
@@ -332,7 +334,7 @@ Voz (opcional, v3): Opus 16 kbps = 2 KB/s por dirección. Factible a 10 kbps, ma
 | Supabase suspende la cuenta por OFAC | 🔴 Proyecto muerto | Ítem 1 de Fase 0 validado ✅ + email a soporte (ítem 2, pendiente). Plan C: proveedor NO estadounidense |
 | FCM/ntfy no disponible | 🟠 Notificaciones tardías | Sin Firebase (D30). ntfy pospuesto (D31); mientras tanto polling. Si ntfy.sh se bloquea desde Cuba: notificación "al abrir la app" o self-host VPS europeo |
 | ETECSA bloquea el dominio | 🟠 App inutilizable | Evidencia real: India bloqueó `*.supabase.co` completo en feb-2026. Mitigación: dominio propio + export cifrado + cliente tras interfaz `Transport` intercambiable |
-| Plan Free se pausa a los 7 días | 🟡 DB congelada | [CORRECCIÓN] Cron EXTERNO gratuito (cron-job.org, Alemania) llamando una Edge Function cada 3 días — más fiable que pg_cron interno como señal de actividad |
+| Plan Free se pausa a los 7 días | 🟡 DB congelada | [RESUELTO server-side, D59] pg_cron + pg_net llaman por HTTPS a `heartbeat` cada 6 h (job `anti-pausa-http`): la invocación pasa por el gateway y cuenta como actividad REAL. Sin cron-job.org ni servicios externos |
 | Perder código de invitación + export | 🔴 Sala irrecuperable | Guardar el código (papel/nube personal) + export cifrado periódico; la sala se re-crea de cero como último recurso |
 | [NUEVO] Migrar a Cloudflare (Plan B original) como "hedge" | 🟠 Falsa sensación de seguridad | Cloudflare es empresa de EE. UU.: MISMO riesgo OFAC que Supabase. El Plan B es solo hedge técnico. El hedge geopolítico es el Plan C: VPS europeo (Hetzner/OVH, ~4 €/mes) o Supabase self-hosted — la UE prohíbe acatar el embargo extraterritorialmente (Reg. UE 2271/96) |
 | [NUEVO] Límites D1 (solo si Plan B) | 🟡 Quotas | Desde sept-2026 D1 aplica enforcement duro: 5M lecturas/día, 100K escrituras/día, 5 GB storage. Para 2 usuarios sobra, pero pasarse de quota ahora SÍ falla |

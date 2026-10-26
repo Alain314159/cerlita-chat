@@ -4,22 +4,24 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Burbuja de chat -->
+    <!-- Cerlita Chat: burbuja crema + candado violeta con cerradura de corazón.
+         Zona segura (círculo central 66dp): 26..82 x, 30..84 y. -->
     <path
-        android:fillColor="#2DD4BF"
-        android:pathData="M30,36 h48 a10,10 0 0 1 10,10 v20 a10,10 0 0 1 -10,10 h-28 l-12,12 v-12 h-8 a10,10 0 0 1 -10,-10 v-20 a10,10 0 0 1 10,-10 z" />
+        android:fillColor="#F2E8D5"
+        android:pathData="M36,30 h36 a10,10 0 0 1 10,10 v22 a10,10 0 0 1 -10,10 h-20 l-14,12 v-12 h-2 a10,10 0 0 1 -10,-10 v-22 a10,10 0 0 1 10,-10 z" />
     <!-- Candado: arco -->
     <path
-        android:pathData="M47,57 v-6 a7,7 0 0 1 14,0 v6"
-        android:strokeColor="#0B1220"
-        android:strokeWidth="4"
+        android:pathData="M47,50 v-5 a7,7 0 0 1 14,0 v5"
+        android:strokeColor="#2A1E4F"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
         android:fillColor="#00000000" />
     <!-- Candado: cuerpo -->
     <path
-        android:fillColor="#0B1220"
-        android:pathData="M43,57 h22 v14 a4,4 0 0 1 -4,4 h-14 a4,4 0 0 1 -4,-4 z" />
-    <!-- Candado: cerradura -->
+        android:fillColor="#2A1E4F"
+        android:pathData="M45,50 h18 v14 a3.5,3.5 0 0 1 -3.5,3.5 h-11 a3.5,3.5 0 0 1 -3.5,-3.5 z" />
+    <!-- Cerradura: corazón -->
     <path
-        android:fillColor="#2DD4BF"
-        android:pathData="M53,63 h2 v5 h-2 z" />
+        android:fillColor="#F08CA0"
+        android:pathData="M54,63.5 c-2.8,-2.4 -5,-4.1 -5,-6.5 a2.5,2.5 0 0 1 5,-1 a2.5,2.5 0 0 1 5,1 c0,2.4 -2.2,4.1 -5,6.5 z" />
 </vector>

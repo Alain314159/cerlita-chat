@@ -90,8 +90,11 @@ si la sala existe). Conocer el room_id (2^128, derivado de la roomKey) ES la cap
 curl .../heartbeat → 200 {"ok":true,"t":"2026-10-26T..."}
 ```
 
-Respaldado por pg_cron interno cada 6h. Falta el cron externo (cron-job.org) —
-ver `docs/FASE-0-VALIDACION.md`.
+**Anti-pausa server-side ACTIVO (D59)**: pg_cron + pg_net llaman por HTTPS a esta
+función cada 6 h (job `anti-pausa-http`). La invocación pasa por el gateway →
+cuenta como actividad REAL del proyecto (los writes internos de pg_cron NO
+cuentan para el auto-pause del plan Free). Ya NO hace falta cron-job.org ni
+ningún servicio externo. Ver `scripts/setup_anti_pausa.py` (idempotente).
 
 ## Validaciones del servidor
 

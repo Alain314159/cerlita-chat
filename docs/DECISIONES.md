@@ -31,7 +31,7 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D15 | Polling | Adaptive: 5 s tras actividad → backoff hasta 2-5 min en reposo → reset con envío (o ping ntfy cuando exista) | Análisis 26-oct |
 | D16 | UUIDv7 | Implementación propia en cliente (~20 líneas, RFC 9562) — Kotlin 2.4 solo trae UUIDv4 | Análisis 26-oct |
 | D17 | Repo | GitHub **privado**; regla permanente: commit + push en cada sesión de trabajo | Usuario 26-oct |
-| D18 | Nombre | PENDIENTE — se elige después; el repo se renombra cuando toque | Usuario 26-oct |
+| D18 | Nombre | **Cerlita Chat** (26-oct-2026). Icono propio: burbuja crema + candado con cerradura de corazón sobre violeta; repo renombrado a `cerlita-chat`; el applicationId sigue `cu.alain.chat` (P5) | Usuario 26-oct: "La app se llamará cerlita chat" |
 | D19 | Código | ~~Sin escribir código hasta nueva orden~~ Backend y cliente v1 escritos con autorización expresa del usuario | Usuario 26-oct |
 | D20 | Registro | Protegido por código de invitación (secret REG_INVITE_CODE) + tope duro de 10 usuarios | Análisis 26-oct (evita registros de extraños que conozcan la URL) |
 | D21 | Password servidor | Argon2id m=32MiB t=3 p=1 calculado en la Edge Function (noble, embebido en bundle), formato PHC propio | Implementación 26-oct |
@@ -65,6 +65,9 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D55 | Vault sin frase | La frase E2EE DESAPARECE del flujo (rol histórico de D36): las roomKeys se guardan en `rooms.bin` sellado por la clave hardware del Keystore (P3) y se recargan a RAM al arrancar — desbloqueo instantáneo (mejor D52). Las pantallas Setup/Unlock y el botón "Bloquear" se eliminan: en reposo protegen el cifrado de disco de Android + el bloqueo de pantalla del sistema. El export sigue con contraseña independiente (D47) | Implementación D54 |
 | D56 | Detalles de formato rooms | `convKey = HKDF(roomKey, salt=roomId_string, info="conv-v1")` · `AAD = "v1|msgId|senderId|roomId"` (pipe, minúsculas) · `inviteCode = base32("V1"‖salt‖key‖CRC32)` sin padding, grupos de 5 con guion (104 chars) · `SAS = HKDF(key,salt,"sas")[0..4]` UInt-BE mod 10⁶ · roomId = HKDF(...,"room-id")[0..16] como UUID hex (sin bits de versión). Fijado por KATs cruzados Python↔Kotlin | Implementación D54 |
 | D57 | Validación del cliente | Doble verificación: (1) tests JVM `CryptoRoomsTest` (18) con vectores conocidos calculados con una implementación Python independiente verificada contra RFC 5869; (2) E2E `e2e_rooms_client.py` (22 checks) que replica el protocolo exacto de la app contra producción y limpia la BD. Encontró y corrigió el bug de `sas6` con Int con signo (SAS negativo cuando el byte alto ≥ 0x80) | Implementación D54 |
+| D58 | Import del export | **Ajustes → Copia de seguridad → Importar respaldo** (v0.3.0): lee el .e2ee con SAF, descifra (misma derivación compartida `HistoryExport.exportKey` — una sola fuente de verdad) y restaura salas + claves (vault) + historial. Fusión no destructiva: no pisa nombres locales, claves solo si faltan, mensajes INSERT OR IGNORE; `sending`→`failed` (el outbox no viaja). Acepta el AAD legacy de v0.2.0. Testeado JVM con derivación inyectada (argon2kt es JNI — D38): 4 tests del contrato de formato | Implementación v0.3.0 |
+| D59 | Anti-pausa | **Server-side**: pg_cron + pg_net llaman por HTTPS a la Edge Function `heartbeat` cada 6 h (`backend/scripts/setup_anti_pausa.py`). La invocación pasa por el gateway → cuenta como actividad REAL del proyecto (los writes internos de pg_cron NO cuentan). Sustituye al plan de cron-job.org: cero dependencias externas. Job único `anti-pausa-http` | Implementación 26-oct |
+| D60 | Icono/branding | Adaptive icon (fondo violeta #2A1E4F, burbuja crema #F2E8D5, candado con cerradura de corazón #F08CA0) + variante monocroma para iconos temáticos + PNGs legacy regenerados (API 24-25 no usan adaptive: clave en Cuba). El AAD del export pasa a `cerlita-chat-export-v2` (import acepta también el legacy) | Implementación v0.3.0 |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
@@ -77,7 +80,7 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | P5 | applicationId | **`cu.alain.chat`** — package de trabajo acordado; independiente del nombre visible (D18); renombrable antes de publicación | Acordado + recomendada |
 | P6 | Licencia | **Propietaria** (uso personal, 2 usuarios); revisar solo si se publica | Recomendada, confirmada |
 
-Sin decisiones pendientes. ~~Próximo hito: adaptar la app Android al modelo rooms (D54)~~ **D54 completada**. Próximo hito: **pruebas en los 2 móviles reales** (instalar `chat-e2ee-v0.2.0-release.apk`, emparejar por código de invitación, verificar SAS por voz y entrega con red lenta) + ítems 2/5 de Fase 0.
+Sin decisiones pendientes. ~~Próximo hito: adaptar la app Android al modelo rooms (D54)~~ **D54 completada**. Próximo hito: **pruebas en los 2 móviles reales** (instalar `cerlita-chat-v0.3.0-release.apk`, emparejar por código de invitación, verificar SAS por voz y entrega con red lenta) + ítems 2/5 de Fase 0.
 
 ## Fase 0 — estado del checklist
 
@@ -90,15 +93,18 @@ del usuario.
 **Desplegado y verificado E2E (37/37)**: migraciones 0001+0002 aplicadas (modelo rooms:
 `rooms`, `room_members`, `room_state`, `messages.room_id`, sin `conversations`, sin
 `fcm_token`), 4 Edge Functions en producción (auth con `room_new`/`room_join`/`rooms`,
-sync con sender_uname+ts_ms, outbox por sala, heartbeat), pg_cron anti-pausa activo,
-BD limpia. Detalle técnico y hallazgos del deploy: [backend/README.md](../backend/README.md).
-Pendiente del lado servidor: cron externo (cron-job.org). Sin Firebase (D44); las
+sync con sender_uname+ts_ms, outbox por sala, heartbeat), BD limpia. **Anti-pausa
+server-side ACTIVO (D59)**: pg_net instalado, job `anti-pausa-http` cada 6 h llama por
+HTTPS a `heartbeat` (verificado 200 + tabla al día). Detalle técnico y hallazgos del
+deploy: [backend/README.md](../backend/README.md). Sin Firebase (D44); las
 notificaciones (ntfy, D45) se implementan en fase posterior.
 
-## Cliente Android — estado (26-oct-2026, v0.2.0)
+## Cliente Android — estado (26-oct-2026, v0.3.0)
 
-**Migrada al modelo rooms (D54) y firmada**: APK release **2.6 MB**. Emparejamiento por
-código de invitación (D42) con pantalla de SAS (D43), outbox/sync por sala, vault de
-roomKeys sellado por Keystore (D55), export v2 con historial + claves (D47), recuperación
-de sala sin clave en 2º dispositivo (re-pegar el código). Validación: 18/18 tests JVM +
-E2E del protocolo 22/22 contra producción. Ver [android/README.md](../android/README.md).
+**"Cerlita Chat" (D18), migrada al modelo rooms (D54) y firmada**: APK release
+**2.6 MB**. Emparejamiento por código de invitación (D42) con pantalla de SAS (D43),
+outbox/sync por sala, vault de roomKeys sellado por Keystore (D55), export v2 con
+historial + claves (D47) **+ import del respaldo (D58)**, recuperación de sala sin
+clave en 2º dispositivo (re-pegar el código). Icono propio con cerradura de corazón
+(D60). Validación: 22/22 tests JVM (18 cripto + 4 import) + E2E del protocolo 22/22
+contra producción. Ver [android/README.md](../android/README.md).

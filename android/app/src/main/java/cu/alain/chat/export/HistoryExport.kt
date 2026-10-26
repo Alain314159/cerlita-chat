@@ -38,6 +38,19 @@ object HistoryExport {
 
     private val MAGIC = "E2EEEXP2".toByteArray(Charsets.US_ASCII)
 
+    /**
+     * Derivación de clave del export (D47): Argon2id(frase, salt) → HKDF("export-v1").
+     * COMPARTIDA con HistoryImport — una sola fuente de verdad para que export
+     * e import jamás diverjan. Los tests JVM inyectan una derivación pura
+     * porque argon2kt es JNI (solo .so de Android — ver D38).
+     */
+    fun exportKey(passphrase: CharArray, salt: ByteArray): ByteArray {
+        val root = Crypto.deriveRootKey(passphrase, salt)
+        val key = Crypto.hkdf(root, salt, "export-v1")
+        Crypto.zero(root)
+        return key
+    }
+
     suspend fun export(
         ctx: Context,
         db: AppDatabase,
@@ -81,15 +94,13 @@ object HistoryExport {
 
         val wire = Crypto.frame(json)
         val salt = Crypto.newSalt16()
-        val root = Crypto.deriveRootKey(passphrase, salt)
-        val key = Crypto.hkdf(root, salt, "export-v1")
-        Crypto.zero(root)
-        val (nonce, ct) = Crypto.seal(key, wire, "alain-chat-export-v2".toByteArray(Charsets.UTF_8))
+        val key = exportKey(passphrase, salt)
+        val (nonce, ct) = Crypto.seal(key, wire, "cerlita-chat-export-v2".toByteArray(Charsets.UTF_8))
         Crypto.zero(key)
 
         val blob = MAGIC + salt + nonce + ct
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val name = "chat-e2ee-$stamp.e2ee"
+        val name = "cerlita-chat-$stamp.e2ee"
 
         if (Build.VERSION.SDK_INT >= 29) {
             val values = android.content.ContentValues().apply {

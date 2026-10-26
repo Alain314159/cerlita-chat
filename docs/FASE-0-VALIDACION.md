@@ -47,11 +47,11 @@ curl -o /dev/null -s -w "DNS: %{time_namelookup}s  Conexión: %{time_connect}s  
 
 - ✅ **Edge Function `heartbeat` desplegada y verificada** (200 OK): hace un write real
   en `app_heartbeat` en cada invocación.
-- ✅ **pg_cron interno activo**: `heartbeat-anti-pausa` cada 6h (minuto 17).
-- ⏳ **Cron externo** (cron-job.org o similar, gratis): llamar a
-  `https://wuptkddnkahmknolpxtp.supabase.co/functions/v1/heartbeat` cada 3 días.
-  Es la capa principal (pg_cron no cuenta garantizado como "actividad" ante una pausa).
-  Crear la cuenta cuando toque; no bloquea nada.
+- ✅ **Anti-pausa server-side RESUELTO (D59)**: pg_cron + pg_net llaman por HTTPS a
+  `heartbeat` cada 6 h (job `anti-pausa-http`, `backend/scripts/setup_anti_pausa.py`).
+  La invocación pasa por el gateway de Supabase → cuenta como actividad REAL del
+  proyecto, a diferencia de los writes internos de pg_cron. Ya NO hace falta
+  cron-job.org ni ningún servicio externo.
 
 ## Backend desplegado y actualizado (26-oct-2026, modelo rooms)
 

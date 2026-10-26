@@ -1,6 +1,8 @@
 package cu.alain.chat.ui.screens
 
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.UploadFile
@@ -44,6 +47,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.export.HistoryExport
+import cu.alain.chat.export.HistoryImport
 import kotlinx.coroutines.launch
 
 @Composable
@@ -58,6 +62,22 @@ fun SettingsScreen(app: ChatApp) {
     var exportUri by remember { mutableStateOf<Uri?>(null) }
     var exportError by remember { mutableStateOf<String?>(null) }
     var showLogout by remember { mutableStateOf(false) }
+
+    // ── import del respaldo ──
+    var importUri by remember { mutableStateOf<Uri?>(null) }
+    var importPass by remember { mutableStateOf("") }
+    var showImportPass by remember { mutableStateOf(false) }
+    var importing by remember { mutableStateOf(false) }
+    var importError by remember { mutableStateOf<String?>(null) }
+    var importResult by remember { mutableStateOf<HistoryImport.ImportResult?>(null) }
+    val pickImport = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            importUri = uri
+            importPass = ""
+            importError = null
+            showImportPass = true
+        }
+    }
 
     var serverUrl by remember { mutableStateOf(app.prefs.baseUrl) }
     var ping by remember { mutableStateOf<String?>(null) }
@@ -103,7 +123,25 @@ fun SettingsScreen(app: ChatApp) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(10.dp))
-                Button(onClick = { showExport = true; exportError = null }) { Text("Exportar historial cifrado") }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { showExport = true; exportError = null }) { Text("Exportar historial cifrado") }
+                    OutlinedButton(
+                        enabled = !importing,
+                        onClick = { pickImport.launch(arrayOf("*/*")) },
+                    ) {
+                        Icon(Icons.Default.Download, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Importar respaldo")
+                    }
+                }
+                if (importing) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Descifrando respaldo… (tarda unos segundos)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 
@@ -180,7 +218,7 @@ fun SettingsScreen(app: ChatApp) {
         }
 
         Text(
-            "v0.2.0 · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes",
+            "v0.3.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -261,6 +299,85 @@ fun SettingsScreen(app: ChatApp) {
                 }) { Text("Compartir") }
             },
             dismissButton = { TextButton({ exportUri = null }) { Text("Listo") } },
+        )
+    }
+
+    // ── diálogo frase del import ──
+    if (showImportPass && importUri != null) {
+        AlertDialog(
+            onDismissRequest = { if (!importing) showImportPass = false },
+            title = { Text("Frase del respaldo") },
+            text = {
+                Column {
+                    Text(
+                        "Introduce la frase con la que se cifró este respaldo " +
+                            "(la elegiste al exportarlo).",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(), value = importPass,
+                        onValueChange = { importPass = it },
+                        label = { Text("Frase") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    importError?.let {
+                        Spacer(Modifier.height(6.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = importPass.isNotEmpty() && !importing,
+                    onClick = {
+                        importing = true; importError = null
+                        val uri = importUri ?: return@Button
+                        scope.launch {
+                            val res = HistoryImport.import(ctx, app.db, app.store, uri, importPass.toCharArray())
+                            importing = false
+                            res.fold(
+                                onSuccess = { r ->
+                                    importResult = r
+                                    showImportPass = false
+                                    // claves nuevas a RAM + drenar pendientes + salas del servidor
+                                    app.engine.onProcessStart()
+                                },
+                                onFailure = { e ->
+                                    importError = e.message ?: "No se pudo importar"
+                                },
+                            )
+                        }
+                    },
+                ) {
+                    if (importing) {
+                        CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Importar")
+                }
+            },
+            dismissButton = { TextButton({ if (!importing) showImportPass = false }) { Text("Cancelar") } },
+        )
+    }
+
+    // ── resultado del import ──
+    importResult?.let { r ->
+        AlertDialog(
+            onDismissRequest = { importResult = null },
+            title = { Text("Respaldo importado") },
+            text = {
+                Text(
+                    buildString {
+                        append("Salas nuevas: ${r.roomsAdded}")
+                        append("\nClaves restauradas: ${r.keysRestored}")
+                        append("\nMensajes: ${r.messagesRestored}")
+                        if (r.me != (session?.uname ?: "?")) append("\n\nOJO: el respaldo era de «${r.me}».")
+                    },
+                )
+            },
+            confirmButton = { TextButton({ importResult = null }) { Text("Listo") } },
         )
     }
 

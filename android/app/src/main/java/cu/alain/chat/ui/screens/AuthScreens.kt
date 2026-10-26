@@ -114,7 +114,7 @@ private fun LoginScreen(vm: AuthViewModel) {
         Spacer(Modifier.height(24.dp))
         Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(8.dp))
-        Text("Chat privado", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text("Cerlita Chat", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
             "Cifrado de extremo a extremo",
             style = MaterialTheme.typography.bodyMedium,
