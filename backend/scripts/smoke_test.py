@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""Smoke test end-to-end del backend contra el proyecto Supabase REAL.
+"""Smoke test end-to-end del backend (modelo ROOMS) contra Supabase REAL.
 
-Registra usuarios de prueba, envía mensajes (ciphertext simulado), verifica
-sync/idempotencia/lockout/gzip y LIMPIA todos los datos de prueba al final.
+Flujo: registro → crear sala → unirse con room_id → outbox → sync →
+idempotencia → exclusión de no-miembros → validaciones → lockout →
+gzip → rooms list → logout → limpieza total.
+
+El room_id de prueba es un UUID aleatorio; en la app real lo deriva el
+cliente con HKDF(roomKey, info="room-id") — el servidor no puede
+distinguirlo de cualquier otro UUID.
 
 Uso: python3 backend/scripts/smoke_test.py
 """
@@ -122,22 +127,24 @@ def main() -> int:
     body = jbody(raw)
     check("heartbeat responde 200 ok", st == 200 and body.get("ok") is True, f"{st} {body}")
 
-    # 2-3. registro de alice y bob
-    alice_dev, bob_dev = dev_id(), dev_id()
+    # 2-3. registro de alice, bob y carol (carol = outsider de la sala)
+    alice_dev, bob_dev, carol_dev = dev_id(), dev_id(), dev_id()
     st, _, raw = req("POST", "/auth", {"a": "reg", "u": "alice_t", "p": "clave-de-prueba-1", "d": alice_dev, "ic": INVITE})
     alice = jbody(raw)
     check("registro alice_t → 201 + token", st == 201 and alice.get("tok"), f"{st} {alice}")
-    t0 = time.time()
     st, _, raw = req("POST", "/auth", {"a": "reg", "u": "bob_t", "p": "clave-de-prueba-2", "d": bob_dev, "ic": INVITE})
     bob = jbody(raw)
-    dt = time.time() - t0
     check("registro bob_t → 201 + token", st == 201 and bob.get("tok"), f"{st} {bob}")
-    print(f"  (argón2id + insert: {dt:.2f}s)")
+    t0 = time.time()
+    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "carol_t", "p": "clave-de-prueba-3", "d": carol_dev, "ic": INVITE})
+    carol = jbody(raw)
+    check("registro carol_t → 201 + token", st == 201 and carol.get("tok"), f"{st} {carol}")
+    print(f"  (argón2id x3: {time.time() - t0:.2f}s)")
 
     # 4-5. registro inválido
-    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "eve", "p": "clave-de-prueba-3", "d": dev_id(), "ic": "CODIGO-FALSO"})
+    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "eve", "p": "clave-de-prueba-4", "d": dev_id(), "ic": "CODIGO-FALSO"})
     check("invite code falso → 403", st == 403, f"{st} {jbody(raw)}")
-    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "Nombre-Invalido", "p": "clave-de-prueba-4", "d": dev_id(), "ic": INVITE})
+    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "Nombre-Invalido", "p": "clave-de-prueba-5", "d": dev_id(), "ic": INVITE})
     check("username inválido → 400", st == 400, f"{st} {jbody(raw)}")
 
     # 6-7. whoami + sync sin token
@@ -146,20 +153,59 @@ def main() -> int:
     st, _, raw = req("GET", "/sync")
     check("sync sin token → 401", st == 401, f"{st} {jbody(raw)}")
 
-    # 8. alice → bob: 3 mensajes
+    # ---- SALAS (modelo rooms) ----
+    room_a = str(uuidlib.uuid4())  # en la app: HKDF(roomKey, info="room-id")[0..16]
+    room_b = str(uuidlib.uuid4())  # sala secundaria de alice (p.ej. comandos/bot)
+
+    # 8. alice crea la sala A → 201
+    st, _, raw = req("POST", "/auth", {"a": "room_new", "r": room_a}, token=alice.get("tok", ""))
+    check("room_new alice → 201", st == 201, f"{st} {jbody(raw)}")
+
+    # 9. idempotencia: reintentar room_new con el mismo room_id → 201
+    st, _, raw = req("POST", "/auth", {"a": "room_new", "r": room_a}, token=alice.get("tok", ""))
+    check("room_new idempotente (reintento) → 201", st == 201, f"{st} {jbody(raw)}")
+
+    # 10. carol intenta CREAR una sala con room_id ajeno → 409
+    st, _, raw = req("POST", "/auth", {"a": "room_new", "r": room_a}, token=carol.get("tok", ""))
+    check("room_new con room_id ajeno → 409 room_taken", st == 409 and jbody(raw).get("e") == "room_taken", f"{st} {jbody(raw)}")
+
+    # 11. bob se une a la sala A (como si hubiera escaneado el inviteCode) → 200
+    st, _, raw = req("POST", "/auth", {"a": "room_join", "r": room_a}, token=bob.get("tok", ""))
+    check("room_join bob → 200", st == 200, f"{st} {jbody(raw)}")
+
+    # 12. bob repite join (reintento de red) → 200 idempotente
+    st, _, raw = req("POST", "/auth", {"a": "room_join", "r": room_a}, token=bob.get("tok", ""))
+    check("room_join idempotente → 200", st == 200, f"{st} {jbody(raw)}")
+
+    # 13. join a sala inexistente → 404
+    st, _, raw = req("POST", "/auth", {"a": "room_join", "r": str(uuidlib.uuid4())}, token=bob.get("tok", ""))
+    check("room_join sala inexistente → 404", st == 404, f"{st} {jbody(raw)}")
+
+    # 14. alice crea sala B (p.ej. comandos/bot, Fase 2) → 201
+    st, _, raw = req("POST", "/auth", {"a": "room_new", "r": room_b}, token=alice.get("tok", ""))
+    check("room_new sala secundaria → 201", st == 201, f"{st} {jbody(raw)}")
+
+    # 15. room_id malformado → 400
+    st, _, raw = req("POST", "/auth", {"a": "room_new", "r": "no-soy-un-uuid"}, token=alice.get("tok", ""))
+    check("room_new uuid malformado → 400", st == 400, f"{st} {jbody(raw)}")
+
+    # ---- OUTBOX / SYNC ----
+    # 16. alice → sala A: 3 mensajes
     msgs = [(uuid7(), base64.b64encode(secrets.token_bytes(64 + i * 60)).decode(),
              base64.b64encode(secrets.token_bytes(12)).decode(), int(time.time() * 1000)) for i in range(3)]
-    sent = {"to": "bob_t", "m": [list(m) for m in msgs]}
+    sent = {"room": room_a, "m": [list(m) for m in msgs]}
     st, _, raw = req("POST", "/outbox", sent, token=alice.get("tok", ""))
     ack = jbody(raw)
     check("outbox 3 msgs → 200 acked=3", st == 200 and set(ack.get("a", [])) == {m[0] for m in msgs}, f"{st} {ack}")
 
-    # 9. bob sincroniza
+    # 17. bob sincroniza: 3 msgs con bytes EXACTOS y room_id correcto
     st, h, raw = req("GET", "/sync?s=0", token=bob.get("tok", ""))
     sync1 = jbody(raw)
     got = {m[0]: m for m in sync1.get("m", [])}
-    exact = all(got.get(m[0], [None, None, None, None, None, m[2]])[5] == m[1] for m in msgs)
-    check("sync bob desde 0 → 3 msgs, bytes EXACTOS", st == 200 and len(sync1.get("m", [])) == 3 and exact,
+    exact = all(got.get(m[0], [None] * 6)[5] == m[1] for m in msgs)
+    right_room = all(m[1] == room_a for m in sync1.get("m", []))
+    check("sync bob desde 0 → 3 msgs, bytes EXACTOS, room_id correcto",
+          st == 200 and len(sync1.get("m", [])) == 3 and exact and right_room,
           f"{st} n={sync1.get('n')} msgs={len(sync1.get('m', []))}")
     next_seq = sync1.get("n", 0)
     check("header x-next-seq correcto", h.get("x-next-seq") == str(next_seq), f"{h.get('x-next-seq')} vs {next_seq}")
@@ -167,11 +213,19 @@ def main() -> int:
     check("payload trae sender_uname + ts_ms", len(row) >= 8 and row[6] == "alice_t" and isinstance(row[7], int) and row[7] > 0,
           f"len={len(row)} suname={row[6] if len(row) > 6 else '?'} ts={row[7] if len(row) > 7 else '?'}")
 
-    # 10. no hay nada nuevo → 204
+    # 18. no hay nada nuevo → 204
     st, _, raw = req("GET", f"/sync?s={next_seq}", token=bob.get("tok", ""))
     check("sync sin novedades → 204 (0 bytes)", st == 204 and raw == b"", f"{st} len={len(raw)}")
 
-    # 11. reenvío idéntico (idempotencia)
+    # 19. carol (NO miembro) sincroniza → no ve NADA de la sala A
+    st, _, raw = req("GET", "/sync?s=0", token=carol.get("tok", ""))
+    check("sync carol (no miembro) → 204 vacío", st == 204, f"{st} len={len(raw)}")
+
+    # 20. carol intenta publicar en la sala A → 404 (genérico)
+    st, _, raw = req("POST", "/outbox", {"room": room_a, "m": [[uuid7(), base64.b64encode(secrets.token_bytes(64)).decode(), base64.b64encode(secrets.token_bytes(12)).decode()]]}, token=carol.get("tok", ""))
+    check("outbox de no-miembro → 404", st == 404, f"{st} {jbody(raw)}")
+
+    # 21. reenvío idéntico (idempotencia tras reintento de red)
     st, _, raw = req("POST", "/outbox", sent, token=alice.get("tok", ""))
     ack2 = jbody(raw)
     check("reenvío mismo lote → acked sin duplicar", st == 200 and set(ack2.get("a", [])) == {m[0] for m in msgs}, f"{st} {ack2}")
@@ -179,18 +233,18 @@ def main() -> int:
     sync_alice = jbody(raw)
     check("alice ve 3 msgs en total (0 duplicados)", len(sync_alice.get("m", [])) == 3, f"{len(sync_alice.get('m', []))}")
 
-    # 12-14. validaciones de outbox
-    st, _, raw = req("POST", "/outbox", {"to": "no_existe", "m": [[uuid7(), base64.b64encode(secrets.token_bytes(64)).decode(), base64.b64encode(secrets.token_bytes(12)).decode()]]}, token=alice.get("tok", ""))
-    check("destinatario inexistente → 404", st == 404, f"{st} {jbody(raw)}")
-    st, _, raw = req("POST", "/outbox", {"to": "bob_t", "m": [[uuid7(), base64.b64encode(secrets.token_bytes(64)).decode(), base64.b64encode(secrets.token_bytes(8)).decode()]]}, token=alice.get("tok", ""))
+    # 22-24. validaciones de outbox
+    st, _, raw = req("POST", "/outbox", {"room": "uuid-malformado", "m": [[uuid7(), base64.b64encode(secrets.token_bytes(64)).decode(), base64.b64encode(secrets.token_bytes(12)).decode()]]}, token=alice.get("tok", ""))
+    check("room malformada → 400", st == 400, f"{st} {jbody(raw)}")
+    st, _, raw = req("POST", "/outbox", {"room": room_a, "m": [[uuid7(), base64.b64encode(secrets.token_bytes(64)).decode(), base64.b64encode(secrets.token_bytes(8)).decode()]]}, token=alice.get("tok", ""))
     check("nonce de 8 bytes → 400", st == 400, f"{st} {jbody(raw)}")
-    st, _, raw = req("POST", "/outbox", {"to": "bob_t", "m": [[uuid7(), base64.b64encode(secrets.token_bytes(9000)).decode(), base64.b64encode(secrets.token_bytes(12)).decode()]]}, token=alice.get("tok", ""))
+    st, _, raw = req("POST", "/outbox", {"room": room_a, "m": [[uuid7(), base64.b64encode(secrets.token_bytes(9000)).decode(), base64.b64encode(secrets.token_bytes(12)).decode()]]}, token=alice.get("tok", ""))
     check("ciphertext 9KB → 400", st == 400, f"{st} {jbody(raw)}")
 
-    # 15-16. login y lockout
+    # 25-26. login y lockout
     st, _, raw = req("POST", "/auth", {"a": "in", "u": "alice_t", "p": "incorrecta!!", "d": dev_id()})
     check("login con password malo → 401", st == 401, f"{st} {jbody(raw)}")
-    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "lock_t", "p": "clave-de-prueba-5", "d": dev_id(), "ic": INVITE})
+    st, _, raw = req("POST", "/auth", {"a": "reg", "u": "lock_t", "p": "clave-de-prueba-6", "d": dev_id(), "ic": INVITE})
     if st == 201:
         for _ in range(5):
             req("POST", "/auth", {"a": "in", "u": "lock_t", "p": "mala-mala!!", "d": dev_id()})
@@ -200,8 +254,8 @@ def main() -> int:
     else:
         check("lockout tras 5 fallos → 429", False, f"no pude registrar lock_t: {st}")
 
-    # 17. gzip con 20 mensajes de ~600B (CF comprime si el cliente lo acepta)
-    big = {"to": "bob_t", "m": [[uuid7(), base64.b64encode(secrets.token_bytes(600)).decode(),
+    # 27. gzip con 20 mensajes de ~600B
+    big = {"room": room_a, "m": [[uuid7(), base64.b64encode(secrets.token_bytes(600)).decode(),
              base64.b64encode(secrets.token_bytes(12)).decode(), int(time.time() * 1000)] for _ in range(20)]}
     st, _, raw = req("POST", "/outbox", big, token=alice.get("tok", ""))
     check("outbox 20 msgs de 600B → 200", st == 200 and len(jbody(raw).get("a", [])) == 20, f"{st}")
@@ -212,12 +266,24 @@ def main() -> int:
     check("sync grande → gzip en tránsito + 23 msgs válidos", ok_gz and len(parsed.get("m", [])) == 23,
           f"hdr={enc_hdr!r} msgs={len(parsed.get('m', []))}")
 
-    # 18. logout
+    # 28. rooms list (multi-dispositivo / reinstalación)
+    st, _, raw = req("POST", "/auth", {"a": "rooms"}, token=alice.get("tok", ""))
+    rl = jbody(raw)
+    rooms_alice = {r[0]: r[1] for r in rl.get("rooms", [])}
+    check("rooms alice → 2 salas, owner de ambas", st == 200 and rooms_alice.get(room_a) == 1 and rooms_alice.get(room_b) == 1,
+          f"{st} {rl}")
+    st, _, raw = req("POST", "/auth", {"a": "rooms"}, token=bob.get("tok", ""))
+    rl = jbody(raw)
+    rooms_bob = {r[0]: r[1] for r in rl.get("rooms", [])}
+    check("rooms bob → 1 sala, NO owner", st == 200 and rooms_bob.get(room_a) == 0 and len(rooms_bob) == 1,
+          f"{st} {rl}")
+
+    # 29. logout
     st, _, raw = req("POST", "/auth", {"a": "out"}, token=alice.get("tok", ""))
     st2, _, raw2 = req("GET", "/auth", token=alice.get("tok", ""))
     check("logout revoca el token → whoami 401", st == 200 and st2 == 401, f"{st} {st2}")
 
-    # 19. verificación en la BD
+    # 30. verificación en la BD
     st, res = api.call("POST", f"/v1/projects/{api.ref()}/database/query",
                        {"query": "select count(*)::int as n from messages"})
     n_msgs = 0
@@ -225,16 +291,11 @@ def main() -> int:
         n_msgs = res[0].get("n", -1)
     check("BD: 23 mensajes de prueba en total", n_msgs == 23, f"count={n_msgs} res={str(res)[:120]}")
 
-    # 20. limpieza
+    # 31. limpieza (messages no tiene CASCADE → borrarlas primero)
     cleanup_sql = [
-        """delete from messages where conversation_id in (
-             select id from conversations c
-             where c.user_lo in (select id from users where username in ('alice_t','bob_t','lock_t'))
-                or c.user_hi in (select id from users where username in ('alice_t','bob_t','lock_t')))""",
-        """delete from conversations
-            where user_lo in (select id from users where username in ('alice_t','bob_t','lock_t'))
-               or user_hi in (select id from users where username in ('alice_t','bob_t','lock_t'))""",
-        """delete from users where username in ('alice_t','bob_t','lock_t')""",
+        "delete from messages where room_id in ('%s'::uuid, '%s'::uuid)" % (room_a, room_b),
+        "delete from rooms where room_id in ('%s'::uuid, '%s'::uuid)" % (room_a, room_b),
+        "delete from users where username in ('alice_t','bob_t','carol_t','lock_t')",
     ]
     ok_clean = True
     for s in cleanup_sql:
@@ -243,9 +304,10 @@ def main() -> int:
             ok_clean = False
             print(f"  limpieza: {st} {str(res)[:150]}")
     st, res = api.call("POST", f"/v1/projects/{api.ref()}/database/query",
-                       {"query": "select (select count(*) from messages) as msgs, (select count(*) from users) as usrs"})
+                       {"query": "select (select count(*) from messages) as msgs, (select count(*) from users) as usrs, (select count(*) from rooms) as rms, (select count(*) from room_members) as mem"})
     counts = res[0] if st in api.OK and isinstance(res, list) and res else {}
-    check("limpieza: 0 mensajes, 0 usuarios de prueba", ok_clean and counts.get("msgs") == 0 and counts.get("usrs") == 0,
+    check("limpieza: 0 mensajes, 0 usuarios, 0 salas, 0 membresías",
+          ok_clean and counts.get("msgs") == 0 and counts.get("usrs") == 0 and counts.get("rms") == 0 and counts.get("mem") == 0,
           f"limpieza_ok={ok_clean} counts={counts}")
 
     # resumen

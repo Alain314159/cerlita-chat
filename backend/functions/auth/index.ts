@@ -1,6 +1,18 @@
-// Edge Function: auth — registro / login / logout / whoami
-// Auth propia con token de sesión. La frase E2EE NUNCA llega aquí.
+// Edge Function: auth — registro / login / logout / whoami + salas
+// Auth propia con token de sesión. La frase E2EE y la roomKey NUNCA llegan aquí.
 // Registro protegido por código de invitación (secret REG_INVITE_CODE).
+//
+// Salas (modelo rooms, doc v2 corregido):
+//   {a:"room_new", r:room_id}  — crea la sala + membresía del creador.
+//       room_id lo genera el CLIENTE: HKDF(roomKey, salt=roomSalt,
+//       info="room-id")[0..16] como UUID. La roomKey JAMÁS viaja: el código
+//       de invitación (base32(roomSalt‖roomKey), con la roomKey EN CLARO
+//       dentro) se comparte por otro canal; el servidor no lo ve nunca.
+//   {a:"room_join", r:room_id} — B se une tras escanear el código.
+//       Capability-based: conocer el room_id (2^128) ES la invitación.
+//       SIN sas_confirmed: el SAS se compara por voz SOLO entre los
+//       clientes; el servidor únicamente registra "B está en la sala X".
+//   {a:"rooms"}               — lista de salas propias (multi-dispositivo).
 import postgres from "npm:postgres@3.4.9";
 import { argon2id } from "@noble/hashes/argon2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -12,7 +24,10 @@ const sql = postgres(Deno.env.get("SUPABASE_DB_URL") ?? "", {
 const ARGON = { t: 3, m: 32768, p: 1, dkLen: 32 }; // pass del login; la frase E2EE se deriva SOLO en el cliente con m=64MiB
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 const DEVICE_RE = /^[0-9a-f-]{36}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_USERS = 10;
+const MAX_ROOMS_PER_USER = 8;   // A crea: conversación + comandos (bot) + margen
+const MAX_ROOM_MEMBERS = 6;     // A, B, bot, + margen
 
 const enc = new TextEncoder();
 const DEBUG = Deno.env.get("DEBUG") === "1";
@@ -152,6 +167,65 @@ async function logout(req: Request) {
   return json(200, { ok: true });
 }
 
+// ---------- room_new: crear sala (idempotente) ----------
+// room_id generado por el cliente (derivado de roomKey). Si la sala ya
+// existe y NO es tuya → 409 (colisión con capability ajena: no ocurre
+// por azar, solo por room_id filtrado). Nunca se recibe roomKey aquí.
+async function roomNew(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_room" });
+  const uid = String(me.uid);
+  const [{ n }] = await sql`select count(*)::int as n from rooms where created_by = ${uid}::uuid`;
+  if (n >= MAX_ROOMS_PER_USER) return json(403, { e: "room_cap" });
+  // Dos queries SEPARADAS: en Postgres el statement principal no ve los
+  // cambios de un CTE data-modifying (misma snapshot) — un WITH INSERT
+  // aquí hacía que la 1ª llamada siempre devolviera 409.
+  await sql`
+    insert into rooms (room_id, created_by)
+    values (${r}::uuid, ${uid}::uuid)
+    on conflict (room_id) do nothing`;
+  // ¿Sala mía o ya soy miembro? (RETURNING no sirve: ON CONFLICT DO NOTHING
+  // no devuelve filas cuando la membresía ya existía — reintento legítimo.)
+  const [ok] = await sql`
+    select 1 as ok from rooms where room_id = ${r}::uuid and created_by = ${uid}::uuid
+    union all
+    select 1 as ok from room_members where room_id = ${r}::uuid and user_id = ${uid}::uuid
+    limit 1`;
+  if (!ok) return json(409, { e: "room_taken" });
+  await sql`
+    insert into room_members (room_id, user_id) values (${r}::uuid, ${uid}::uuid)
+    on conflict do nothing`;
+  return json(201, { ok: true });
+}
+
+// ---------- room_join: unirse con el room_id derivado del código ----------
+// El SAS NO se registra: la verificación de identidad es cliente-cliente.
+async function roomJoin(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_room" });
+  const uid = String(me.uid);
+  const [room] = await sql`select room_id from rooms where room_id = ${r}::uuid limit 1`;
+  if (!room) return json(404, { e: "no_room" });
+  const [{ n }] = await sql`select count(*)::int as n from room_members where room_id = ${r}::uuid`;
+  if (n >= MAX_ROOM_MEMBERS) return json(403, { e: "room_full" });
+  await sql`
+    insert into room_members (room_id, user_id) values (${r}::uuid, ${uid}::uuid)
+    on conflict do nothing`;
+  return json(200, { ok: true });
+}
+
+// ---------- rooms: listar salas propias (para multi-dispositivo) ----------
+// Solo ids y flag de propietario. Sin roomKey no se descifra nada;
+// la roomKey se recupera con el código de invitación o el export cifrado.
+async function roomList(me: any) {
+  const uid = String(me.uid);
+  const rows = await sql`
+    select rm.room_id, (r.created_by = ${uid}::uuid) as owner
+    from room_members rm join rooms r on r.room_id = rm.room_id
+    where rm.user_id = ${uid}::uuid`;
+  return json(200, { rooms: rows.map((x: any) => [x.room_id, x.owner ? 1 : 0]) });
+}
+
 // ---------- router ----------
 Deno.serve(async (req) => {
   try {
@@ -168,6 +242,12 @@ Deno.serve(async (req) => {
     if (body.a === "reg") return await register(body);
     if (body.a === "in") return await login(body);
     if (body.a === "out") return await logout(req);
+    // Acciones de sala: requieren sesión válida
+    const me = await authUser(req);
+    if (!me) return json(401, { e: "unauthorized" });
+    if (body.a === "room_new") return await roomNew(me, body);
+    if (body.a === "room_join") return await roomJoin(me, body);
+    if (body.a === "rooms") return await roomList(me);
     return json(400, { e: "bad_action" });
   } catch (e) {
     console.error("auth error:", e);

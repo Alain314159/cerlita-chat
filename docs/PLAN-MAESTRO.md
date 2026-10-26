@@ -1,9 +1,11 @@
 # Plan maestro
 
-**Versión 1.1 — 26 de octubre de 2026.**
-Integra el plan original (v1.0, del usuario) con las correcciones del análisis de viabilidad
-del 26-oct-2026. Los bloques marcados **[CORRECCIÓN]** o **[MEJORA]** difieren del plan
-original y son vinculantes.
+**Versión 1.2 — 26 de octubre de 2026.**
+Integra el plan original (v1.0, del usuario), las correcciones del análisis de viabilidad
+del 26-oct-2026 y el **Documento v2 revisado** (especificación principal desde esta
+versión: modelo rooms, código de invitación, SAS cliente-cliente, eventos/estado,
+notificaciones ntfy pospuestas, sin Firebase). Los bloques marcados **[CORRECCIÓN]** o
+**[MEJORA]** difieren del plan original y son vinculantes.
 
 **Objetivo**: chat 1-a-1 con E2EE, historial offline y entrega fiable en redes de bytes por
 segundo, para 2 usuarios en Cuba. El costo real de la red no son los bytes: es el RTT y la
@@ -18,9 +20,11 @@ El riesgo principal del proyecto NO es técnico: es geopolítico (OFAC prohíbe 
 EE. UU. servir a residentes en Cuba; Supabase es empresa de EE. UU.).
 
 **Estado**: ítem 1 validado (Supabase accesible y funcional desde Cuba, 26-oct-2026).
-Ítems 2-5 pendientes de confirmar → ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md).
+Ítems 3-4 (Firebase/GMS) **descartados** por decisión del usuario (sin Firebase).
+Ítems 2 y 5 pendientes → ver [FASE-0-VALIDACION.md](FASE-0-VALIDACION.md).
 
-Regla del plan original que se mantiene: **no se escribe código hasta cerrar Fase 0.**
+Regla del plan original adaptada: el BACKEND ya está escrito, desplegado y verificado
+(37/37) — la app Android v1 (frase compartida) requiere adaptación al modelo rooms (D54).
 
 ---
 
@@ -42,11 +46,11 @@ Chat 1-a-1 con E2EE, historial offline y entrega fiable en redes de bytes por se
 | AEAD | Tink (`tink-android`) | 1.24.x — repo `tink-crypto/tink-java` activo (commits oct-2026); soporte oficial Android API 24+. Alternativa: libsodium (XChaCha20-Poly1305) |
 | Background | WorkManager | 2.12.0 |
 | Backend | Supabase Edge Functions + Postgres | Plan A VALIDADO en Fase 0 |
-| Auth | Propio (username + password + frase) | NO Supabase Auth (evita el flujo de email) |
-| Notificaciones | FCM (data message con ciphertext) | Plan B: notificación local |
+| Auth | Propio (username + password) | NO Supabase Auth (evita el flujo de email) |
+| Notificaciones | **Sin Firebase** (decisión del usuario). ntfy en fase posterior: tema derivado de roomKey, publicado por el móvil emisor | Fallback: polling Supabase |
 
 Nota: con minSdk 24 se requiere `coreLibraryDesugaring` para `java.time` (estándar, sin
-costo). Pendiente decisión P1 del log de decisiones.
+costo). P1 resuelto: minSdk 24 confirmado ("Usa las recomendadas", 26-oct).
 
 ### 1.2 Por qué PSK y no libsignal
 
@@ -58,70 +62,91 @@ costo). Pendiente decisión P1 del log de decisiones.
 | Forward secrecy | Sí | No (trade-off aceptado) |
 | Licencia | AGPL-3.0 | Tuya |
 
-En Cuba perder o cambiar de móvil es un hecho, no una excepción: la frase ES el backup.
-Con libsignal, perder el móvil = perder la conversación para siempre.
+En Cuba perder o cambiar de móvil es un hecho, no una excepción: el código de invitación
+(guarda una copia) + el export cifrado SON el backup. Con libsignal, perder el móvil =
+perder la conversación para siempre.
 
-### 1.3 Modelo criptográfico (paso a paso, con correcciones)
+### 1.3 Modelo criptográfico (Doc v2 corregido: sala con roomKey, no frase compartida)
+
+El emparejamiento NO es por frase: A crea la sala con una clave aleatoria y la comparte
+con B mediante un **código de invitación**. La contraseña de login y la contraseña del
+export siguen siendo secretos SEPARADOS de todo esto.
 
 ```
-1. El usuario elige una "frase" (independiente del password de login).
-2. rootKey = Argon2id(frase, salt, t=3, m=64 MiB, p=1) → 32 bytes.
-   [MEJORA] La derivación es cara (1-2 s en gama baja): se ejecuta UNA vez y la rootKey
-   se guarda envuelta en Android Keystore (decisión P3 del log de decisiones).
-3. [MEJORA] convKey = HKDF-SHA256(rootKey, salt = conversation_id, info = "conv-v1").
-   Aísla conversaciones y deja abierta la puerta a un tercer participante futuro sin
-   re-ingresar frases.
-4. Para cada mensaje:
+1. A crea la sala en su móvil:
+   roomKey = CSPRNG(32 B)   ·   roomSalt = CSPRNG(16 B)
+2. roomId = UUID( HKDF-SHA256(roomKey, salt=roomSalt, info="room-id")[0..16] )
+   → el servidor SOLO conoce roomId (capability de membresía, 2^128)
+3. [CORRECCIÓN-DOC] inviteCode = base32("V1" ‖ roomSalt ‖ roomKey ‖ CRC32)
+   → El código ES el secreto: la roomKey viaja EN CLARO dentro del código,
+     sin cifrado adicional. NUNCA se transmite al servidor. Se comparte por un
+     canal controlado (en persona, WhatsApp, papel). B decodifica y deriva roomId
+     + todas las claves sin hablar con el servidor.
+4. [CORRECCIÓN-DOC] SAS = 6 dígitos de HKDF(roomKey, salt=roomSalt, info="sas")
+   → Se compara SOLO entre los dos clientes (por voz / en persona).
+     El servidor JAMÁS recibe "sas_confirmed": solo registra "A y B están en la sala X".
+5. convKey = HKDF-SHA256(roomKey, salt=roomId, info="conv-v1")
+6. Para cada mensaje:
    - msgKey = HKDF-SHA256(convKey, salt = msg_id, info = "msg-v1")
    - nonce = random(12 bytes)
-   - [CORRECCIÓN] AAD = msg_id || sender_id || conversation_id
-     (el plan original solo blindaba msg_id; blindar también emisor y conversación evita
-     el re-etiquetado de mensajes entre conversaciones, a costo cero)
+   - AAD = msg_id || sender_id || roomId
    - ciphertext = ChaCha20-Poly1305(key = msgKey, nonce, plaintext, aad)
-5. El servidor solo ve ciphertext. No puede derivar nada: no tiene la frase.
+7. Fase 2: commandKey = HKDF(roomKey, salt=roomSalt, info="commands") — SOLO el bot.
+8. Export de emergencia: cifrado con Argon2id(contraseña INDEPENDIENTE)
+   [CORRECCIÓN-DOC]; contiene historial + roomKeys; nada en claro.
+9. El servidor solo ve ciphertext. No puede derivar nada: no tiene roomKey.
 ```
 
-Regla de oro (inalterable): la frase NUNCA es la contraseña de login. Si lo fuera, el
-servidor podría atacar el hash de la contraseña y recuperar la clave E2EE. Dos secretos
-separados: password → autenticación; passphrase → criptografía.
+Recuperación tras perder el móvil (nuevo modelo): re-escanear el código de invitación
+(la roomKey está dentro) + importar el export cifrado. Si se pierden AMBOS, la sala se
+re-crea de cero (la frase compartida del plan v1.0 queda descartada como mecanismo
+de emparejamiento; su rol de "secreto de respaldo" lo asume la contraseña del export).
 
 [CORRECCIÓN] UUIDv7: ni Java ni Kotlin lo traen nativo (Kotlin 2.4 estabilizó UUID v4).
 Se implementa en el cliente (~20 líneas, RFC 9562): timestamp + random, ordenable por
 tiempo, ideal como PK de idempotencia.
 
-### 1.4 Esquema de la base de datos (Postgres)
+### 1.4 Esquema de la base de datos (desplegado — migraciones 0001 + 0002)
 
 ```sql
--- Usuarios y sesiones (auth propio)
-CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username TEXT UNIQUE NOT NULL,
-    pass_hash TEXT NOT NULL,  -- Argon2id, NUNCA la frase
-    created_at TIMESTAMPTZ DEFAULT NOW()
+-- Salas: roomId lo genera el CLIENTE (derivado de roomKey). Capability de membresía.
+CREATE TABLE rooms (
+    room_id    UUID PRIMARY KEY,
+    created_by UUID NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id),
-    device_id UUID NOT NULL,
-    token_hash TEXT NOT NULL,  -- SHA-256 del token
-    expires_at TIMESTAMPTZ,
-    revoked_at TIMESTAMPTZ
+-- El servidor SOLO sabe quién está en qué sala. SIN sas_confirmed (D29):
+-- la verificación de identidad es cliente-cliente.
+CREATE TABLE room_members (
+    room_id   UUID NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    user_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    joined_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (room_id, user_id)
 );
 
--- Mensajes (solo ciphertext)
+-- Estado OVERWRITE (playhead, presencia — Fase 3): separado de eventos.
+CREATE TABLE room_state (
+    room_id UUID NOT NULL REFERENCES rooms(room_id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key     TEXT NOT NULL, value JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (room_id, user_id, key)
+);
+
+-- Mensajes (solo ciphertext): eventos append-only
 CREATE TABLE messages (
-    msg_id UUID PRIMARY KEY,  -- UUID v7 generado en el cliente
-    conversation_id UUID NOT NULL,
-    sender_id UUID NOT NULL,
+    msg_id           UUID PRIMARY KEY,  -- UUIDv7 generado en el cliente
+    room_id          UUID NOT NULL REFERENCES rooms(room_id),
+    sender_id        UUID NOT NULL,
     sender_device_id UUID NOT NULL,
-    seq BIGSERIAL,  -- orden del servidor
-    ciphertext BYTEA NOT NULL,
-    nonce BYTEA NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    seq              BIGINT GENERATED ALWAYS AS IDENTITY,  -- orden global del servidor
+    ciphertext       BYTEA NOT NULL,
+    nonce            BYTEA NOT NULL,
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    client_ts        TIMESTAMPTZ
 );
-
-CREATE INDEX idx_messages_sync ON messages(conversation_id, seq);
+CREATE INDEX idx_messages_sync ON messages(room_id, seq);
 ```
 
 Idempotencia por construcción: `msg_id` (UUIDv7) es PK; el servidor hace
@@ -135,20 +160,21 @@ aviso (bug silencioso). El RTT es el coste real, no los bytes: 5 requests × 500
 1 request = 500 ms.
 
 ```
-GET /sync?since=<seq>&limit=100
-→ 200, application/octet-stream, Content-Encoding: gzip
-   [mensajes desde seq]  +  header "x-next-seq: 4821"
-→ 204 si no hay nada (0 bytes de cuerpo)
+GET /sync?s=<seq>&l=<límite>          (Bearer token de sesión)
+→ 200 {n: next_seq, m: [[msg_id, room_id, sender_id, seq, nonce_b64, ct_b64], ...]}
+   gzip si el cuerpo supera 1 KB · header "x-next-seq"
+→ 204 si no hay nada nuevo (0 bytes de cuerpo)
 
 POST /outbox
-Content-Type: application/json
-[{msg_id, ciphertext_b64, nonce_b64}, ...]   -- lote
-→ 200 {"acked": [msg_id...], "seqs": {...}}
+{room: "<room_id>", m: [[msg_id, ct_b64, nonce_b64, ts_ms?], ...]}   -- lote ≤ 64
+→ 200 {a: [msg_id con ack...]}
+
+POST /auth {a: "reg"|"in"|"out"|"room_new"|"room_join"|"rooms", ...}
 ```
 
 [MEJORA] Adaptive polling: 5 s tras actividad visible → backoff geométrico hasta 2-5 min
-en reposo → reset inmediato al llegar un push FCM o al enviar un mensaje. Ahorra batería
-y datos sin dañar la sensación de inmediatez.
+en reposo → reset inmediato al enviar un mensaje (y, cuando existan notificaciones, al
+llegar el ping de ntfy). Ahorra batería y datos sin dañar la sensación de inmediatez.
 
 ### 1.6 Compresión: antes de cifrar, nunca después
 
@@ -190,19 +216,21 @@ val workRequest = OneTimeWorkRequestBuilder<OutboxWorker>()
 val delay = min(cap, base * 2.0.pow(attempts)) * Random.nextDouble(0.7, 1.3)
 ```
 
-### 1.8 Notificaciones: FCM con el ciphertext dentro
+### 1.8 Notificaciones: POSPUESTAS — ntfy cuando toque (sin Firebase)
 
-FCM admite 4096 bytes por data message; un texto cifrado ocupa ~100 B:
+Decisión del usuario (26-oct): "No utilizaremos Firebase para la app" y "las
+notificaciones las dejaremos para después". El diseño aprobado para esa fase:
 
-```json
-{ "seq": 4821, "t": 1, "n": "<nonce b64>", "c": "<ciphertext b64>" }
-```
-
-El teléfono descifra y muestra SIN tocar la red — vale oro con la red caída o a 1 kb/s.
-
-Caveat: FCM requiere Google Play Services. [MEJORA] La app detecta la ausencia de GMS al
-arrancar y conmuta sola a modo poll (cada 15-30 min, WorkManager) + notificación local.
-Sin configuración manual. (Pendiente ítem 4 de Fase 0: confirmar GMS en ambos móviles.)
+- Tema ntfy = derivado de roomKey (`HKDF(roomKey, info="ntfy-topic")`): el servidor
+  NUNCA conoce el tema; las notificaciones sobreviven a caídas de Supabase.
+- El **móvil emisor** publica el ping (mensaje mínimo, sin ciphertext) tras recibir el
+  ack del outbox — no hay Edge Function `push`.
+- Rotación de roomKey: suscripción DUAL a tema viejo + nuevo 24-48h, publicar en ambos
+  durante la transición [CORRECCIÓN-DOC].
+- Límites verificados de ntfy.sh: 12 h de caché, 250 msg/día, 60 req/5 s, 200 MB/día de
+  egress. Si ETECSA bloquea ntfy.sh → notificaciones "al abrir la app" (aceptable, no
+  rompe el chat) o self-host en VPS europeo.
+- Mientras tanto: polling adaptativo como único mecanismo de entrega.
 
 ---
 
@@ -218,11 +246,11 @@ roomKey" vs "el bot solo tiene una clave derivada"). Lo vinculante es esto:
 Canal 1 — CONVERSACIÓN (humano-humano)
    E2EE con convKey. El servidor ve solo ciphertext. El bot NUNCA toca este canal.
 
-Canal 2 — COMANDOS (app ↔ bot)
-   commandKey = HKDF-SHA256(rootKey, salt = conversation_id, info = "commands")
+Canal 2 — COMANDOS (app ↔ bot, en una SALA separada)
+   commandKey = HKDF-SHA256(roomKey, salt = roomSalt, info = "commands")
    El bot conoce SOLO commandKey (provisionada una vez desde la app de un usuario).
-   El servidor no puede derivar commandKey: no tiene rootKey.
-   HKDF es unidireccional: con commandKey tampoco se recupera rootKey.
+   El servidor no puede derivar commandKey: no tiene roomKey.
+   HKDF es unidireccional: con commandKey tampoco se recupera roomKey.
 ```
 
 El bot es un dispositivo de confianza con una clave derivada de mínimo privilegio, no con
@@ -253,7 +281,7 @@ Sin WebRTC (10-20 KB de handshake, 3 RTTs). Un juego por turnos necesita 50 B y 
 2. Se envía como comando estructurado (no texto libre).
 3. El bot (Edge Function) valida el movimiento contra el estado en Postgres.
 4. El bot actualiza estado y responde con el nuevo estado cifrado.
-5. Jugador B recibe el nuevo estado vía FCM o en el siguiente poll.
+5. Jugador B recibe el nuevo estado en el siguiente poll (o ping ntfy cuando exista).
 ```
 
 Renderizado: Compose con Canvas y primitivas vectoriales, 0 assets binarios. Un juego que
@@ -291,7 +319,8 @@ Coste: 40 B / 5 s = 8 B/s. Funciona incluso a 1 kbps. La latencia no importa: 2 
 diferencia entre posiciones es invisible en una película.
 
 Voz (opcional, v3): Opus 16 kbps = 2 KB/s por dirección. Factible a 10 kbps, marginal a
-1-2 kbps.
+1-2 kbps. [DOC v2] Para 2 usuarios, preferir chunks de Opus por HTTPS antes que WebRTC
+(evita el handshake de 10-20 KB) — decisión vinculante antes de empezar v3.
 
 ---
 
@@ -300,10 +329,10 @@ Voz (opcional, v3): Opus 16 kbps = 2 KB/s por dirección. Factible a 10 kbps, ma
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | Supabase suspende la cuenta por OFAC | 🔴 Proyecto muerto | Ítem 1 de Fase 0 validado ✅ + email a soporte (ítem 2, pendiente). Plan C: proveedor NO estadounidense |
-| FCM no disponible (sin GMS) | 🟠 Notificaciones tardías | Detección automática + poll local cada 15-30 min |
+| FCM/ntfy no disponible | 🟠 Notificaciones tardías | Sin Firebase (D30). ntfy pospuesto (D31); mientras tanto polling. Si ntfy.sh se bloquea desde Cuba: notificación "al abrir la app" o self-host VPS europeo |
 | ETECSA bloquea el dominio | 🟠 App inutilizable | Evidencia real: India bloqueó `*.supabase.co` completo en feb-2026. Mitigación: dominio propio + export cifrado + cliente tras interfaz `Transport` intercambiable |
 | Plan Free se pausa a los 7 días | 🟡 DB congelada | [CORRECCIÓN] Cron EXTERNO gratuito (cron-job.org, Alemania) llamando una Edge Function cada 3 días — más fiable que pg_cron interno como señal de actividad |
-| Perder la frase | 🔴 Historial irrecuperable | UI explícita: "si pierdes la frase, pierdes el historial" + exportación cifrada desde el día 1 |
+| Perder código de invitación + export | 🔴 Sala irrecuperable | Guardar el código (papel/nube personal) + export cifrado periódico; la sala se re-crea de cero como último recurso |
 | [NUEVO] Migrar a Cloudflare (Plan B original) como "hedge" | 🟠 Falsa sensación de seguridad | Cloudflare es empresa de EE. UU.: MISMO riesgo OFAC que Supabase. El Plan B es solo hedge técnico. El hedge geopolítico es el Plan C: VPS europeo (Hetzner/OVH, ~4 €/mes) o Supabase self-hosted — la UE prohíbe acatar el embargo extraterritorialmente (Reg. UE 2271/96) |
 | [NUEVO] Límites D1 (solo si Plan B) | 🟡 Quotas | Desde sept-2026 D1 aplica enforcement duro: 5M lecturas/día, 100K escrituras/día, 5 GB storage. Para 2 usuarios sobra, pero pasarse de quota ahora SÍ falla |
 
@@ -318,13 +347,24 @@ Functions/mes, 150 s máx por invocación. Para 2 usuarios: de sobra.
 
 ---
 
+## Criterios de aceptación verificables (Doc v2)
+
+- **Fase 1**: tras un corte de red de 72 h, todos los mensajes pendientes se entregan sin
+  duplicados y en orden (seq del servidor + idempotencia por msg_id).
+- **Onboarding**: primera ejecución < 60 segundos y < 5 toques hasta poder escribir.
+- **Red hostil**: mensaje de texto entregado con RTT de 500 ms y 1 kb/s sin error visible.
+- **APK**: medir tamaño real con Tink antes de comprometer objetivo (estimación inicial
+  < 15 MB — verificar al compilar).
+- **Fase 2**: canje de cupón concurrente (dos toques simultáneos) → exactamente 1 canje.
+- **Fase 3**: playhead sync a 8 B/s; imagen de 100 KB en < 3 min a 1 kb/s.
+
 ## Cronograma realista
 
 | Semana | Entregable | Criterio de éxito |
 |---|---|---|
-| 1 | Fase 0 (validación) + proyecto Android + auth propio | Login funciona con username/password/frase |
-| 2 | Cifrado PSK + envío/recepción de texto + Room + outbox | Mensaje enviado sin red se entrega al recuperar red, sin duplicados |
-| 3 | Sync incremental + FCM + manejo de errores | Mensaje llega con app cerrada; backfill funciona tras 1 h offline |
-| 4 | Pruebas de caos: 1 kb/s, cortes de 30 min, cierre forzado | 0 duplicados, 0 pérdidas, orden correcto |
-| 5-6 | Fase 2: bot + cupones + 1 minijuego | Canje atómico; el juego recupera estado tras 3 h offline |
-| 7-8 | Fase 3: imágenes + watch party | Imagen de 100 KB en < 3 min a 1 kb/s; playhead sync funciona |
+| 1 | ✅ Backend (hecho, 37/37) + proyecto Android + auth propio | Login funciona con username/password |
+| 2 | Cifrado sala (roomKey/inviteCode/SAS) + envío/recepción + Room + outbox | Mensaje enviado sin red se entrega al recuperar red, sin duplicados |
+| 3 | Sync incremental + manejo de errores + export cifrado | Backfill funciona tras 1 h offline; export restaura en otro móvil |
+| 4 | Pruebas de caos: 1 kb/s, cortes de 30 min y 72 h, cierre forzado | 0 duplicados, 0 pérdidas, orden correcto |
+| 5-6 | Fase 2: bot (sala de comandos) + cupones + 1 minijuego | Canje atómico; el juego recupera estado tras 3 h offline |
+| 7-8 | Fase 3: imágenes + watch party (+ evaluar notificaciones ntfy) | Imagen de 100 KB en < 3 min a 1 kb/s; playhead sync funciona |

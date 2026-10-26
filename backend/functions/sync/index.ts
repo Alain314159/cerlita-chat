@@ -1,11 +1,14 @@
 // Edge Function: sync — GET incremental de mensajes desde un seq
 // GET /functions/v1/sync?s=<seq>&l=<limit>  (Bearer token de sesión)
-// 200 JSON compacto {n: next_seq, m: [[msg_id, conv_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms], ...]}
-//   sender_uname: nombre del emisor — el receptor lo necesita para derivar convKey
-//                 (salt = par ordenado de usernames) sin lookup adicional
-//   ts_ms:        coalesce(client_ts, created_at) en epoch ms — hora de muestra
+// 200 JSON compacto {n: next_seq, m: [[msg_id, room_id, sender_id, seq, nonce_b64,
+//   ct_b64, sender_uname, ts_ms], ...]}
+//   sender_uname: nombre del emisor — la UI lo muestra sin lookup adicional.
+//                 (En el modelo rooms ya NO se usa para derivar convKey: el salt es
+//                  roomId y la clave madre es roomKey — ver docs/DECISIONES.md D40/D41.)
+//   ts_ms:        coalesce(client_ts, created_at) en epoch ms — hora de muestra.
 // 204 si no hay nada nuevo (0 bytes de cuerpo)
 // gzip cuando el cuerpo supera 1 KB (OkHttp lo descomprime solo)
+// Membresía: solo mensajes de las rooms donde el usuario es miembro.
 import postgres from "npm:postgres@3.4.9";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -56,12 +59,12 @@ Deno.serve(async (req) => {
     const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("l") ?? "100", 10) || 100));
 
     const rows = await sql`
-      select m.msg_id, m.conversation_id, m.sender_id, m.nonce, m.ciphertext, m.seq,
+      select m.msg_id, m.room_id, m.sender_id, m.nonce, m.ciphertext, m.seq,
              su.username as suname, coalesce(m.client_ts, m.created_at) as ts
       from messages m
       join users su on su.id = m.sender_id
-      where m.conversation_id in (
-            select id from conversations where user_lo = ${me.uid} or user_hi = ${me.uid})
+      where m.room_id in (
+            select room_id from room_members where user_id = ${me.uid})
         and m.seq > ${since}
       order by m.seq asc
       limit ${limit}`;
@@ -70,7 +73,7 @@ Deno.serve(async (req) => {
 
     const nextSeq = Number(rows[rows.length - 1].seq);
     const msgs = rows.map((r) => [
-      r.msg_id, r.conversation_id, r.sender_id, Number(r.seq),
+      r.msg_id, r.room_id, r.sender_id, Number(r.seq),
       b64(new Uint8Array(r.nonce)), b64(new Uint8Array(r.ciphertext)),
       r.suname, new Date(r.ts).getTime(),
     ]);

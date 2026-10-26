@@ -1,7 +1,9 @@
 // Edge Function: outbox — POST lote de mensajes cifrados (idempotente)
 // POST /functions/v1/outbox  (Bearer token de sesión)
-// Body: {to: "<usuario destino>", m: [[msg_id, ct_b64, nonce_b64, ts_ms?], ...]} (máx 64)
+// Body: {room: "<room_id>", m: [[msg_id, ct_b64, nonce_b64, ts_ms?], ...]} (máx 64)
 // El msg_id (UUIDv7 del cliente) es PK: reintentos seguros por construcción.
+// La sala la identifica room_id (derivado de la roomKey en el cliente);
+// el servidor NO conoce el destinatario por username — solo la membresía.
 import postgres from "npm:postgres@3.4.9";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -14,7 +16,6 @@ const DEBUG = Deno.env.get("DEBUG") === "1";
 const json = (status: number, obj: unknown) =>
   new Response(JSON.stringify(obj), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
-const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_BATCH = 64;
 const MAX_CT = 8192;
@@ -48,9 +49,9 @@ Deno.serve(async (req) => {
     const ctType = req.headers.get("content-type") ?? "";
     if (!ctType.includes("application/json")) return json(415, { e: "bad_content_type" });
     const body = await req.json().catch(() => null);
-    if (!body || typeof body.to !== "string") return json(400, { e: "bad_request" });
-    const to = body.to.trim().toLowerCase();
-    if (!USERNAME_RE.test(to)) return json(400, { e: "bad_to" });
+    if (!body || typeof body.room !== "string") return json(400, { e: "bad_request" });
+    const room = body.room.trim().toLowerCase();
+    if (!UUID_RE.test(room)) return json(400, { e: "bad_room" });
     if (!Array.isArray(body.m) || body.m.length === 0) return json(400, { e: "empty" });
     if (body.m.length > MAX_BATCH) return json(413, { e: "too_many" });
 
@@ -68,39 +69,27 @@ Deno.serve(async (req) => {
       prepared.push({ msg_id: mid, ct: ctB, nonce: nB, ts: clientTs });
     }
 
-    const [partner] = await sql`select id from users where username = ${to} limit 1`;
-    if (!partner) return json(404, { e: "no_user" });
-    const uid = String(me.uid), pid = String(partner.id);
-    if (uid === pid) return json(400, { e: "self" });
-
-    // Conversación 1-a-1 auto-creada con el par ordenado (idempotente)
-    const [conv] = await sql`
-      with ins as (
-        insert into conversations (user_lo, user_hi)
-        values (least(${uid}::uuid, ${pid}::uuid), greatest(${uid}::uuid, ${pid}::uuid))
-        on conflict do nothing
-        returning id
-      )
-      select id from ins
-      union all
-      select id from conversations
-       where user_lo = least(${uid}::uuid, ${pid}::uuid) and user_hi = greatest(${uid}::uuid, ${pid}::uuid)
-       limit 1`;
-    if (!conv) return json(500, { e: "no_conv" });
+    // Membresía del emisor en la sala (404 genérico: no revela si la sala
+    // existe o no — el room_id es una capability de 128 bits de todos modos).
+    const uid = String(me.uid);
+    const [member] = await sql`
+      select 1 as ok from room_members
+      where room_id = ${room}::uuid and user_id = ${uid}::uuid limit 1`;
+    if (!member) return json(404, { e: "no_room" });
 
     await sql`
       insert into messages ${
         sql(prepared.map((p) => ({
-          msg_id: p.msg_id, conversation_id: conv.id, sender_id: uid,
+          msg_id: p.msg_id, room_id: room, sender_id: uid,
           sender_device_id: me.did, ciphertext: p.ct, nonce: p.nonce, client_ts: p.ts,
-        })), "msg_id", "conversation_id", "sender_id", "sender_device_id", "ciphertext", "nonce", "client_ts")
+        })), "msg_id", "room_id", "sender_id", "sender_device_id", "ciphertext", "nonce", "client_ts")
       } on conflict (msg_id) do nothing`;
 
     // Ack de los que existen (insertados ahora + aceptados en reintentos previos)
     const ids = prepared.map((p) => p.msg_id);
     const acked = await sql`
       select msg_id from messages
-      where msg_id = any(${ids}::uuid[]) and conversation_id = ${conv.id} and sender_id = ${uid}`;
+      where msg_id = any(${ids}::uuid[]) and room_id = ${room}::uuid and sender_id = ${uid}`;
 
     await sql`update sessions set last_seen_at = now() where token_hash = ${hash}`;
     return json(200, { a: acked.map((r) => r.msg_id) });

@@ -9,9 +9,9 @@ El riesgo principal no es técnico: es geopolítico (OFAC).
 |---|--------|--------|-------|
 | 1 | Crear proyecto Supabase desde IP cubana; Dashboard, Auth, Edge Functions y Storage responden | ✅ **APROBADA** | Confirmado por el usuario, 2026-10-26: "Supabase funciona" |
 | 2 | Email a support@supabase.com preguntando explícitamente si el servicio está disponible para residentes en Cuba | ⏳ PENDIENTE | Recomendado aunque el ítem 1 pase: la respuesta por escrito es la única certeza jurídica. Si responden que no → Plan C |
-| 3 | Crear proyecto Firebase desde Cuba; registrar token FCM y recibir un push en el teléfono | ⏳ PENDIENTE | Necesario antes de diseñar las notificaciones |
-| 4 | ¿Ambos móviles tienen Google Play Services (GMS)? | ⏳ PENDIENTE | Define si el fallback sin GMS es caso raro o camino principal |
-| 5 | Medir TTFB real hacia `*.supabase.co` (`curl -w`) desde la red habitual | ⏳ PENDIENTE | Calibra los timeouts del cliente |
+| 3 | ~~Crear proyecto Firebase desde Cuba; registrar token FCM~~ | ❌ **DESCARTADA** | Decisión del usuario 26-oct: "No utilizaremos Firebase para la app". Sin FCM, sin google-services.json |
+| 4 | ~~¿Ambos móviles tienen Google Play Services?~~ | ❌ **DESCARTADA** | Irrelevante sin FCM. Las notificaciones se resuelven con ntfy (fase posterior) — validar ntfy.sh desde Cuba cuando toque |
+| 5 | Medir TTFB real hacia `*.supabase.co` (`curl -w`) desde la red habitual | ⏳ PENDIENTE | Calibra los timeouts del cliente. Comparar us-east-2 (actual) vs alternativas; migrar de región es barato con los scripts existentes |
 
 Comando para el ítem 5:
 
@@ -53,8 +53,9 @@ curl -o /dev/null -s -w "DNS: %{time_namelookup}s  Conexión: %{time_connect}s  
   Es la capa principal (pg_cron no cuenta garantizado como "actividad" ante una pausa).
   Crear la cuenta cuando toque; no bloquea nada.
 
-## Backend desplegado (26-oct-2026)
+## Backend desplegado y actualizado (26-oct-2026, modelo rooms)
 
-Migración SQL aplicada (17/17 statements) y 4 Edge Functions verificadas E2E con el
-smoke test de 23 checks — ver [../backend/README.md](../backend/README.md). BD limpia
-(0 usuarios: los 2 reales se registran desde la app con el código de invitación).
+Migración 0002 aplicada (modelo rooms: `rooms`, `room_members`, `room_state`,
+`messages.room_id`; sin `conversations`, sin `fcm_token`) y 4 Edge Functions verificadas
+E2E con el smoke test de **37 checks** — ver [../backend/README.md](../backend/README.md).
+BD limpia (0 usuarios: los 2 reales se registran desde la app con el código de invitación).
