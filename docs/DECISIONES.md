@@ -69,6 +69,7 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D59 | Anti-pausa | **Server-side**: pg_cron + pg_net llaman por HTTPS a la Edge Function `heartbeat` cada 6 h (`backend/scripts/setup_anti_pausa.py`). La invocación pasa por el gateway → cuenta como actividad REAL del proyecto (los writes internos de pg_cron NO cuentan). Sustituye al plan de cron-job.org: cero dependencias externas. Job único `anti-pausa-http` | Implementación 26-oct |
 | D60 | Icono/branding | Adaptive icon (fondo violeta #2A1E4F, burbuja crema #F2E8D5, candado con cerradura de corazón #F08CA0) + variante monocroma para iconos temáticos + PNGs legacy regenerados (API 24-25 no usan adaptive: clave en Cuba). El AAD del export pasa a `cerlita-chat-export-v2` (import acepta también el legacy) | Implementación v0.3.0 |
 | D61 | Perfiles E2EE | **El perfil (nombre + foto/avatar) viaja como un mensaje cifrado MÁS de la sala** (kind=1, invisible en el chat; plaintext = `\u0000P`+JSON `{n,a,p,t}`): el servidor NUNCA ve nombres ni fotos — cero cambios de backend. Foto: JPEG cuadrado con degradación adaptativa 128→96→64 px hasta ≤5 KB (presupuesto del ct de 8 KB). **Anuncios convergentes**: al crear/unirse/recuperar sala + al detectar un par NUEVO en sync (crítico: con seq global, los mensajes previos al join son invisibles para quien ya tenía last_seq avanzado) + al editar el perfil (broadcast a todas las salas). El eco propio restaura el perfil en un teléfono nuevo desde el historial (re-sync desde 0). Avatar por capas `AvatarConfig` JSON (`base`/`clothes`/`acc` por slot) con **2 bases placeholder (Cerdita y Koalita), 5 ropas y 5 accesorios**; los ids desconocidos se ignoran → listo para avatares creados por usuarios. DB v3 con migración REAL 2→3 (kind+senderUid en messages, tablas profiles y room_peer; ya hay teléfonos reales). El export excluye kind=1 (se auto-restaura del historial). 11 tests JVM nuevos (33/33 total) | Implementación v0.4.0 |
+| D62 | Crash al abrir (v0.1–v0.3) | **Causa raíz**: los ViewModels (`AuthViewModel`, `RoomsViewModel`) declaraban constructor `(ChatApp)` — `AndroidViewModelFactory` instancia por reflexión buscando `(Application)` → `NoSuchMethodException` al componer la pantalla de login → la app moría al abrir en CUALQUIER teléfono (jamás detectado: los tests JVM no ejercen la capa Android y la app nunca se había ejecutado en ningún lado). **Fix v0.4.1**: constructores `(Application)` + regla R8 `-keep class * extends androidx.lifecycle.ViewModel { <init>(...); }` (lifecycle 2.11 no trae consumer rules). **Además**: WorkManager pasa a on-demand (`ChatApp` implementa `Configuration.Provider`, inicializador por defecto retirado del manifest — más robusto ante OEMs agresivos; verificado en el dex final: R8 devirtualizó e inlinó la cadena), `Profile.kt` reescrito sin byte NUL literal (git lo trataba como binario; escape `\u0000` + límites 40/600/6600), carga del perfil en `ProfileScreen` asíncrona (antes `runBlocking` en composición). **Nueva infra de pruebas**: Robolectric — `SmokeTest` arranca ChatApp+MainActivity+Login en API 24/28/31/33/35 (5/5) y `MigrationTest` reproduce la actualización real v0.3.0→v0.4.x con datos (schema v2 + migración + consultas nuevas). 40/40 tests | Post-mortem 27-oct |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
@@ -100,15 +101,18 @@ HTTPS a `heartbeat` (verificado 200 + tabla al día). Detalle técnico y hallazg
 deploy: [backend/README.md](../backend/README.md). Sin Firebase (D44); las
 notificaciones (ntfy, D45) se implementan en fase posterior.
 
-## Cliente Android — estado (26-oct-2026, v0.4.0)
+## Cliente Android — estado (27-oct-2026, v0.4.1)
 
 **"Cerlita Chat" (D18), modelo rooms (D54) + perfiles E2EE (D61), firmada**: APK
-release **2.7 MB** (misma firma que v0.2.0/v0.3.0 → actualiza sin desinstalar).
-Emparejamiento por código de invitación (D42) con pantalla de SAS (D43),
-outbox/sync por sala, vault de roomKeys sellado por Keystore (D55), export v2
-(D47) + import del respaldo (D58), icono propio (D60). **v0.4.0**: onboarding y
-editor de perfil (nombre + foto subida O avatar por capas — Cerdita/Koalita
-placeholder con ropa y accesorios), lista de chats y burbujas con el nombre y
-avatar del par, cabecera del chat con avatar. Validación: 33/33 tests JVM (18
-cripto + 4 import + 11 perfiles) + E2E del protocolo 22/22 contra producción.
+release **2.8 MB** (misma firma que v0.2.0/v0.3.0/v0.4.0 → actualiza sin desinstalar).
+**v0.4.1 arregla el crash al abrir de las v0.1–v0.4.0** (D62: constructores de
+ViewModels + WorkManager on-demand) — era la causa de «la toco y se cierra sin
+abrir» en los móviles reales. Emparejamiento por código de invitación (D42) con
+pantalla de SAS (D43), outbox/sync por sala, vault de roomKeys sellado por
+Keystore (D55), export v2 (D47) + import del respaldo (D58), icono propio (D60),
+onboarding y editor de perfil (nombre + foto subida O avatar por capas —
+Cerdita/Koalita placeholder con ropa y accesorios, D61), lista de chats y
+burbujas con el nombre y avatar del par. Validación: **40/40 tests JVM+Robolectric**
+(18 cripto + 4 import + 11 perfiles + 5 smoke de arranque en API 24-35 + 1
+migración DB v2→v3) + E2E del protocolo 22/22 contra producción.
 Ver [android/README.md](../android/README.md).

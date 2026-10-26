@@ -4,6 +4,11 @@
 # argon2kt accede a funciones nativas por JNI; mantener nombres para el linkage
 -keep class com.lambdapioneer.argon2kt.** { *; }
 
+# D62: AndroidViewModelFactory (lifecycle 2.11, sin consumer rules) instancia
+# los ViewModels por reflexión con el constructor (Application) — R8 no puede
+# ver esa reflexión, hay que asegurar el constructor explícitamente.
+-keep class * extends androidx.lifecycle.ViewModel { <init>(...); }
+
 # OkHttp/okio: algunas referencias opcionales generan warnings, no errores
 -dontwarn okhttp3.**
 -dontwarn okio.**

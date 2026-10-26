@@ -2,6 +2,7 @@ package cu.alain.chat
 
 import android.app.Application
 import android.content.Context
+import androidx.work.Configuration
 import cu.alain.chat.db.AppDatabase
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.engine.ChatEngine
@@ -14,8 +15,15 @@ import java.util.UUID
  * Application: service locator manual (app pequeña, sin framework DI).
  * Vida del proceso ↔ vida de la app; las roomKeys en RAM se recargan del
  * vault sellado (Keystore) al arrancar — no hay frase que teclear.
+ *
+ * WorkManager on-demand (D62): ChatApp es Configuration.Provider → se inicializa
+ * en el primer getInstance() sin depender del InitializationProvider (más
+ * robusto ante OEMs agresivos y el arranque queda igual en todos los móviles).
  */
-class ChatApp : Application() {
+class ChatApp : Application(), Configuration.Provider {
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().build()
 
     lateinit var prefs: Prefs
         private set

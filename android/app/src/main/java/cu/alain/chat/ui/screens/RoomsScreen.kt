@@ -1,5 +1,6 @@
 package cu.alain.chat.ui.screens
 
+import android.app.Application
 import android.content.Intent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -66,7 +67,10 @@ import java.util.Locale
 
 // ───────────────────────────── ViewModel ─────────────────────────────
 
-class RoomsViewModel(private val app: ChatApp) : AndroidViewModel(app) {
+/** D62: constructor (Application) — obligatorio para AndroidViewModelFactory (ver AuthViewModel). */
+class RoomsViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val app get() = getApplication<ChatApp>()
 
     val busy = androidx.compose.runtime.mutableStateOf<String?>(null)
 

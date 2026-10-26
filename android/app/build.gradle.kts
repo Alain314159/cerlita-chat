@@ -22,8 +22,8 @@ android {
         applicationId = "cu.alain.chat"
         minSdk = 24          // D/P1: máximo alcance; requiere desugaring
         targetSdk = 36       // D/P2: un nivel por detrás del último — comportamiento probado
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.4.1"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -58,6 +58,8 @@ android {
     }
 
     buildFeatures { compose = true }
+
+    testOptions { unitTests { isIncludeAndroidResources = true } }
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -99,4 +101,17 @@ dependencies {
     testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303") // JSONObject/JSONArray reales en JVM (import/export)
+
+    // Smoke test de arranque (Robolectric): reproduce un cold-start real en JVM
+    testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+}
+
+tasks.withType<Test>().configureEach {
+    // Robolectric baja los android-all jars de Maven Central en runtime:
+    // apuntarlo al espejo de Google (repo1.maven.org devuelve 429 a esta IP)
+    systemProperty("robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2")
+    systemProperty("robolectric.dependency.repo.id", "google-mirror")
+    maxHeapSize = "2g"
 }

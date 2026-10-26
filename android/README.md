@@ -60,13 +60,17 @@ y verificados E2E contra producción (`backend/scripts/e2e_rooms_client.py`, 22 
 ## Cómo compilar
 
 ```bash
-# Requisitos del entorno de esta máquina (ajusta rutas si cambian):
-export JAVA_HOME=/home/z/jdk21                                  # JDK 21 COMPLETO (JRE no vale)
-export ANDROID_HOME=/home/z/android-sdk                         # platform 37.0 + build-tools 37
+# Requisitos del entorno de esta máquina (ajusta rutas si cambian).
+# Tras el reinicio del entorno (27-oct) el toolchain se reconstruyó aquí:
+export JAVA_HOME=/home/z/toolchain/jdk-21.0.13+9                 # JDK 21 COMPLETO
+export ANDROID_HOME=/home/z/toolchain/sdk                        # platform 37.0 + build-tools 36/37
 cd android
-./gradlew :app:testDebugUnitTest   # tests JVM (33: cripto + import + perfiles)
-./gradlew :app:assembleRelease     # APK firmado + R8 (2.7 MB)
+./gradlew :app:testDebugUnitTest   # tests JVM+Robolectric (40: cripto + import + perfiles + smoke + migración)
+./gradlew :app:assembleRelease     # APK firmado + R8 (2.8 MB)
 ```
+
+Nota (27-oct): si Maven Central devuelve `429 Too Many Requests`, `settings.gradle.kts`
+ya apunta un espejo de Maven Central operado por Google como primer repositorio.
 
 La firma release lee `android/keystore.properties` (gitignored) que apunta a
 `../../secrets/chat-release.keystore`. Ese keystore **y su contraseña** viven en
@@ -117,12 +121,47 @@ app/src/test/java/cu/alain/chat/
 
 ## Pendiente (siguientes pasos)
 
-1. Probar en los 2 móviles reales (instalar el APK release v0.4.0 — actualiza
-   encima de v0.3.0, misma firma): registrar ambos usuarios, configurar los
-   perfiles (nombre + Cerdita/Koalita o foto), crear sala, compartir código,
-   verificar SAS por voz y que cada uno VEA el perfil del otro
+1. **Instalar v0.4.1 en los 2 móviles reales** (actualiza encima, misma firma).
+   ⚠️ IMPORTANTE: las versiones v0.1–v0.4.0 tenían un crash al abrir (D62 — bug de
+   constructores de ViewModels); si v0.3.0 «se cerraba sin abrir» era esto, ya
+   está arreglado. Registrar ambos usuarios, configurar los perfiles (nombre +
+   Cerdita/Koalita o foto), crear sala, compartir código, verificar SAS por voz
+   y que cada uno VEA el perfil del otro
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
 3. Avatares reales: sustituir los drawables placeholder (el catálogo y el
    AvatarConfig por capas ya son agnósticos al arte — D61)
 4. Notificaciones ntfy (D45, fase posterior) — el cron externo anti-pausa ya
    quedó resuelto server-side (D59: pg_cron + pg_net → heartbeat cada 6 h)
+
+## v0.4.1 — fix del crash al abrir (D62, 27-oct-2026)
+
+**Síntoma**: «la toco y se cierra sin siquiera abrir» en los móviles reales con
+v0.3.0. **Causa raíz**: `AuthViewModel`/`RoomsViewModel` declaraban su constructor
+con `(ChatApp)`; `AndroidViewModelFactory` (lifecycle 2.11) los instancia por
+reflexión buscando exactamente `(Application)` → `NoSuchMethodException` al
+componer la pantalla de login → la app moría antes de mostrar nada. Nunca se
+detectó porque los tests JVM no ejercen la capa Android y el APK nunca se había
+ejecutado (ni en emulador — no hay KVM en el sandbox).
+
+**Arreglos de v0.4.1**:
+- Constructores `(Application)` en ambos ViewModels + regla R8
+  `-keep class * extends androidx.lifecycle.ViewModel { <init>(...); }` (lifecycle
+  2.11 no trae consumer rules — verificado en el dex final del release)
+- WorkManager on-demand: `ChatApp` implementa `Configuration.Provider` y el
+  inicializador por defecto se retira del manifest (`tools:node="remove"`) — sin
+  dependencia del InitializationProvider, más robusto ante OEMs agresivos
+- `Profile.kt` reescrito sin byte NUL literal en `PREFIX` (escape `\u0000`; antes
+  git trataba el archivo como binario) + límites 40/600/6600 (antes 41/611/6611)
+- `ProfileScreen`: carga del perfil asíncrona (antes `runBlocking` en composición)
+
+**Nueva infra de pruebas (Robolectric)** — corre la app de verdad en JVM:
+- `SmokeTest`: ChatApp.onCreate completo + MainActivity + pantalla Login en
+  **API 24, 28, 31, 33 y 35** (5/5) — un crash de arranque revive aquí con su stack
+- `MigrationTest`: crea un chat.db con el schema v2 exacto de v0.3.0 + datos,
+  abre con la DB v3 (dispara `MIGRATION_2_3` + validación de Room) y corre las
+  consultas nuevas (lista de chats, kind=1 invisible)
+
+```bash
+# correr todo (40/40)
+./gradlew :app:testDebugUnitTest
+```

@@ -3,7 +3,7 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: Fase 1 COMPLETA — backend desplegado (37/37) y app Android **v0.4.0 "Cerlita
+**Estado**: Fase 1 COMPLETA — backend desplegado (37/37) y app Android **v0.4.1 "Cerlita
 Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58) y
 **perfiles E2EE con avatares** (D61). APK release 2.7 MB firmado. **Sin Firebase**
 (decisión del usuario).
@@ -16,7 +16,7 @@ Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58) y
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.4.0: modelo rooms, perfiles, cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.4.1: modelo rooms, perfiles, cripto, build, tests |
 
 ## Estado (26-oct-2026)
 
@@ -30,7 +30,7 @@ Chat"** migrada al modelo rooms (D54) con import del respaldo cifrado (D58) y
 - ✅ **Anti-pausa server-side (D59)**: pg_cron + pg_net llaman por HTTPS a `heartbeat`
   cada 6 h — actividad REAL del gateway, sin depender de servicios externos
   (cron-job.org dejó de ser necesario)
-- ✅ **App Android v0.4.0 "Cerlita Chat" (D18/D54/D58/D61)**: emparejamiento por código de
+- ✅ **App Android v0.4.1 "Cerlita Chat" (D18/D54/D58/D61/D62 — fix del crash al abrir)**: emparejamiento por código de
   invitación + SAS por voz, outbox/sync por sala, vault de roomKeys sellado por
   Keystore (sin frase E2EE), export v2 con historial + claves **e import del respaldo**
   (recuperación completa en teléfono nuevo), recuperación de sala en 2º dispositivo.

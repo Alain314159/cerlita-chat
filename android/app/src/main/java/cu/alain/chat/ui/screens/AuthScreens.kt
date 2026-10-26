@@ -1,5 +1,6 @@
 package cu.alain.chat.ui.screens
 
+import android.app.Application
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -48,7 +49,14 @@ import kotlinx.coroutines.launch
 
 // ───────────────────────────── ViewModel ─────────────────────────────
 
-class AuthViewModel(private val app: ChatApp) : AndroidViewModel(app) {
+/**
+ * D62: el constructor SIEMPRE (Application) — AndroidViewModelFactory instancia por
+ * reflexión buscando exactamente esa firma; (ChatApp) lanzaba NoSuchMethodException
+ * y mataba la app al abrir (crash del login en teléfonos reales, v0.1.0–v0.3.0).
+ */
+class AuthViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val app get() = getApplication<ChatApp>()
 
     /** null = inactivo; "" = trabajando; texto = error a mostrar */
     val busy = androidx.compose.runtime.mutableStateOf<String?>(null)

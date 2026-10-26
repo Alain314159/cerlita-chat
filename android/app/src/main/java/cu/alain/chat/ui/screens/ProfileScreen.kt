@@ -73,12 +73,28 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     val session = app.engine.session
 
-    // estado editado en pantalla (arranca del perfil guardado o de defaults)
-    val saved = remember { kotlinx.coroutines.runBlocking { app.db.profileDao().get(session?.uid ?: "") } }
-    var name by remember { mutableStateOf(saved?.displayName ?: session?.uname ?: "") }
-    var cfg by remember { mutableStateOf(AvatarConfig.parse(saved?.avatarJson) ?: AvatarConfig("pig")) }
-    var hasPhoto by remember { mutableStateOf(saved?.photo == true) }
+    // estado editado en pantalla (arranca del perfil guardado o de defaults).
+    // D62: carga ASÍNCRONA — el runBlocking en composición anterior podía congelar
+    // el primer frame en móviles lentos (Room abre la DB en el hilo de UI).
+    var saved by remember { mutableStateOf<cu.alain.chat.db.Profile?>(null) }
+    var loaded by remember { mutableStateOf(false) }
+    LaunchedEffect(session?.uid) {
+        saved = app.db.profileDao().get(session?.uid ?: "")
+        loaded = true
+    }
+    var name by remember { mutableStateOf(session?.uname ?: "") }
+    var cfg by remember { mutableStateOf(AvatarConfig("pig")) }
+    var hasPhoto by remember { mutableStateOf(false) }
     var newPhotoBytes by remember { mutableStateOf<ByteArray?>(null) } // foto recién elegida, sin guardar
+
+    // aplica el perfil guardado una vez cargado (defaults si no existe)
+    LaunchedEffect(loaded) {
+        if (loaded && saved != null) {
+            name = saved!!.displayName
+            cfg = AvatarConfig.parse(saved!!.avatarJson) ?: AvatarConfig("pig")
+            hasPhoto = saved!!.photo
+        }
+    }
 
     var saving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
