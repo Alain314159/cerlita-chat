@@ -4,9 +4,9 @@
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
 **Estado**: Fase 1 COMPLETA — backend desplegado (37/37 + timbre 13/13 + recibos/leave
-24/24) y app Android **v0.6.0 "Cerlita Chat"** con modelo rooms (D54), import del respaldo
+24/24) y app Android **v0.7.0 "Cerlita Chat"** con modelo rooms (D54), import del respaldo
 cifrado (D58), **perfiles E2EE con avatares** (D61), notificaciones por timbre Realtime
-(D63-D67) y **v0.6.0: recibos ✓/✓✓, ajustes de sala, navegación atrás y tiempo real SIN
+(D63-D67) y **v0.7.0: recibos ✓/✓✓, ajustes de sala, navegación atrás y tiempo real SIN
 notificación persistente** (D68-D72). APK release 2,8 MB firmado. **Sin Firebase**
 (decisión del usuario).
 
@@ -18,7 +18,7 @@ notificación persistente** (D68-D72). APK release 2,8 MB firmado. **Sin Firebas
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.6.0: modelo rooms, perfiles, timbre, recibos, salas, cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.7.0: modelo rooms, perfiles, timbre, recibos, salas, cripto, build, tests |
 
 ## Estado (28-oct-2026)
 
@@ -34,13 +34,13 @@ notificación persistente** (D68-D72). APK release 2,8 MB firmado. **Sin Firebas
   (cron-job.org dejó de ser necesario)
 - ✅ **Backend: timbre Realtime (D63)** — `outbox` avisa al canal `room-<roomId>` tras
   insertar (solo despierta, jamás transporta contenido); E2E 13/13
-- ✅ **App Android v0.6.0 "Cerlita Chat" (D18/D54/D58/D61/D63-D72)**: emparejamiento por código de
+- ✅ **App Android v0.7.0 "Cerlita Chat" (D18/D54/D58/D61/D63-D72)**: emparejamiento por código de
   invitación + SAS por voz, outbox/sync por sala, vault de roomKeys sellado por
   Keystore (sin frase E2EE), export v2 con historial + claves **e import del respaldo**
   (recuperación completa en teléfono nuevo), recuperación de sala en 2º dispositivo.
   Icono propio (burbuja + candado con cerradura de corazón). **Perfiles E2EE**: nombre +
   foto subida o avatar por capas (Cerdita y Koalita placeholder con ropa y accesorios),
-  viajan cifrados como mensajes más — el servidor jamás ve nombres ni fotos. **v0.6.0
+  viajan cifrados como mensajes más — el servidor jamás ve nombres ni fotos. **v0.7.0
   (lista de bugs + petición del usuario)**: registro con repetir contraseña y ojo
   ver/ocultar, botón atrás que navega en vez de cerrar la app, atrás en Editar perfil,
   Ajustes de sala con nombre/foto COMPARTIDOS E2EE + SAS + código + eliminar sala

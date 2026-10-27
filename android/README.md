@@ -262,3 +262,23 @@ múltiples SDK la última sandbox de una clase nueva dispara
 `FileSystemAlreadyExistsException` en `maybeCopyFonts` (reproducido con un test
 vacío; SmokeTest no se ve afectado). La matriz multi-API de arranque la cubre
 SmokeTest (24/28/31/33/35).
+
+## v0.7.0 — «Cerlita» (icono y tema de la pareja, chats directos, adjuntos, llamadas, pestañas)
+
+- **D73 Icono + tema Cerlita**: icono = ilustración cerdito+koala (adaptive bitmap
+  + monochrome vectorial); tema rosa del mockup en Ajustes → Apariencia
+  (Sistema/Claro/Oscuro/Cerlita, default Cerlita, cambia en vivo).
+- **D74 Chats directos**: buscar por @usuario → chat 1-a-1 SIN código. Cripto:
+  par X25519 por teléfono (privada en Keystore) + envoltura ChaCha20-Poly1305
+  de la roomKey para el par; pickup por /sync (dm) + ack; idempotente por
+  pareja (dm_pair UNIQUE). Grupos siguen con código de invitación.
+- **D75 Llamadas**: voz y vídeo P2P (WebRTC/stream-webrtc 1.1.3), señalización
+  por broadcast REST, registro local (tabla calls), pantalla de llamada estilo
+  mockup (aceptar/rechazar, PIP, cronómetro), altavoz/cámara/micrófono.
+  Entrantes: solo con app abierta o modo instantáneo.
+- **D76 Adjuntos E2EE**: notas de voz (m4a, waveform), fotos (1600px, sin EXIF)
+  y archivos ≤20 MB; cifrados con fileKey propia, subida directa a Storage
+  (RLS por roomId), descarga por /files con membresía; progreso, reintento.
+- **Pestañas**: Chats · Llamadas · Ajustes (sin «estados», por decisión).
+- BD v5 (rooms.kind/peerUid + calls), migración real v4→v5.
+- Tests 84/84 · APK 19,2 MB (WebRTC; arm64+armv7) · versionCode 8.

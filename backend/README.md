@@ -197,3 +197,17 @@ backend/
 ## Límites Free del proyecto (500 MB DB · 2 GB bw/mes · 500K invocaciones/mes)
 
 Para 2 usuarios: de sobra. Un mensaje típico ≈ 200 B → 1 GB ≈ 5 millones de mensajes.
+
+## v0.7.0 — chats directos + adjuntos (D74/D76)
+
+- Migración 0004: users.pub (X25519 pública), dm_keys (wraps opacos),
+  rooms.kind + dm_pair UNIQUE por pareja. Acciones auth: search/pk/dm_new/
+  dm_ack; /sync gana campo dm (wrap + pública del creador, hasta el ack);
+  broadcast al topic personal user-<uid> al crear un DM.
+- Migración 0005 + bucket «attachments» (setup_storage.py, privado, 25 MB):
+  política RLS INSERT-only a <roomId>/<uuid>.<ext> (capability del roomId);
+  función /files: URL firmada de descarga (10 min) SOLO para miembros.
+- HALLAZGOS 15-18 en docs/DECISIONES.md (mangling de consola, tope de
+  usuarios en e2e, Storage exige JWT clásico → secret SUPA_SVC_JWT,
+  upload-sign no disponible → subida directa con anon key).
+- e2e_dm 20/20 · e2e_files 20/20 · smoke 37/37 · funciones v56.
