@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,12 +20,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,40 +37,43 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import cu.alain.chat.ChatApp
 import cu.alain.chat.calls.CallDispatcher
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.screens.AuthScreens
+import cu.alain.chat.ui.screens.CallsScreen
 import cu.alain.chat.ui.screens.ChatScreen
 import cu.alain.chat.ui.screens.ProfileScreen
 import cu.alain.chat.ui.screens.RoomSettingsScreen
 import cu.alain.chat.ui.screens.RoomsScreen
 import cu.alain.chat.ui.screens.SettingsScreen
+import kotlinx.coroutines.launch
 
-/** Navegación interna de la zona Main (pila simple). */
+/** Navegación interna de la zona Main (pila simple sobre las pestañas). */
 private sealed interface Screen {
     data object Home : Screen
     data class Chat(val room: Room) : Screen
-    data object Settings : Screen
     data class Profile(val firstRun: Boolean) : Screen
     data class RoomSettings(val roomId: String) : Screen
 }
 
 /**
- * Raíz de la UI: el AppState del motor decide la pantalla (login/main).
- * Dentro de Main hay una pila de navegación mínima, sin librería de nav
- * (app de 4 pantallas: la nav manual pesa menos y no tiene sorpresas).
+ * Raíz de la UI (v0.7.0): el AppState del motor decide login/main. Dentro de
+ * Main hay PESTAÑAS INFERIORES (Chats · Llamadas · Ajustes, como el mockup —
+ * sin «estados») y una pila mínima encima (chat, perfil, ajustes de sala).
+ * Sin librería de nav: la manual pesa menos y no tiene sorpresas.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -95,174 +102,220 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
 
+            // pestaña seleccionada (v0.7.0): vive AQUÍ para que el título la lea
+            var tab by rememberSaveable { mutableIntStateOf(0) }
+
             // Llamada en curso (D75): overlay a pantalla completa ENCIMA de todo
             // (la UI sigue compuesta: la pila de navegación no se pierde)
-            val callState by cu.alain.chat.calls.CallDispatcher.state.collectAsState()
-            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+            val callState by CallDispatcher.state.collectAsState()
+            Box(Modifier.fillMaxSize()) {
 
-            // Botón ATRÁS del teléfono (v0.6.0): navega hacia atrás en vez de
-            // cerrar la app desde cualquier pantalla. En la raíz (lista de
-            // chats) el atrás sale de la app — comportamiento normal. En el
-            // onboarding de perfil NO hay atrás: hay que poner nombre (o
-            // "Ahora no"), si no el efecto lo re-abriría en bucle.
-            val onboarding = current is Screen.Profile && current.firstRun
-            BackHandler(enabled = stack.size > 1 && !onboarding && callState == null) {
-                stack.removeAt(stack.lastIndex)
-            }
-
-            // Tocar una notificación abre ESA sala (D63): el extra llega por
-            // MainActivity (onCreate/onNewIntent) y aquí se consume.
-            val pendingRoom by app.pendingOpenRoom.collectAsState()
-            LaunchedEffect(pendingRoom) {
-                val rid = pendingRoom ?: return@LaunchedEffect
-                app.pendingOpenRoom.value = null
-                val room = app.db.roomDao().get(rid) ?: return@LaunchedEffect
-                stack.removeAll { it is Screen.Chat || it is Screen.Settings || it is Screen.Profile || it is Screen.RoomSettings }
-                stack.add(Screen.Chat(room))
-            }
-
-            // Exención de batería (D67): una sola vez, con explicación. Sin
-            // ella el sistema puede congelar el timbre con la pantalla apagada.
-            var askBattery by remember { mutableStateOf(false) }
-            LaunchedEffect(state) {
-                if (!app.prefs.askedBattery) {
-                    app.prefs.askedBattery = true
-                    val pm = ctx.getSystemService(PowerManager::class.java)
-                    if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) askBattery = true
+                // Botón ATRÁS del teléfono (v0.6.0): navega hacia atrás en vez de
+                // cerrar la app. En las pestañas el atrás sale de la app — normal.
+                // En el onboarding de perfil NO hay atrás: hay que poner nombre.
+                val onboarding = current is Screen.Profile && current.firstRun
+                BackHandler(enabled = stack.size > 1 && !onboarding && callState == null) {
+                    stack.removeAt(stack.lastIndex)
                 }
-            }
-            if (askBattery) {
-                AlertDialog(
-                    onDismissRequest = { askBattery = false },
-                    title = { Text("Permitir avisos con la pantalla apagada") },
-                    text = {
-                        Text(
-                            "Para que los mensajes nuevos avisen al instante con la app cerrada, " +
-                                "Android debe eximir a Cerlita Chat del ahorro de batería.\n\n" +
-                                "En el próximo diálogo elige «Permitir».\n\n" +
-                                "En Xiaomi/Redmi revisa además: Autoinicio activado y batería " +
-                                "«Sin restricciones» para la app.",
-                        )
-                    },
-                    confirmButton = {
-                        TextButton({
-                            askBattery = false
-                            try {
-                                ctx.startActivity(
-                                    Intent(
-                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                        Uri.parse("package:" + ctx.packageName),
-                                    ),
-                                )
-                            } catch (_: Exception) {
-                                // algún OEM no lo soporta: queda el ajuste manual
-                            }
-                        }) { Text("Permitir") }
-                    },
-                    dismissButton = { TextButton({ askBattery = false }) { Text("Ahora no") } },
-                )
-            }
 
-            // Onboarding de perfil (D61): sin perfil propio → pantalla de perfil
-            // tras entrar. Con "Guardar" o "Ahora no" siempre queda uno (el
-            // anuncio a las salas necesita un perfil que existir).
-            LaunchedEffect(state, stack.size) {
-                if (stack.size == 1 && stack[0] == Screen.Home) {
-                    val s = app.engine.session
-                    if (s != null && app.db.profileDao().get(s.uid) == null) {
-                        stack.add(Screen.Profile(firstRun = true))
+                // Tocar una notificación abre ESA sala (D63).
+                val pendingRoom by app.pendingOpenRoom.collectAsState()
+                LaunchedEffect(pendingRoom) {
+                    val rid = pendingRoom ?: return@LaunchedEffect
+                    app.pendingOpenRoom.value = null
+                    val room = app.db.roomDao().get(rid) ?: return@LaunchedEffect
+                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
+                    stack.add(Screen.Chat(room))
+                }
+
+                // Exención de batería (D67): una sola vez, con explicación.
+                var askBattery by remember { mutableStateOf(false) }
+                LaunchedEffect(state) {
+                    if (!app.prefs.askedBattery) {
+                        app.prefs.askedBattery = true
+                        val pm = ctx.getSystemService(PowerManager::class.java)
+                        if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) askBattery = true
                     }
                 }
-            }
-
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            when (val c = current) {
-                                Screen.Home -> Text("Chats")
-                                is Screen.Chat -> ChatTitle(app, c.room)
-                                Screen.Settings -> Text("Ajustes")
-                                is Screen.Profile ->
-                                    Text(if (c.firstRun) "Tu perfil" else "Editar perfil")
-                                is Screen.RoomSettings -> Text("Ajustes de la sala")
-                            }
+                if (askBattery) {
+                    AlertDialog(
+                        onDismissRequest = { askBattery = false },
+                        title = { Text("Permitir avisos con la pantalla apagada") },
+                        text = {
+                            Text(
+                                "Para que los mensajes nuevos avisen al instante con la app cerrada, " +
+                                    "Android debe eximir a Cerlita Chat del ahorro de batería.\n\n" +
+                                    "En el próximo diálogo elige «Permitir».\n\n" +
+                                    "En Xiaomi/Redmi revisa además: Autoinicio activado y batería " +
+                                    "«Sin restricciones» para la app.",
+                            )
                         },
-                        navigationIcon = {
-                            // atrás visible en toda sub-pantalla menos el onboarding
-                            // de perfil (v0.6.0: antes faltaba en «Editar perfil»)
-                            if (stack.size > 1 &&
-                                !(current is Screen.Profile && current.firstRun)
-                            ) {
-                                IconButton(onClick = { stack.removeAt(stack.lastIndex) }) {
-                                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
+                        confirmButton = {
+                            TextButton({
+                                askBattery = false
+                                try {
+                                    ctx.startActivity(
+                                        Intent(
+                                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                            Uri.parse("package:" + ctx.packageName),
+                                        ),
+                                    )
+                                } catch (_: Exception) {
+                                    // algún OEM no lo soporta: queda el ajuste manual
                                 }
-                            }
+                            }) { Text("Permitir") }
                         },
-                        actions = {
-                            when (current) {
-                                is Screen.Home -> IconButton(onClick = { stack.add(Screen.Settings) }) {
-                                    Icon(Icons.Default.Settings, "Ajustes")
-                                }
-                                is Screen.Chat -> {
-                                    // llamadas (D75): solo en chats directos
-                                    if (current.room.kind == cu.alain.chat.core.C.ROOM_DM) {
-                                        IconButton(onClick = { startCall(app, current.room, video = false) }) {
-                                            Icon(Icons.Default.Call, "Llamada de voz")
-                                        }
-                                        IconButton(onClick = { startCall(app, current.room, video = true) }) {
-                                            Icon(Icons.Default.Videocam, "Videollamada")
-                                        }
-                                    }
-                                    IconButton(onClick = {
-                                        stack.add(Screen.RoomSettings(current.room.roomId))
-                                    }) {
-                                        Icon(Icons.Default.Settings, "Ajustes de la sala")
-                                    }
-                                }
-                                else -> {}
-                            }
-                        },
+                        dismissButton = { TextButton({ askBattery = false }) { Text("Ahora no") } },
                     )
-                },
-            ) { pad ->
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .padding(pad),
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    when (val c = current) {
-                        Screen.Home -> RoomsScreen(app) { room ->
-                            stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
-                            stack.add(Screen.Chat(room))
+                }
+
+                // Onboarding de perfil (D61): sin perfil propio → pantalla de
+                // perfil tras entrar. Con "Guardar" o "Ahora no" siempre queda uno.
+                LaunchedEffect(state, stack.size) {
+                    if (stack.size == 1 && stack[0] == Screen.Home) {
+                        val s = app.engine.session
+                        if (s != null && app.db.profileDao().get(s.uid) == null) {
+                            stack.add(Screen.Profile(firstRun = true))
                         }
-                        is Screen.Chat -> ChatScreen(app, c.room.roomId)
-                        Screen.Settings -> SettingsScreen(app) {
-                            stack.add(Screen.Profile(firstRun = false))
-                        }
-                        is Screen.Profile -> ProfileScreen(
-                            app = app,
-                            firstRun = c.firstRun,
-                            onDone = { stack.removeAt(stack.lastIndex) },
-                        )
-                        is Screen.RoomSettings -> RoomSettingsScreen(
-                            app = app,
-                            roomId = c.roomId,
-                            onDeleted = {
-                                // la sala murió: volver a la lista de chats
-                                stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
-                                Notifier.cancelRoom(ctx, c.roomId)
+                    }
+                }
+
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = {
+                                when (val c = current) {
+                                    Screen.Home -> Text(
+                                        when (tab) {
+                                            1 -> "Llamadas"
+                                            2 -> "Ajustes"
+                                            else -> "Chats"
+                                        }
+                                    )
+                                    is Screen.Chat -> ChatTitle(app, c.room)
+                                    is Screen.Profile ->
+                                        Text(if (c.firstRun) "Tu perfil" else "Editar perfil")
+                                    is Screen.RoomSettings -> Text("Ajustes de la sala")
+                                }
+                            },
+                            navigationIcon = {
+                                // atrás visible en toda sub-pantalla menos el
+                                // onboarding de perfil (v0.6.0)
+                                if (stack.size > 1 &&
+                                    !(current is Screen.Profile && current.firstRun)
+                                ) {
+                                    IconButton(onClick = { stack.removeAt(stack.lastIndex) }) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
+                                    }
+                                }
+                            },
+                            actions = {
+                                when (current) {
+                                    is Screen.Chat -> {
+                                        // llamadas (D75): solo en chats directos
+                                        if (current.room.kind == cu.alain.chat.core.C.ROOM_DM) {
+                                            IconButton(onClick = { startCall(app, current.room, video = false) }) {
+                                                Icon(Icons.Default.Call, "Llamada de voz")
+                                            }
+                                            IconButton(onClick = { startCall(app, current.room, video = true) }) {
+                                                Icon(Icons.Default.Videocam, "Videollamada")
+                                            }
+                                        }
+                                        IconButton(onClick = {
+                                            stack.add(Screen.RoomSettings(current.room.roomId))
+                                        }) {
+                                            Icon(Icons.Default.Settings, "Ajustes de la sala")
+                                        }
+                                    }
+                                    else -> {}
+                                }
                             },
                         )
+                    },
+                ) { pad ->
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(pad),
+                    ) {
+                        when (val c = current) {
+                            Screen.Home -> HomeTabs(
+                                app = app,
+                                tab = tab,
+                                onTab = { tab = it },
+                                onOpenRoom = { room ->
+                                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
+                                    stack.add(Screen.Chat(room))
+                                },
+                                onEditProfile = { stack.add(Screen.Profile(firstRun = false)) },
+                            )
+                            is Screen.Chat -> ChatScreen(app, c.room.roomId)
+                            is Screen.Profile -> ProfileScreen(
+                                app = app,
+                                firstRun = c.firstRun,
+                                onDone = { stack.removeAt(stack.lastIndex) },
+                            )
+                            is Screen.RoomSettings -> RoomSettingsScreen(
+                                app = app,
+                                roomId = c.roomId,
+                                onDeleted = {
+                                    // la sala murió: volver a la lista de chats
+                                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
+                                    Notifier.cancelRoom(ctx, c.roomId)
+                                },
+                            )
+                        }
                     }
                 }
-            }
             } // fin Box UI normal
+
             if (callState != null) {
-                // se dibuja al final: ENCIMA de la barra de estado visualmente
+                // se dibuja al final: ENCIMA de todo
                 cu.alain.chat.calls.CallScreenOverlay(app)
             }
+        }
+    }
+}
+
+/**
+ * Pestañas inferiores (v0.7.0, como el mockup): Chats · Llamadas · Ajustes.
+ * No existe la pestaña de «estados» — decisión de la pareja.
+ */
+@Composable
+private fun HomeTabs(
+    app: ChatApp,
+    tab: Int,
+    onTab: (Int) -> Unit,
+    onOpenRoom: (Room) -> Unit,
+    onEditProfile: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f)) {
+            when (tab) {
+                0 -> RoomsScreen(app, onOpenRoom)
+                1 -> CallsScreen(app)
+                else -> SettingsScreen(app, onEditProfile = onEditProfile)
+            }
+        }
+        NavigationBar {
+            NavigationBarItem(
+                selected = tab == 0,
+                onClick = { onTab(0) },
+                icon = { Icon(Icons.Default.Chat, "Chats") },
+                label = { Text("Chats") },
+            )
+            NavigationBarItem(
+                selected = tab == 1,
+                onClick = { onTab(1) },
+                icon = { Icon(Icons.Default.Call, "Llamadas") },
+                label = { Text("Llamadas") },
+            )
+            NavigationBarItem(
+                selected = tab == 2,
+                onClick = { onTab(2) },
+                icon = { Icon(Icons.Default.Settings, "Ajustes") },
+                label = { Text("Ajustes") },
+            )
         }
     }
 }
