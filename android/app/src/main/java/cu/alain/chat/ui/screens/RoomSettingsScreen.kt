@@ -173,57 +173,68 @@ fun RoomSettingsScreen(app: ChatApp, roomId: String, onDeleted: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "El nombre y la foto se comparten cifrados con la otra " +
-                        "persona de la sala: se le cambian solos en su teléfono.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(10.dp))
-                OutlinedTextField(
-                    modifier = Modifier.fillMaxWidth(),
-                    value = name,
-                    onValueChange = { if (it.length <= RoomInfoMsg.MAX_NAME) name = it; error = null },
-                    label = { Text("Nombre de la sala") },
-                    singleLine = true,
-                    isError = error != null,
-                    enabled = hasKey,
-                )
-                if (!hasKey) {
+                if (room.kind == cu.alain.chat.core.C.ROOM_DM) {
+                    // chat directo (D74): el nombre/avatar son el PERFIL del par —
+                    // no se renombran aquí; cambiarían desde el perfil de él/ella.
                     Text(
-                        "Esta sala no tiene su clave en este teléfono: el nombre solo cambia aquí.",
+                        "Este chat es personal (1 a 1): el nombre y la foto que ves " +
+                            "son el perfil de la otra persona, no de la conversación.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    enabled = !saving && name.isNotBlank(),
-                    onClick = {
-                        saving = true; error = null
-                        scope.launch {
-                            val keep = hasPhoto && newPhotoBytes == null
-                            val r = app.engine.setRoomInfo(roomId, name, newPhotoBytes, keep)
-                            saving = false
-                            r.fold(
-                                onSuccess = {
-                                    newPhotoBytes = null
-                                    WorkSync.kickOutbox(app)
-                                },
-                                onFailure = { e -> error = e.message ?: "No se pudo guardar" },
-                            )
-                        }
-                    },
-                ) {
-                    if (saving) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
+                } else {
+                    Text(
+                        "El nombre y la foto se comparten cifrados con la otra " +
+                            "persona de la sala: se le cambian solos en su teléfono.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(),
+                        value = name,
+                        onValueChange = { if (it.length <= RoomInfoMsg.MAX_NAME) name = it; error = null },
+                        label = { Text("Nombre de la sala") },
+                        singleLine = true,
+                        isError = error != null,
+                        enabled = hasKey,
+                    )
+                    if (!hasKey) {
+                        Text(
+                            "Esta sala no tiene su clave en este teléfono: el nombre solo cambia aquí.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    Text("Guardar cambios")
+                    error?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        enabled = !saving && name.isNotBlank(),
+                        onClick = {
+                            saving = true; error = null
+                            scope.launch {
+                                val keep = hasPhoto && newPhotoBytes == null
+                                val r = app.engine.setRoomInfo(roomId, name, newPhotoBytes, keep)
+                                saving = false
+                                r.fold(
+                                    onSuccess = {
+                                        newPhotoBytes = null
+                                        WorkSync.kickOutbox(app)
+                                    },
+                                    onFailure = { e -> error = e.message ?: "No se pudo guardar" },
+                                )
+                            }
+                        },
+                    ) {
+                        if (saving) {
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Text("Guardar cambios")
+                    }
                 }
             }
         }
@@ -260,7 +271,10 @@ fun RoomSettingsScreen(app: ChatApp, roomId: String, onDeleted: () -> Unit) {
         if (inviteCode != null) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Código de invitación", style = MaterialTheme.typography.titleMedium,
+                    Text(
+                        if (room.kind == cu.alain.chat.core.C.ROOM_DM) "Código de recuperación del chat"
+                        else "Código de invitación",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
                     Text(

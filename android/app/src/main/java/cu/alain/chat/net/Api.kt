@@ -12,7 +12,12 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /** Respuesta exitosa de /sync (204 → rows vacías). rd = seq entregado por otros por sala (D68). */
-data class SyncResp(val nextSeq: Long, val rows: List<SyncRow>, val rd: List<Pair<String, Long>> = emptyList())
+data class SyncResp(
+    val nextSeq: Long,
+    val rows: List<SyncRow>,
+    val rd: List<Pair<String, Long>> = emptyList(),
+    val dm: List<DmPickup> = emptyList(),
+)
 
 /** Fila de /sync: [msg_id, room_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]. */
 data class SyncRow(
@@ -25,6 +30,21 @@ data class SyncRow(
     val senderUname: String,
     val ts: Long,
 )
+
+/** Chat directo pendiente de recoger (D74): roomKey ENVUELTA + pública del creador. */
+data class DmPickup(
+    val roomId: String,
+    val fromUid: String,
+    val fromUname: String,
+    val fromPubB64: String?,
+    val wrappedB64: String,
+)
+
+/** Usuario encontrado por búsqueda (D74). */
+data class FoundUser(val uid: String, val uname: String, val pubB64: String?)
+
+/** Respuesta de dm_new: el chat de la pareja (recién creado o el que ya existía). */
+data class DmResp(val roomId: String, val exists: Boolean, val wrappedForMeB64: String?)
 
 /** Error del API con código HTTP + código simbólico del servidor. */
 class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
@@ -43,6 +63,11 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
             "room_taken" -> "Esa sala ya existe y pertenece a otra persona"
             "room_full" -> "La sala alcanzó el máximo de miembros"
             "room_cap" -> "Alcanzaste el máximo de salas que puedes crear"
+            "dm_cap" -> "Alcanzaste el máximo de chats directos"
+            "no_user" -> "No existe ningún usuario con ese nombre"
+            "self_dm" -> "No puedes crear un chat contigo mismo"
+            "peer_no_key" -> "Esa persona aún no actualiza a la nueva versión (chats directos)"
+            "bad_pk" -> "Clave del teléfono inválida"
             "too_many" -> "Lote demasiado grande; inténtalo de nuevo"
             "unauthorized" -> "Tu sesión expiró; inicia sesión de nuevo"
             "network" -> "Sin conexión o el servidor no responde"
@@ -103,23 +128,28 @@ class Api(private val baseUrl: () -> String) {
 
     // ---------- auth ----------
 
-    suspend fun register(u: String, p: String, d: String, invite: String): AuthResp = withContext(Dispatchers.IO) {
-        val (code, j) = post("/auth", JSONObject()
-            .put("a", "reg").put("u", u).put("p", p).put("d", d).put("ic", invite))
-        when (code) {
-            201 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
-            else -> throw ApiException(code, j.errOr("reg_failed"))
+    suspend fun register(u: String, p: String, d: String, invite: String, pubB64: String? = null): AuthResp =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("a", "reg").put("u", u).put("p", p).put("d", d).put("ic", invite)
+            pubB64?.let { body.put("pk", it) }
+            val (code, j) = post("/auth", body)
+            when (code) {
+                201 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
+                else -> throw ApiException(code, j.errOr("reg_failed"))
+            }
         }
-    }
 
-    suspend fun login(u: String, p: String, d: String): AuthResp = withContext(Dispatchers.IO) {
-        val (code, j) = post("/auth", JSONObject()
-            .put("a", "in").put("u", u).put("p", p).put("d", d))
-        when (code) {
-            200 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
-            else -> throw ApiException(code, j.errOr("login_failed"))
+    suspend fun login(u: String, p: String, d: String, pubB64: String? = null): AuthResp =
+        withContext(Dispatchers.IO) {
+            val body = JSONObject().put("a", "in").put("u", u).put("p", p).put("d", d)
+            pubB64?.let { body.put("pk", it) }
+            val (code, j) = post("/auth", body)
+            when (code) {
+                200 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
+                else -> throw ApiException(code, j.errOr("login_failed"))
+            }
         }
-    }
 
     suspend fun logout(token: String) = withContext(Dispatchers.IO) {
         try { post("/auth", JSONObject().put("a", "out"), token) } catch (_: Exception) { }
@@ -158,6 +188,85 @@ class Api(private val baseUrl: () -> String) {
         }
     }
 
+    // ---------- chats directos (D74) ----------
+
+    /** (Re)sube la pública X25519 de este teléfono. Best-effort. */
+    suspend fun uploadPub(token: String, pubB64: String) = withContext(Dispatchers.IO) {
+        try {
+            post("/auth", JSONObject().put("a", "pk").put("pk", pubB64), token)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Busca usuarios por prefijo de @nombre (máx 10, sin yo). */
+    suspend fun searchUsers(token: String, q: String): List<FoundUser> = withContext(Dispatchers.IO) {
+        val (code, j) = post("/auth", JSONObject().put("a", "search").put("q", q), token)
+        if (code != 200) throw ApiException(code, j.errOr("search_failed"))
+        val arr: JSONArray = j.getJSONArray("r")
+        buildList {
+            for (i in 0 until arr.length()) {
+                val r = arr.getJSONArray(i)
+                add(FoundUser(r.getString(0), r.getString(1), r.optString(2).takeIf { it.isNotEmpty() && it != "null" }))
+            }
+        }
+    }
+
+    /** Crea el chat directo de la pareja (idempotente). wrappedB64 = roomKey envuelta para el par. */
+    suspend fun dmNew(token: String, roomId: String, peerUname: String, wrappedB64: String): DmResp =
+        withContext(Dispatchers.IO) {
+            val (code, j) = post(
+                "/auth",
+                JSONObject().put("a", "dm_new").put("r", roomId).put("peer", peerUname).put("w", wrappedB64),
+                token,
+            )
+            when (code) {
+                200, 201 -> DmResp(
+                    roomId = j.getString("room"),
+                    exists = j.optInt("exists", 0) == 1,
+                    wrappedForMeB64 = j.optString("w").takeIf { it.isNotEmpty() && it != "null" },
+                )
+                else -> throw ApiException(code, j.errOr("dm_failed"))
+            }
+        }
+
+    /** Confirma que el wrap del chat directo ya fue recogido y procesado. */
+    suspend fun dmAck(token: String, roomId: String) = withContext(Dispatchers.IO) {
+        try {
+            post("/auth", JSONObject().put("a", "dm_ack").put("r", roomId), token)
+        } catch (_: Exception) {
+        }
+    }
+
+    /**
+     * Broadcast directo por Realtime REST (anon key, canales no privados —
+     * hallazgos 10-11). Lo usa la señalización de llamadas; el timbre del
+     * receptor lo recibe por el WebSocket. Topic SIN prefijo "realtime:"
+     * (hallazgo 10). NO transporta secretos: solo despertares y metadatos
+     * de señalización.
+     */
+    suspend fun broadcast(topic: String, event: String, payload: JSONObject): Boolean =
+        withContext(Dispatchers.IO) {
+            // base = https://<host>/functions/v1 → root = https://<host>
+            val root = base.substringBefore("/functions/v1")
+            if (root.isEmpty() || root == base) return@withContext false
+            return@withContext try {
+                val body = JSONObject()
+                    .put("messages", JSONArray().put(
+                        JSONObject().put("topic", topic).put("event", event).put("payload", payload),
+                    ))
+                    .toString()
+                    .toRequestBody(JSON)
+                val req = Request.Builder()
+                    .url(root.removeSuffix("/") + "/realtime/v1/api/broadcast")
+                    .header("apikey", C.ANON_KEY)
+                    .post(body)
+                    .build()
+                client.newCall(req).execute().use { it.code in 200..299 }
+            } catch (_: Exception) {
+                false
+            }
+        }
+
     // ---------- sync ----------
 
     suspend fun sync(token: String, sinceSeq: Long, limit: Int = C.SYNC_LIMIT): SyncResp =
@@ -193,7 +302,23 @@ class Api(private val baseUrl: () -> String) {
                             add(r.getString(0) to r.getLong(1))
                         }
                     } else emptyList()
-                    SyncResp(j.getLong("n"), rows, rd)
+                    // dm (v0.7.0, D74): [[roomId, fromUid, fromUname, fromPubB64, wrappedB64]]
+                    val dmArr = j.optJSONArray("dm")
+                    val dm = if (dmArr != null) buildList {
+                        for (i in 0 until dmArr.length()) {
+                            val r = dmArr.getJSONArray(i)
+                            add(
+                                DmPickup(
+                                    roomId = r.getString(0),
+                                    fromUid = r.getString(1),
+                                    fromUname = r.getString(2),
+                                    fromPubB64 = r.optString(3).takeIf { it.isNotEmpty() && it != "null" },
+                                    wrappedB64 = r.getString(4),
+                                ),
+                            )
+                        }
+                    } else emptyList()
+                    SyncResp(j.getLong("n"), rows, rd, dm)
                 }
                 else -> {
                     val e = try { JSONObject(raw).optString("e") } catch (_: Exception) { "" }

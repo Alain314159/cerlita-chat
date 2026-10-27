@@ -25,6 +25,8 @@ data class Room(
     val createdAt: Long,
     val unread: Int = 0,        // mensajes del par sin leer (badge, v0.6.0)
     val photo: Boolean = false, // foto de sala E2EE en avatars/room-<id>.jpg (D69)
+    val kind: Int = 0,          // 0=grupo · 1=chat directo (v0.7.0, D74)
+    val peerUid: String? = null, // en DM: uid del otro (nombre/avatar vienen de su perfil)
 )
 
 /** Mensaje descifrado (o marcado ilegible) para la UI. */
@@ -100,6 +102,23 @@ data class Profile(
 data class RoomPeer(
     val roomId: String,
     val uid: String,
+)
+
+// ───────────── entidades v5 (v0.7.0: llamadas) ─────────────
+
+/** Registro LOCAL de llamadas (no se sincroniza: es la historia del teléfono). */
+@Entity(tableName = "calls")
+data class CallLog(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val roomId: String,
+    val peerUid: String,
+    val peerName: String,       // nombre del par en el momento (perfil E2EE o @user)
+    val kind: Int,              // 0=audio · 1=vídeo
+    val dir: Int,               // 0=saliente · 1=entrante
+    val status: Int,            // CALL_*: completed/missed/declined/cancelled
+    val startedAt: Long,
+    val answeredAt: Long = 0,
+    val duration: Long = 0,     // segundos (si fue contestada)
 )
 
 // ─────────────────────────── DAOs ───────────────────────────
@@ -324,6 +343,21 @@ interface RoomPeerDao {
     suspend fun wipe()
 }
 
+@Dao
+interface CallLogDao {
+    @Query("SELECT * FROM calls ORDER BY startedAt DESC")
+    fun observeAll(): Flow<List<CallLog>>
+
+    @Insert
+    suspend fun insert(c: CallLog): Long
+
+    @Query("UPDATE calls SET status = :status, answeredAt = :answeredAt, duration = :duration WHERE id = :id")
+    suspend fun finish(id: Long, status: Int, answeredAt: Long, duration: Long)
+
+    @Query("DELETE FROM calls")
+    suspend fun wipe()
+}
+
 /** Fila de la lista de chats: sala + perfil del par + último mensaje texto. */
 data class RoomListItem(
     val roomId: String,
@@ -428,10 +462,27 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/**
+ * v4 → v5 (v0.7.0): chats directos (kind/peerUid en rooms) + registro LOCAL
+ * de llamadas. Migración REAL: hay teléfonos reales con v0.6.0.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE rooms ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN peerUid TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `calls` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`roomId` TEXT NOT NULL, `peerUid` TEXT NOT NULL, `peerName` TEXT NOT NULL, " +
+                "`kind` INTEGER NOT NULL, `dir` INTEGER NOT NULL, `status` INTEGER NOT NULL, " +
+                "`startedAt` INTEGER NOT NULL, `answeredAt` INTEGER NOT NULL, `duration` INTEGER NOT NULL)"
+        )
+    }
+}
+
 @Database(
     entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class,
-        Profile::class, RoomPeer::class],
-    version = 4,
+        Profile::class, RoomPeer::class, CallLog::class],
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -443,13 +494,14 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun profileDao(): ProfileDao
     abstract fun roomPeerDao(): RoomPeerDao
     abstract fun roomListDao(): RoomListDao
+    abstract fun callLogDao(): CallLogDao
 
     companion object {
         fun build(ctx: Context): AppDatabase =
             // androidx.room.Room (calificado: la entidad local se llama Room)
             androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
-                // Solo para rutas FUTURAS desconocidas; 2→3 y 3→4 tienen migración real.
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                // Solo para rutas FUTURAS desconocidas; 2→3, 3→4 y 4→5 tienen migración real.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

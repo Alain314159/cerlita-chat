@@ -150,6 +150,8 @@ class ChatApp : Application(), Configuration.Provider {
             scope = appScope,
             onDoorbell = { _ -> appScope.launch { engine.syncOnce() } },
             onConnected = { appScope.launch { engine.syncOnce() } },
+            onBroadcast = { event, payload -> onRealtimeEvent(event, payload) },
+            userId = { store.session?.uid?.lowercase() },
         )
         appDoorbell = d
         d.start()
@@ -165,6 +167,19 @@ class ChatApp : Application(), Configuration.Provider {
         // proceso — los ciclos abrir/cerrar no filtran hilos
         appDoorbell?.stop()
         appDoorbell = null
+    }
+
+    /**
+     * Broadcasts del timbre que NO son "mensaje nuevo" (v0.7.0):
+     *  - "dm"  → chat directo nuevo para mí: /sync recoge el wrap (D74).
+     *  - "sig" → señalización de llamadas (lo consume el CallDispatcher, D75).
+     * Lo comparten el timbre in-app y el FGS — un solo punto de decisión.
+     */
+    fun onRealtimeEvent(event: String, payload: String) {
+        when (event) {
+            "dm" -> appScope.launch { engine.syncOnce() }
+            "sig" -> cu.alain.chat.calls.CallDispatcher.onSignal(this, payload) // llamadas (D75)
+        }
     }
 
     /**

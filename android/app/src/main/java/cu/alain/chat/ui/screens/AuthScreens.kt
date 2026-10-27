@@ -68,7 +68,8 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
         busy.value = ""
         viewModelScope.launch {
             try {
-                val r = app.api.login(u, p, app.prefs.deviceId)
+                val pub = app.store.ensureDeviceKeyPair().first.pubB64 // D74: pública del teléfono
+                val r = app.api.login(u, p, app.prefs.deviceId, pub)
                 app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId)
                 busy.value = null; onDone()
             } catch (e: Exception) {
@@ -81,7 +82,8 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
         busy.value = ""
         viewModelScope.launch {
             try {
-                val r = app.api.register(u, p, app.prefs.deviceId, invite)
+                val pub = app.store.ensureDeviceKeyPair().first.pubB64 // D74: pública del teléfono
+                val r = app.api.register(u, p, app.prefs.deviceId, invite, pub)
                 app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId)
                 busy.value = null; onDone()
             } catch (e: Exception) {

@@ -21,7 +21,7 @@ class PhoenixTest {
 
     @Test
     fun `join con config de broadcast`() {
-        val o = JSONObject(Phoenix.join(rid, "3"))
+        val o = JSONObject(Phoenix.join("room-$rid", "3"))
         assertEquals("realtime:room-$rid", o.getString("topic"))
         assertEquals("phx_join", o.getString("event"))
         assertEquals("3", o.getString("ref"))
@@ -41,9 +41,16 @@ class PhoenixTest {
 
     @Test
     fun `leave de una sala`() {
-        val o = JSONObject(Phoenix.leave(rid, "12"))
+        val o = JSONObject(Phoenix.leave("room-$rid", "12"))
         assertEquals("realtime:room-$rid", o.getString("topic"))
         assertEquals("phx_leave", o.getString("event"))
+    }
+
+    @Test
+    fun `join del topic personal (dm y llamadas)`() {
+        val o = JSONObject(Phoenix.join("user-uid-123", "5"))
+        assertEquals("realtime:user-uid-123", o.getString("topic"))
+        assertEquals("phx_join", o.getString("event"))
     }
 
     // ─────────────────── frames que recibimos (capturas reales) ───────────────────
@@ -91,8 +98,17 @@ class PhoenixTest {
     fun `eventos ajenos se ignoran`() {
         assertNull(Phoenix.parse("""{"event":"presence_diff","payload":{},"topic":"realtime:t"}"""))
         assertNull(Phoenix.parse("""{"event":"phx_error","payload":{},"topic":"phoenix"}"""))
-        // un broadcast de OTRO evento (no new-msg) no es timbre
-        assertNull(Phoenix.parse("""{"event":"broadcast","payload":{"event":"otra-cosa"},"topic":"realtime:t"}"""))
+        // un broadcast de OTRO evento (no new-msg) NO es timbre: llega como
+        // Broadcast genérico (dm / señalización de llamadas, v0.7.0) con su payload
+        val f = Phoenix.parse("""{"event":"broadcast","payload":{"event":"dm","payload":{"roomId":"$rid"},"type":"broadcast"},"topic":"realtime:user-yo"}""")
+        assertTrue(f is Phoenix.Frame.Broadcast)
+        f as Phoenix.Frame.Broadcast
+        assertEquals("dm", f.event)
+        assertEquals("""{"roomId":"$rid"}""", f.payload)
+        // payload ausente → "{}" (nunca null: el receptor siempre parsea JSON)
+        val g = Phoenix.parse("""{"event":"broadcast","payload":{"event":"sig"},"topic":"realtime:t"}""")
+        assertTrue(g is Phoenix.Frame.Broadcast)
+        assertEquals("{}", (g as Phoenix.Frame.Broadcast).payload)
     }
 
     @Test

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PersonSearch
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
@@ -47,6 +50,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +72,7 @@ import cu.alain.chat.ChatApp
 import cu.alain.chat.core.C
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.RoomJoined
+import cu.alain.chat.net.FoundUser
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.notify.Notifier
 import kotlinx.coroutines.launch
@@ -110,6 +115,16 @@ class RoomsViewModel(app: Application) : AndroidViewModel(app) {
             onDone(r)
         }
     }
+
+    /** Chat directo 1-a-1 con un usuario buscado por @nombre (v0.7.0, D74). */
+    fun createDm(uname: String, onDone: (Result<Room>) -> Unit) {
+        busy.value = ""
+        viewModelScope.launch {
+            val r = app.engine.createDm(uname)
+            busy.value = null
+            onDone(r)
+        }
+    }
 }
 
 // ───────────────────────────── Pantalla ─────────────────────────────
@@ -129,10 +144,29 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     val keysVersion by app.engine.keysVersion.collectAsState()
 
     var showAdd by remember { mutableStateOf(false) }
-    var addMode by remember { mutableStateOf(0) }              // 0=crear 1=unirme
+    var addMode by remember { mutableStateOf(0) }              // 0=chat directo 1=grupo 2=unirme
     var roomName by remember { mutableStateOf("") }
     var inviteCode by remember { mutableStateOf("") }
     var addError by remember { mutableStateOf<String?>(null) }
+
+    // ── búsqueda de usuarios (chat directo, D74) ──
+    var searchQ by remember { mutableStateOf("") }
+    var results by remember { mutableStateOf<List<FoundUser>?>(null) } // null = aún sin buscar
+    var searching by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+    var creatingDm by remember { mutableStateOf<String?>(null) }       // uname en curso
+    LaunchedEffect(searchQ) {
+        searchError = null
+        val q = searchQ.trim().lowercase().removePrefix("@")
+        if (q.isEmpty()) { results = null; return@LaunchedEffect }
+        searching = true
+        kotlinx.coroutines.delay(350) // debounce
+        if (q != searchQ.trim().lowercase().removePrefix("@")) return@LaunchedEffect
+        val r = try { app.api.searchUsers(app.engine.session!!.token, q) } catch (e: Exception) { null }
+        searching = false
+        if (r == null) searchError = "Sin conexión o el servidor no respondió"
+        else results = r
+    }
 
     var ready by remember { mutableStateOf<RoomJoined?>(null) } // SAS + código tras crear/unir
 
@@ -194,61 +228,172 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
         }
 
         FloatingActionButton(
-            onClick = { showAdd = true; addError = null; addMode = 0; roomName = ""; inviteCode = "" },
+            onClick = {
+                showAdd = true; addError = null; addMode = 0; roomName = ""; inviteCode = ""
+                searchQ = ""; results = null; searchError = null
+            },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
-        ) { Icon(Icons.Default.Add, "Nueva sala") }
+        ) { Icon(Icons.Default.Add, "Nuevo chat") }
     }
 
-    // ── diálogo crear / unirme ──
+    // ── diálogo nuevo chat: directo / grupo / unirme (v0.7.0) ──
     if (showAdd) {
         AlertDialog(
-            onDismissRequest = { if (busy == null) showAdd = false },
-            title = { Text(if (addMode == 0) "Crear una sala" else "Unirme con código") },
+            onDismissRequest = { if (busy == null && creatingDm == null) showAdd = false },
+            title = { Text("Nuevo chat") },
             text = {
                 Column {
-                    Text(
-                        if (addMode == 0)
-                            "La app genera una clave secreta para la sala. Recibirás un CÓDIGO DE INVITACIÓN para dárselo a la otra persona: es el único modo de entrar, guárdalo bien."
-                        else
-                            "Pega el código de invitación que te pasó la otra persona (se copia entero, con guiones).",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    Spacer(Modifier.height(12.dp))
                     Row {
-                        TextButton(onClick = { addMode = 0 }) {
-                            Text(
-                                "Crear", fontWeight = if (addMode == 0) FontWeight.Bold else FontWeight.Normal,
-                                color = if (addMode == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        TextButton(onClick = { addMode = 0; addError = null; searchError = null }) {
+                            Icon(Icons.Default.PersonSearch, null, Modifier.size(15.dp),
+                                tint = if (addMode == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Chat directo", fontWeight = if (addMode == 0) FontWeight.Bold else FontWeight.Normal,
+                                color = if (addMode == 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        TextButton(onClick = { addMode = 1 }) {
-                            Text(
-                                "Unirme", fontWeight = if (addMode == 1) FontWeight.Bold else FontWeight.Normal,
-                                color = if (addMode == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                        TextButton(onClick = { addMode = 1; addError = null }) {
+                            Icon(Icons.Default.Groups, null, Modifier.size(15.dp),
+                                tint = if (addMode == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Grupo", fontWeight = if (addMode == 1) FontWeight.Bold else FontWeight.Normal,
+                                color = if (addMode == 1) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { addMode = 2; addError = null }) {
+                            Text("Unirme", fontWeight = if (addMode == 2) FontWeight.Bold else FontWeight.Normal,
+                                color = if (addMode == 2) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-                    if (addMode == 0) {
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(), value = roomName,
-                            onValueChange = { roomName = it },
-                            label = { Text("Nombre de la sala (opcional)") }, singleLine = true,
-                        )
-                    } else {
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(), value = inviteCode,
-                            onValueChange = { inviteCode = it.uppercase() },
-                            label = { Text("Código de invitación") },
-                            singleLine = true,
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            modifier = Modifier.fillMaxWidth(), value = roomName,
-                            onValueChange = { roomName = it },
-                            label = { Text("Nombre de la sala (opcional)") }, singleLine = true,
-                        )
+                    when (addMode) {
+                        0 -> {
+                            Text(
+                                "Busca a la otra persona por su @usuario y el chat se crea solo, " +
+                                    "sin códigos. El cifrado de extremo a extremo se mantiene.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(), value = searchQ,
+                                onValueChange = { searchQ = it.lowercase() },
+                                label = { Text("@usuario") }, singleLine = true,
+                            )
+                            when {
+                                searching -> {
+                                    Spacer(Modifier.height(8.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(Modifier.height(14.dp).width(14.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Buscando…", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                                searchError != null -> {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(searchError!!, color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                                results?.isEmpty() == true -> {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        "Nadie con ese nombre todavía. El @usuario es el que puso al registrarse.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                results != null -> {
+                                    Spacer(Modifier.height(6.dp))
+                                    Column(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(max = 220.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                    ) {
+                                        results!!.forEach { u ->
+                                            Row(
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .combinedClickable(
+                                                        onClick = {
+                                                            if (creatingDm == null && busy == null) {
+                                                                creatingDm = u.uname
+                                                                addError = null
+                                                                vm.createDm(u.uname) { r ->
+                                                                    creatingDm = null
+                                                                    r.onSuccess { room ->
+                                                                        showAdd = false
+                                                                        onOpenRoom(room)
+                                                                    }.onFailure { e -> addError = errText(e) }
+                                                                }
+                                                            }
+                                                        },
+                                                    )
+                                                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Surface(
+                                                    color = if (u.pubB64 != null) MaterialTheme.colorScheme.primaryContainer
+                                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                                    shape = CircleShape,
+                                                ) {
+                                                    Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            u.uname.take(1).uppercase(),
+                                                            style = MaterialTheme.typography.titleMedium,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                        )
+                                                    }
+                                                }
+                                                Spacer(Modifier.width(10.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text("@${u.uname}", style = MaterialTheme.typography.bodyLarge)
+                                                    Text(
+                                                        if (u.pubB64 != null) "Listo para chatear"
+                                                        else "Aún no actualiza la app",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    )
+                                                }
+                                                if (creatingDm == u.uname) {
+                                                    CircularProgressIndicator(Modifier.height(14.dp).width(14.dp), strokeWidth = 2.dp)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        1 -> {
+                            Text(
+                                "La app genera una clave secreta para el grupo. Recibirás un CÓDIGO DE " +
+                                    "INVITACIÓN para dárselo a los demás: es el único modo de entrar, guárdalo bien.",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(), value = roomName,
+                                onValueChange = { roomName = it },
+                                label = { Text("Nombre del grupo (opcional)") }, singleLine = true,
+                            )
+                        }
+                        else -> {
+                            Text(
+                                "Pega el código de invitación que te pasó la otra persona (se copia entero, con guiones).",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(), value = inviteCode,
+                                onValueChange = { inviteCode = it.uppercase() },
+                                label = { Text("Código de invitación") },
+                                singleLine = true,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                modifier = Modifier.fillMaxWidth(), value = roomName,
+                                onValueChange = { roomName = it },
+                                label = { Text("Nombre de la sala (opcional)") }, singleLine = true,
+                            )
+                        }
                     }
                     addError?.let {
                         Spacer(Modifier.height(8.dp))
@@ -259,10 +404,14 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
             },
             confirmButton = {
                 Button(
-                    enabled = busy == null && (addMode == 0 || inviteCode.isNotBlank()),
+                    enabled = when (addMode) {
+                        0 -> false // el chat directo se abre tocando un resultado
+                        1 -> busy == null
+                        else -> busy == null && inviteCode.isNotBlank()
+                    },
                     onClick = {
                         addError = null
-                        if (addMode == 0) {
+                        if (addMode == 1) {
                             vm.create(roomName) { r ->
                                 r.onSuccess { showAdd = false; ready = it }
                                     .onFailure { e -> addError = errText(e) }
@@ -279,10 +428,12 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                         CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
                     }
-                    Text(if (addMode == 0) "Crear sala" else "Unirme")
+                    Text(if (addMode == 1) "Crear grupo" else "Unirme")
                 }
             },
-            dismissButton = { TextButton({ showAdd = false }) { Text("Cancelar") } },
+            dismissButton = {
+                TextButton({ if (busy == null && creatingDm == null) showAdd = false }) { Text("Cancelar") }
+            },
         )
     }
 

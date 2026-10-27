@@ -18,6 +18,16 @@ data class Session(
 data class RoomKeyMaterial(val roomId: String, val key: ByteArray, val salt: ByteArray, val sas: String)
 
 /**
+ * Par X25519 del TELÉFONO para chats directos (D74). La privada vive sellada
+ * por Keystore (device_key.bin) y SOBREVIVE al logout — es la identidad
+ * criptográfica de este teléfono: tras cerrar sesión y volver a entrar, los
+ * wraps dirigidos a él siguen siendo descifrables. En un teléfono NUEVO se
+ * genera otro par y los wraps viejos mueren (recuperación: código de
+ * invitación, exactamente igual que las salas de grupo).
+ */
+data class DeviceKeyPair(val privB64: String, val pubB64: String)
+
+/**
  * Almacén local. El token de sesión y las roomKeys van CIFRADOS en reposo por
  * la clave AES-256-GCM respaldada por hardware del AndroidKeyStore (P3).
  * El blob no se puede descifrar fuera de este teléfono (ni con el archivo
@@ -105,6 +115,29 @@ class SessionStore(ctx: Context) {
     }
 
     fun clearRoomKeys() { f("rooms.bin").delete() }
+
+    // ---------- keypair del teléfono (chats directos, D74) ----------
+
+    /** El par actual, o null si este teléfono aún no tiene (se crea con [ensureDeviceKeyPair]). */
+    fun deviceKeyPair(): DeviceKeyPair? {
+        val plain = readSealed("device_key.bin", "device-key-v1") ?: return null
+        return try {
+            val j = JSONObject(String(plain, Charsets.UTF_8))
+            DeviceKeyPair(j.getString("priv"), j.getString("pub"))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Devuelve el par (creándolo si es la 1ª vez) + true si lo acaba de crear. */
+    fun ensureDeviceKeyPair(): Pair<DeviceKeyPair, Boolean> {
+        deviceKeyPair()?.let { return it to false }
+        val kp = cu.alain.chat.crypto.DmCrypto.newKeyPair()
+        val pair = DeviceKeyPair(kp.privB64(), kp.pubB64())
+        val j = JSONObject().put("priv", pair.privB64).put("pub", pair.pubB64)
+        writeSealed("device_key.bin", "device-key-v1", j.toString().toByteArray(Charsets.UTF_8))
+        return pair to true
+    }
 
     // ---------- helpers ----------
 

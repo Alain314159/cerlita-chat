@@ -16,6 +16,17 @@
 //       Borra la membresía y TODO el historial de la sala si queda
 //       vacía (messages.room_id no tiene CASCADE → borrado explícito).
 //   {a:"rooms"}               — lista de salas propias (multi-dispositivo).
+//
+// Chats directos 1-a-1 (v0.7.0, D74) — sin código de invitación, E2EE igual:
+//   {a:"search", q:"prefijo"} — busca usuarios por @nombre (máx 10, sin yo).
+//   {a:"pk", pk:b64}           — (re)sube mi clave pública X25519 (32 B).
+//   {a:"dm_new", r, peer, w}   — crea el chat directo del par (idempotente
+//       por pareja). w = roomKey ENVUELTA para el par (X25519+HKDF+ChaCha,
+//       opaca al servidor). El par la recoge por /sync (campo dm) y acusa
+//       con dm_ack. Si el par ya creó el chat antes, devuelve exists=1 y
+//       el wrap guardado PARA MÍ (si existe) para que pueda intentar
+//       desenveloparlo ahora.
+//   {a:"dm_ack", r}            — el wrap de esa sala ya fue recogido.
 import postgres from "npm:postgres@3.4.9";
 import { argon2id } from "@noble/hashes/argon2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -31,6 +42,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MAX_USERS = 10;
 const MAX_ROOMS_PER_USER = 8;   // A crea: conversación + comandos (bot) + margen
 const MAX_ROOM_MEMBERS = 6;     // A, B, bot, + margen
+const MAX_DMS_PER_USER = 12;    // chats directos por usuario (D74)
+const PUB_LEN = 32;             // X25519 pública: 32 bytes exactos
+const WRAP_MAX = 256;           // blob envuelto: 50 B payload + tag + margen
 
 const enc = new TextEncoder();
 const DEBUG = Deno.env.get("DEBUG") === "1";
@@ -95,6 +109,7 @@ async function register(body: any) {
   const u = typeof body?.u === "string" ? body.u.trim().toLowerCase() : "";
   const p = typeof body?.p === "string" ? body.p : "";
   const d = typeof body?.d === "string" ? body.d : "";
+  const pk = parsePub(body?.pk);
   if (!USERNAME_RE.test(u)) return json(400, { e: "bad_username" });
   if (p.length < 8 || p.length > 512) return json(400, { e: "bad_password" });
   if (!DEVICE_RE.test(d)) return json(400, { e: "bad_device" });
@@ -105,13 +120,22 @@ async function register(body: any) {
   const hash = argon2id(enc.encode(p), salt, ARGON);
   const phc = `$argon2id$v=19$m=${ARGON.m},t=${ARGON.t},p=${ARGON.p}$${b64(salt)}$${b64(hash)}`;
   try {
-    const [row] = await sql`insert into users (username, pass_hash) values (${u}, ${phc}) returning id`;
+    const [row] = await sql`insert into users (username, pass_hash, pub) values (${u}, ${phc}, ${pk}) returning id`;
     const s = await newSession(row.id, d);
     return json(201, { uid: row.id, u, tok: s.tok, exp: s.exp });
   } catch (e: any) {
     if (String(e?.code) === "23505") return json(409, { e: "username_taken" });
     throw e;
   }
+}
+
+/** Clave pública X25519 válida (32 B) o null. Tolerante con ausencia. */
+function parsePub(raw: any): Uint8Array | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    const b = unb64(raw);
+    return b.length === PUB_LEN ? b : null;
+  } catch { return null; }
 }
 
 // ---------- login ----------
@@ -157,6 +181,9 @@ async function login(body: any) {
   }
 
   await sql`update users set failed_logins = 0, locked_until = null where id = ${row.id}`;
+  // (re)sube la pública del teléfono (D74): best-effort, no rompe el login
+  const pk = parsePub(body?.pk);
+  if (pk) await sql`update users set pub = ${pk} where id = ${row.id}`;
   const s = await newSession(row.id, d);
   return json(200, { uid: row.id, u, tok: s.tok, exp: s.exp });
 }
@@ -250,6 +277,116 @@ async function roomList(me: any) {
   return json(200, { rooms: rows.map((x: any) => [x.room_id, x.owner ? 1 : 0]) });
 }
 
+// ---------- search: buscar usuarios por @nombre (D74) ----------
+// Solo prefijo sobre el username público; nunca devuelve mi propia fila.
+async function userSearch(me: any, body: any) {
+  let q = typeof body?.q === "string" ? body.q.trim().toLowerCase() : "";
+  q = q.replace(/[^a-z0-9_]/g, ""); // el username solo tiene estos caracteres
+  if (q.length < 1 || q.length > 24) return json(400, { e: "bad_query" });
+  const rows = await sql`
+    select id, username, pub from users
+    where username like ${q + "%"} and id <> ${me.uid}::uuid
+    order by username limit 10`;
+  return json(200, { r: rows.map((x: any) => [x.id, x.username, x.pub ? b64(new Uint8Array(x.pub)) : null]) });
+}
+
+// ---------- pk: (re)subir mi clave pública X25519 (D74) ----------
+async function uploadPub(me: any, body: any) {
+  const pk = parsePub(body?.pk);
+  if (!pk) return json(400, { e: "bad_pk" });
+  await sql`update users set pub = ${pk} where id = ${me.uid}::uuid`;
+  return json(200, { ok: true });
+}
+
+// ---------- dm_new: crear el chat directo de la pareja (D74, idempotente) ----------
+// r = roomId derivado por el CLIENTE de la roomKey nueva (HKDF, igual que
+// room_new). w = roomKey+salt ENVUELTOS para el par (X25519(privA, pubB) →
+// HKDF → ChaCha20-Poly1305) — el servidor ve un blob opaco de ≤256 B.
+// dm_pair = least(a, b): índice UNIQUE → una sola conversación por pareja.
+async function dmNew(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  const peer = typeof body?.peer === "string" ? body.peer.trim().toLowerCase() : "";
+  const wrapB64 = typeof body?.w === "string" ? body.w : "";
+  if (!UUID_RE.test(r) || !USERNAME_RE.test(peer)) return json(400, { e: "bad_request" });
+  let wrapped: Uint8Array;
+  try { wrapped = unb64(wrapB64); } catch { return json(400, { e: "bad_wrap" }); }
+  if (wrapped.length < 16 || wrapped.length > WRAP_MAX) return json(400, { e: "bad_wrap" });
+
+  const uid = String(me.uid);
+  const [peerRow] = await sql`select id, pub from users where username = ${peer} limit 1`;
+  if (!peerRow) return json(404, { e: "no_user" });
+  if (String(peerRow.id) === uid) return json(400, { e: "self_dm" });
+  if (!peerRow.pub) return json(409, { e: "peer_no_key" }); // aún no actualiza la app
+
+  // ¿ya existe el chat de la pareja? → idempotente
+  const [existing] = await sql`
+    select room_id, (created_by = ${uid}::uuid) as mine from rooms
+    where dm_pair = least(${uid}::uuid, ${peerRow.id}::uuid) limit 1`;
+  if (existing) {
+    // wrap guardado PARA MÍ (creado por el par): lo devuelvo para intentar
+    // desenveloparlo YA (si mi keypair no cambió, recupero el acceso aquí).
+    const [myWrap] = await sql`
+      select wrapped from dm_keys
+      where room_id = ${existing.room_id}::uuid and for_user = ${uid}::uuid
+        and from_user = ${peerRow.id}::uuid limit 1`;
+    const payload: Record<string, unknown> = { ok: true, room: existing.room_id, exists: 1 };
+    if (myWrap) payload.w = b64(new Uint8Array(myWrap.wrapped));
+    return json(200, payload);
+  }
+
+  // tope de chats directos por usuario
+  const [{ n }] = await sql`
+    select count(*)::int as n from room_members rm
+    join rooms r2 on r2.room_id = rm.room_id and r2.kind = 1
+    where rm.user_id = ${uid}::uuid`;
+  if (n >= MAX_DMS_PER_USER) return json(403, { e: "dm_cap" });
+
+  // crear (roomId del cliente; colisión con capability ajena → 409, igual que room_new)
+  await sql`
+    insert into rooms (room_id, created_by, kind, dm_pair)
+    values (${r}::uuid, ${uid}::uuid, 1, least(${uid}::uuid, ${peerRow.id}::uuid))
+    on conflict (room_id) do nothing`;
+  const [ok] = await sql`select 1 as ok from rooms where room_id = ${r}::uuid and created_by = ${uid}::uuid limit 1`;
+  if (!ok) return json(409, { e: "room_taken" });
+
+  await sql`
+    insert into room_members (room_id, user_id) values (${r}::uuid, ${uid}::uuid), (${r}::uuid, ${peerRow.id}::uuid)
+    on conflict do nothing`;
+  // wrap para el par (idempotente: reintento con otro roomId no puede pasar
+  // porque dm_pair ya existiría → llegamos arriba; aquí solo reintentos de red)
+  await sql`
+    insert into dm_keys (room_id, for_user, from_user, wrapped)
+    values (${r}::uuid, ${peerRow.id}::uuid, ${uid}::uuid, ${wrapped})
+    on conflict (room_id, for_user) do update set wrapped = excluded.wrapped, consumed_at = null`;
+
+  // despertar al par si está en línea (topic personal, hallazgo 10: sin prefijo)
+  try {
+    const surl = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
+    const anon = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+    if (surl && anon) {
+      await fetch(`${surl}/realtime/v1/api/broadcast`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${anon}`, "apikey": anon, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ topic: `user-${peerRow.id}`, event: "dm", payload: { roomId: r } }],
+        }),
+      });
+    }
+  } catch (_e) { /* best-effort: el sync periódico lo trae igual */ }
+
+  return json(201, { ok: true, room: r, exists: 0 });
+}
+
+// ---------- dm_ack: el wrap ya fue recogido y procesado (D74) ----------
+async function dmAck(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_request" });
+  await sql`
+    update dm_keys set consumed_at = now()
+    where room_id = ${r}::uuid and for_user = ${me.uid}::uuid and consumed_at is null`;
+  return json(200, { ok: true });
+}
+
 // ---------- router ----------
 Deno.serve(async (req) => {
   try {
@@ -273,6 +410,10 @@ Deno.serve(async (req) => {
     if (body.a === "room_join") return await roomJoin(me, body);
     if (body.a === "room_leave") return await roomLeave(me, body);
     if (body.a === "rooms") return await roomList(me);
+    if (body.a === "search") return await userSearch(me, body);
+    if (body.a === "pk") return await uploadPub(me, body);
+    if (body.a === "dm_new") return await dmNew(me, body);
+    if (body.a === "dm_ack") return await dmAck(me, body);
     return json(400, { e: "bad_action" });
   } catch (e) {
     console.error("auth error:", e);

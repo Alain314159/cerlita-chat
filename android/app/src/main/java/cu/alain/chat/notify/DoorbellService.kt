@@ -84,6 +84,8 @@ class DoorbellService : Service() {
                 scope.launch { app.engine.syncOnce() }
             },
             onStateChange = { connected = it },
+            onBroadcast = { event, payload -> app.onRealtimeEvent(event, payload) }, // dm + llamadas
+            userId = { app.store.session?.uid?.lowercase() },
         ).also { it.start() }
 
         // Suscribirse a las salas locales; el Flow re-emite al crear/unirse.

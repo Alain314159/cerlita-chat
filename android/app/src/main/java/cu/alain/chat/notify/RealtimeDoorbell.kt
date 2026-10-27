@@ -42,6 +42,10 @@ class RealtimeDoorbell(
     private val onDoorbell: (roomId: String?) -> Unit,
     private val onConnected: () -> Unit = {},
     private val onStateChange: ((Boolean) -> Unit)? = null,
+    /** Otros broadcasts (dm nuevo, señalización de llamadas): payload crudo JSON. */
+    private val onBroadcast: (event: String, payload: String) -> Unit = { _, _ -> },
+    /** uid con sesión: se suscribe además al topic personal user-<uid> (D74). */
+    private val userId: () -> String? = { null },
 ) {
     /** URL del WS derivada de la URL base (https://x/functions/v1 → wss://x/...). */
     private val wsUrl: String = run {
@@ -92,8 +96,8 @@ class RealtimeDoorbell(
         val remove = topics - wanted
         topics = wanted
         if (!connected) return
-        add.forEach { send(Phoenix.join(it, nextRef())) }
-        remove.forEach { send(Phoenix.leave(it, nextRef())) }
+        add.forEach { send(Phoenix.join("room-$it", nextRef())) }
+        remove.forEach { send(Phoenix.leave("room-$it", nextRef())) }
     }
 
     // ────────────────────────── conexión ──────────────────────────
@@ -117,7 +121,8 @@ class RealtimeDoorbell(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             backoffMs = 5_000L
             setConnected(true)
-            topics.forEach { send(Phoenix.join(it, nextRef())) }
+            topics.forEach { send(Phoenix.join("room-$it", nextRef())) }
+            userId()?.let { send(Phoenix.join("user-$it", nextRef())) } // D74: dm + llamadas
             startHeartbeat()
             onConnected() // reconexión = re-sync (nada perdido)
         }
@@ -125,10 +130,11 @@ class RealtimeDoorbell(
         override fun onMessage(webSocket: WebSocket, text: String) {
             when (val f = Phoenix.parse(text)) {
                 is Phoenix.Frame.Doorbell -> onDoorbell(f.roomId)
+                is Phoenix.Frame.Broadcast -> onBroadcast(f.event, f.payload)
                 is Phoenix.Frame.Reply -> if (!f.ok && f.topic.startsWith("realtime:")) {
                     // join rechazado (raro): reintentarlo en 5 s
-                    val rid = f.topic.removePrefix("realtime:room-")
-                    scope.launch { delay(5_000); if (connected) send(Phoenix.join(rid, nextRef())) }
+                    val topic = f.topic.removePrefix("realtime:")
+                    scope.launch { delay(5_000); if (connected) send(Phoenix.join(topic, nextRef())) }
                 }
                 null -> {}
             }

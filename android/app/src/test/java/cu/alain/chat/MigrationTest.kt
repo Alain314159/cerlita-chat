@@ -129,4 +129,71 @@ class MigrationTest {
             db.close()
         }
     }
+
+    /**
+     * v0.6.0 (DB v4) → v0.7.0 (DB v5): chats directos + registro de llamadas.
+     * Crea un chat.db v4 EXACTO (v2 + las columnas de v3/v4 aplicadas a mano,
+     * SIN las de v5), lo abre con la AppDatabase actual → MIGRATION_4_5.
+     */
+    @Test
+    fun upgradeV4toV5DmAndCalls() = runBlocking {
+        // del v2 del @Before, subir a v4 con los statements EXACTOS de la historia
+        val raw = SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("chat.db"), null)
+        // v2→3 (perfiles, D61)
+        raw.execSQL("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE messages ADD COLUMN senderUid TEXT NOT NULL DEFAULT ''")
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `profiles` (`uid` TEXT NOT NULL PRIMARY KEY, " +
+                "`displayName` TEXT NOT NULL, `avatarJson` TEXT NOT NULL, `photo` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL)"
+        )
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `room_peer` (`roomId` TEXT NOT NULL, `uid` TEXT NOT NULL, " +
+                "PRIMARY KEY(`roomId`, `uid`))"
+        )
+        // v3→4 (unread + foto de sala, D69)
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN photo INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("UPDATE rooms SET unread = 2, photo = 1 WHERE roomId = 'sala123'")
+        raw.version = 4
+        raw.close()
+
+        val db5 = AppDatabase.build(ctx)
+        try {
+            // la sala migrada conserva sus datos y gana kind=0 (grupo) por defecto
+            val room = db5.roomDao().get("sala123")
+            assertEquals("Mi amor", room!!.name)
+            assertEquals(0, room.kind)
+            assertEquals(null, room.peerUid)
+            assertEquals(2, room.unread)
+            assertTrue(room.photo)
+
+            // un chat directo nuevo funciona de punta a punta
+            db5.roomDao().upsert(
+                cu.alain.chat.db.Room(
+                    "dm-1", "@amelia", false, "654321", 1700000099999, 0, false,
+                    cu.alain.chat.core.C.ROOM_DM, "uid-amelia",
+                )
+            )
+            val dm = db5.roomDao().get("dm-1")
+            assertEquals(cu.alain.chat.core.C.ROOM_DM, dm!!.kind)
+            assertEquals("uid-amelia", dm.peerUid)
+
+            // el registro de llamadas inserta y consulta (tabla nueva)
+            db5.callLogDao().insert(
+                cu.alain.chat.db.CallLog(
+                    roomId = "dm-1", peerUid = "uid-amelia", peerName = "Amor",
+                    kind = cu.alain.chat.core.C.CALL_VIDEO, dir = cu.alain.chat.core.C.CALL_OUT,
+                    status = cu.alain.chat.core.C.CALL_COMPLETED, startedAt = 1700000100000,
+                    answeredAt = 1700000100500, duration = 120,
+                )
+            )
+            val calls = db5.callLogDao().observeAll().first()
+            assertEquals(1, calls.size)
+            assertEquals(120L, calls[0].duration)
+            assertTrue(calls[0].id > 0)
+        } finally {
+            db5.close()
+        }
+    }
 }

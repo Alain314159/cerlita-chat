@@ -23,6 +23,13 @@ object Phoenix {
     /** Topic phoenix completo de una sala (el canal se llama room-<roomId>). */
     fun topicOf(roomId: String) = "realtime:room-$roomId"
 
+    /** Topic personal: chats directos nuevos + señalización de llamadas (v0.7.0). */
+    fun userTopic(uid: String) = "realtime:user-$uid"
+
+    /** El wire siempre lleva el prefijo realtime: (tolerante si ya viene). */
+    private fun fullTopic(channel: String) =
+        if (channel.startsWith("realtime:")) channel else "realtime:$channel"
+
     private fun frame(topic: String, event: String, payload: JSONObject, ref: String) =
         JSONObject()
             .put("topic", topic)
@@ -31,8 +38,8 @@ object Phoenix {
             .put("ref", ref)
             .toString()
 
-    fun join(roomId: String, ref: String): String = frame(
-        topicOf(roomId), "phx_join",
+    fun join(channel: String, ref: String): String = frame(
+        fullTopic(channel), "phx_join",
         JSONObject()
             .put(
                 "config",
@@ -43,8 +50,8 @@ object Phoenix {
         ref,
     )
 
-    fun leave(roomId: String, ref: String): String =
-        frame(topicOf(roomId), "phx_leave", JSONObject(), ref)
+    fun leave(channel: String, ref: String): String =
+        frame(fullTopic(channel), "phx_leave", JSONObject(), ref)
 
     fun heartbeat(ref: String): String =
         frame("phoenix", "heartbeat", JSONObject(), ref)
@@ -56,6 +63,10 @@ object Phoenix {
 
         /** Timbre: mensaje nuevo en una sala. roomId es lo ÚNICO que viaja. */
         data class Doorbell(val roomId: String?, val event: String) : Frame()
+
+        /** Cualquier otro broadcast (dm nuevo, señalización de llamadas…):
+         *  payload crudo como string — quien decide qué hacer es el receptor. */
+        data class Broadcast(val event: String, val payload: String) : Frame()
     }
 
     /** Interpreta un frame del servidor; null si no nos interesa. */
@@ -74,8 +85,14 @@ object Phoenix {
             "broadcast" -> {
                 val p = o.optJSONObject("payload") ?: return null
                 val event = p.optString("event")
-                if (event != EVENT_DOORBELL) null
-                else Frame.Doorbell(p.optJSONObject("payload")?.optString("roomId")?.takeIf { it.isNotEmpty() }, event)
+                when {
+                    event == EVENT_DOORBELL -> Frame.Doorbell(
+                        p.optJSONObject("payload")?.optString("roomId")?.takeIf { it.isNotEmpty() },
+                        event,
+                    )
+                    event.isNotEmpty() -> Frame.Broadcast(event, p.optJSONObject("payload")?.toString() ?: "{}")
+                    else -> null
+                }
             }
             else -> null
         }

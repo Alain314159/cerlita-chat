@@ -35,6 +35,20 @@ object C {
     const val KIND_ROOM_INFO = 2   // nombre/foto de la sala (v0.6.0, D69)
     const val KIND_READ = 3        // recibo de lectura (v0.6.0, D68)
 
+    // ---- Tipos de sala (v0.7.0, D74) ----
+    const val ROOM_GROUP = 0       // grupo: código de invitación (como siempre)
+    const val ROOM_DM = 1          // chat directo 1-a-1: búsqueda por @nombre
+
+    // ---- Registro de llamadas (v0.7.0) ----
+    const val CALL_AUDIO = 0
+    const val CALL_VIDEO = 1
+    const val CALL_OUT = 0         // saliente
+    const val CALL_IN = 1          // entrante
+    const val CALL_COMPLETED = 0
+    const val CALL_MISSED = 1
+    const val CALL_DECLINED = 2
+    const val CALL_CANCELLED = 3   // colgó antes de que contestaran
+
     // ---- Polling adaptativo (D15) ----
     const val POLL_ACTIVE_MS = 5_000L        // tras actividad
     const val POLL_IDLE_MAX_MS = 300_000L    // reposo máximo: 5 min
