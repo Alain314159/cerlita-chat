@@ -23,7 +23,8 @@ class MainActivity : ComponentActivity() {
         maybeOpenRoomFromIntent(intent)
         setContent {
             val state by app.engine.state.collectAsState()
-            ChatTheme {
+            val theme by app.themeFlow.collectAsState()
+            ChatTheme(mode = theme) {
                 AppRoot(
                     state = state,
                     app = app,

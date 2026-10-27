@@ -58,6 +58,9 @@ class ChatApp : Application(), Configuration.Provider {
     /** Sala que pide abrir una notificación (la consume AppRoot). */
     val pendingOpenRoom = MutableStateFlow<String?>(null)
 
+    /** Tema activo (D73): Ajustes lo cambia y toda la app recompone al vuelo. */
+    val themeFlow = MutableStateFlow(cu.alain.chat.ui.theme.Themes.CERLITA)
+
     /** Scope de aplicación para lanzar el notificador desde el callback del engine. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -79,6 +82,7 @@ class ChatApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
+        themeFlow.value = prefs.theme
         api = Api { prefs.baseUrl }
         db = AppDatabase.build(this)
         store = SessionStore(this)
@@ -219,4 +223,10 @@ class Prefs(ctx: Context) {
     var instantBg: Boolean
         get() = sp.getBoolean("instant_bg", false)
         set(v) = sp.edit().putBoolean("instant_bg", v).apply()
+
+    /** Tema de la app (D73): system | light | dark | cerlita. Default cerlita —
+     *  es la identidad de la pareja (el mockup). Se cambia en Ajustes. */
+    var theme: String
+        get() = sp.getString("theme", cu.alain.chat.ui.theme.Themes.CERLITA)!!
+        set(v) = sp.edit().putString("theme", v).apply()
 }

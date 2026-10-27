@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
@@ -35,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -59,6 +61,7 @@ import cu.alain.chat.notify.Doorbell
 import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.AvatarView
+import cu.alain.chat.ui.theme.Themes
 import kotlinx.coroutines.launch
 
 @Composable
@@ -151,6 +154,38 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(onClick = onEditProfile) {
                     Text("Editar perfil (nombre, foto, avatar)")
+                }
+            }
+        }
+
+        // ── apariencia (D73): tema claro / oscuro / cerlita ──
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Palette, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Apariencia", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Elige el tema de la app. «Cerlita» es el tema de ustedes dos 💗",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(6.dp))
+                Themes.OPTIONS.forEach { mode ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        RadioButton(
+                            selected = app.prefs.theme == mode,
+                            onClick = {
+                                app.prefs.theme = mode
+                                app.themeFlow.value = mode
+                            },
+                        )
+                        Text(Themes.label(mode), style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
             }
         }
@@ -364,7 +399,7 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
         }
 
         Text(
-            "v0.6.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
+            "v0.7.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
