@@ -2,11 +2,15 @@ package cu.alain.chat.calls
 
 import android.content.Context
 import cu.alain.chat.ChatApp
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera2Enumerator
@@ -90,6 +94,16 @@ class CallSession(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** D81: SDP e ICE se serializan — cada uno llega por un POST propio y
+     *  sin orden; el mutex + IceQueue garantizan que NINGÚN candidato se
+     *  pierda por llegar "demasiado pronto". */
+    private val negotiate = Mutex()
+    private val iceQ = IceQueue()
+
+    /** Completa cuando el offer del par quedó aplicado (prepareAsCallee). */
+    private val remoteReady = CompletableDeferred<Unit>()
+
     private val pc: PeerConnection
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
@@ -120,7 +134,10 @@ class CallSession(
             when (newState) {
                 PeerConnection.PeerConnectionState.CONNECTED ->
                     if (!connectedNotified) { connectedNotified = true; listener.onConnected() }
-                PeerConnection.PeerConnectionState.FAILED,
+                PeerConnection.PeerConnectionState.FAILED ->
+                    // D81: SIEMPRE termina (antes, si ya había conectado una vez,
+                    // la llamada quedaba zombi sin forma de colgarla)
+                    listener.onFailed()
                 PeerConnection.PeerConnectionState.DISCONNECTED ->
                     if (!connectedNotified) listener.onFailed()
                 else -> {}
@@ -202,20 +219,35 @@ class CallSession(
 
     // ────────────────────────── llamado ──────────────────────────
 
-    /** Aplica el offer del llamante (nada se envía hasta aceptar). */
+    /** Aplica el offer del llamante (nada se envía hasta aceptar). Los ICE
+     *  del llamante que lleguen mientras tanto se acumulan en la IceQueue. */
     fun prepareAsCallee(remoteSdp: String) {
         scope.launch {
-            try { pc.setRemoteSuspend(SessionDescription(SessionDescription.Type.OFFER, remoteSdp)) }
-            catch (_: Exception) { listener.onFailed() }
+            try {
+                negotiate.withLock {
+                    pc.setRemoteSuspend(SessionDescription(SessionDescription.Type.OFFER, remoteSdp))
+                    iceQ.remoteApplied()
+                    iceQ.drain().forEach { addIceSafe(it) }
+                }
+                remoteReady.complete(Unit)
+            } catch (_: Exception) {
+                listener.onFailed()
+            }
         }
     }
 
-    /** Tras pulsar Aceptar: crea el answer y lo entrega para señalizar. */
+    /** Tras pulsar Aceptar: crea el answer (esperando el offer si hace
+     *  falta) y lo entrega para señalizar. */
     fun answer(onAnswer: (String) -> Unit) {
         scope.launch {
             try {
-                val ans = pc.createAnswerSuspend(MediaConstraints())
-                pc.setLocalSuspend(ans)
+                // D81: aceptar puede ganarle a prepareAsCallee (SDP aún en vuelo)
+                val okOffer = withTimeoutOrNull(5_000) { remoteReady.await() }
+                if (okOffer == null) return@launch listener.onFailed()
+                val ans = negotiate.withLock {
+                    pc.createAnswerSuspend(MediaConstraints())
+                        .also { pc.setLocalSuspend(it) }
+                }
                 onAnswer(ans.description)
             } catch (_: Exception) {
                 listener.onFailed()
@@ -223,18 +255,36 @@ class CallSession(
         }
     }
 
+    /** Llegó el answer del par: fija el SDP remoto y drena los ICE que
+     *  llegaron antes (D81 — antes se perdían y la llamada nunca conectaba). */
     fun onAnswer(remoteSdp: String) {
         scope.launch {
-            try { pc.setRemoteSuspend(SessionDescription(SessionDescription.Type.ANSWER, remoteSdp)) }
-            catch (_: Exception) {}
+            try {
+                negotiate.withLock {
+                    pc.setRemoteSuspend(SessionDescription(SessionDescription.Type.ANSWER, remoteSdp))
+                    iceQ.remoteApplied()
+                    iceQ.drain().forEach { addIceSafe(it) }
+                }
+                remoteReady.complete(Unit) // inofensivo si ya estaba
+            } catch (_: Exception) {
+                listener.onFailed()
+            }
         }
     }
 
     fun onIce(sig: CallSignals.Signal.Ice) {
         scope.launch {
-            try {
-                pc.addIceCandidate(IceCandidate(sig.sdpMid.ifEmpty { null }, sig.lineIndex, sig.candidate))
-            } catch (_: Exception) {}
+            negotiate.withLock {
+                val c = IceCandidate(sig.sdpMid.ifEmpty { null }, sig.lineIndex, sig.candidate)
+                if (iceQ.add(c)) addIceSafe(c)
+            }
+        }
+    }
+
+    private fun addIceSafe(c: IceCandidate) {
+        try {
+            pc.addIceCandidate(c)
+        } catch (_: Exception) {
         }
     }
 

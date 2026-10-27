@@ -151,6 +151,7 @@ fun CallScreenOverlay(app: ChatApp) {
                         if (s.video) "Videollamando…" else "Llamando…"
                     CallDispatcher.Phase.INCOMING ->
                         if (s.video) "Videollamada entrante" else "Llamada entrante"
+                    CallDispatcher.Phase.CONNECTING -> "Conectando…" // D81: ya contestaron
                     CallDispatcher.Phase.ACTIVE ->
                         "%d:%02d".format(elapsed / 60, elapsed % 60)
                     CallDispatcher.Phase.ENDED -> "Finalizada"
@@ -190,10 +191,12 @@ fun CallScreenOverlay(app: ChatApp) {
                     }
                 }
 
-                CallDispatcher.Phase.OUTGOING -> {
+                CallDispatcher.Phase.OUTGOING,
+                CallDispatcher.Phase.CONNECTING -> {
+                    // sonando o conectando tras contestar: solo colgar (D81)
                     RoundCallButton(
-                        icon = Icons.Default.CallEnd, tint = CallColors.reject, label = "Colgar",
-                        size = 68.dp,
+                        icon = Icons.Default.CallEnd, tint = CallColors.reject,
+                        label = "Colgar", size = 68.dp,
                     ) { CallDispatcher.hangup(app) }
                 }
 

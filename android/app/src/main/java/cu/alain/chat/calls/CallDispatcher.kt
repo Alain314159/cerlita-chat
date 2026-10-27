@@ -36,7 +36,7 @@ import org.json.JSONObject
  */
 object CallDispatcher {
 
-    enum class Phase { OUTGOING, INCOMING, ACTIVE, ENDED }
+    enum class Phase { OUTGOING, INCOMING, CONNECTING, ACTIVE, ENDED }
 
     data class CallState(
         val callId: String,
@@ -64,7 +64,28 @@ object CallDispatcher {
     private var logId: Long = 0 // fila del registro en curso
     private var suppressUntil = 0L // anti-bucle tras rechazar
 
+    // D81: orden de la señalización — el offer/answer (SDP) sale PRIMERO y
+    // los ICE propios esperan a que ese POST termine; si no, un candidato
+    // chiquito puede llegar al par ANTES que el SDP grande y perderse.
+    private var sdpSent = false
+    private val iceHold = mutableListOf<Triple<String?, Int, String>>()
+
     var enabled: Boolean = true // la UI del overlay lo apaga cuando nadie la observa
+
+    /** Broadcast de señalización con reintentos (la llamada muere si se pierde). */
+    private suspend fun broadcastSig(app: ChatApp, roomId: String, payload: org.json.JSONObject): Boolean {
+        val topic = CallSignals.topicOf(roomId)
+        repeat(3) {
+            if (app.api.broadcast(topic, CallSignals.EV, payload)) return true
+            kotlinx.coroutines.delay(1_500)
+        }
+        return false
+    }
+
+    private fun resetSignalingOrder() {
+        sdpSent = false
+        iceHold.clear()
+    }
 
     /** Arranca una llamada SALIENTE desde un chat directo. */
     fun startOutgoing(app: ChatApp, room: Room, peerName: String, video: Boolean) {
@@ -72,6 +93,7 @@ object CallDispatcher {
         if (_state.value != null) return // ya hay llamada
         val callId = cu.alain.chat.crypto.Crypto.uuid7()
         val now = System.currentTimeMillis()
+        resetSignalingOrder()
         _state.value = CallState(
             callId = callId, roomId = room.roomId, peerUid = room.peerUid ?: "",
             peerName = peerName, video = video, dir = C.CALL_OUT,
@@ -85,15 +107,17 @@ object CallDispatcher {
                         status = C.CALL_CANCELLED, startedAt = now), // si nadie contesta: cancelada
             )
         }
-        audioMode(app, inCall = true, video)
+        audioMode(app, inCall = true, speakerOn = video) // D81: ruta de audio desde ya
         val s = CallSession(app, room.roomId, video, listener)
         session = s
-        s.start { sdp -> // offer listo → señalizar
+        s.start { sdp -> // offer listo → señalizar; los ICE esperan su turno (D81)
             scope.launch {
-                app.api.broadcast(
-                    CallSignals.topicOf(room.roomId), CallSignals.EV,
-                    CallSignals.encodeOffer(callId, room.roomId, me.uid, me.uname, video, sdp),
-                )
+                broadcastSig(app, room.roomId, CallSignals.encodeOffer(callId, room.roomId, me.uid, me.uname, video, sdp))
+                sdpSent = true
+                iceHold.forEach { (m, l, c) ->
+                    broadcastSig(app, room.roomId, CallSignals.encodeIce(callId, me.uid, m, l, c))
+                }
+                iceHold.clear()
             }
         }
         armTimeout(45_000) { bye(app, "cancelled") }
@@ -118,6 +142,7 @@ object CallDispatcher {
                 if (now < suppressUntil) return // acabo de rechazar otra: silencio
                 // registrar + estado RINGING
                 val now2 = System.currentTimeMillis()
+                resetSignalingOrder()
                 _state.value = CallState(
                     callId = sig.callId, roomId = sig.roomId, peerUid = sig.from,
                     peerName = sig.fromName, video = sig.video, dir = C.CALL_IN,
@@ -141,7 +166,14 @@ object CallDispatcher {
             is CallSignals.Signal.Answer -> {
                 if (cur == null || cur.callId != sig.callId || cur.phase != Phase.OUTGOING) return
                 cancelTimeout()
+                // D81: el que llama VE que contestaron al instante (antes se
+                // quedaba en «Llamando…» hasta que conectara el medio — y si
+                // el ICE fallaba, para siempre)
+                _state.value = cur.copy(phase = Phase.CONNECTING)
                 session?.onAnswer(sig.sdp)
+                armTimeout(35_000) {
+                    if (_state.value?.phase == Phase.CONNECTING) bye(app, "failed")
+                }
             }
 
             is CallSignals.Signal.Ice -> {
@@ -166,17 +198,28 @@ object CallDispatcher {
         val cur = _state.value ?: return
         if (cur.phase != Phase.INCOMING) return
         val myUid = app.engine.session?.uid ?: return
+        val callId = cur.callId
+        val roomId = cur.roomId
         cancelTimeout()
         stopRing()
-        audioMode(app, inCall = true, cur.video)
-        _state.value = cur.copy(phase = Phase.ACTIVE, connectedAt = System.currentTimeMillis())
+        audioMode(app, inCall = true, speakerOn = cur.video)
+        // D81: CONNECTING hasta que el medio conecte (el cronómetro ya no
+        // arranca «de mentira» al aceptar)
+        _state.value = cur.copy(phase = Phase.CONNECTING)
         session?.answer { sdp ->
             scope.launch {
-                app.api.broadcast(CallSignals.topicOf(cur.roomId), CallSignals.EV,
-                    CallSignals.encodeAnswer(cur.callId, myUid, sdp))
+                // el answer sale PRIMERO; los ICE propios esperan su turno
+                broadcastSig(app, roomId, CallSignals.encodeAnswer(callId, myUid, sdp))
+                sdpSent = true
+                iceHold.forEach { (m, l, c) ->
+                    broadcastSig(app, roomId, CallSignals.encodeIce(callId, myUid, m, l, c))
+                }
+                iceHold.clear()
             }
         }
-        armTimeout(120_000) { if (_state.value?.phase == Phase.ACTIVE && _state.value?.connectedAt == 0L) bye(app, "missed") }
+        armTimeout(35_000) {
+            if (_state.value?.phase == Phase.CONNECTING) bye(app, "failed")
+        }
     }
 
     /** El usuario RECHAZA la llamada entrante. */
@@ -219,7 +262,7 @@ object CallDispatcher {
     fun toggleSpeaker(app: ChatApp) {
         val cur = _state.value ?: return
         val on = !cur.speakerOn
-        audioMode(app, inCall = true, video = on) // altavoz = ruta de vídeo
+        audioMode(app, inCall = true, speakerOn = on) // D81: ruta real del altavoz
         _state.value = cur.copy(speakerOn = on)
     }
 
@@ -251,8 +294,13 @@ object CallDispatcher {
             val cur = _state.value ?: return
             val myUid = a.engine.session?.uid ?: return
             scope.launch {
-                a.api.broadcast(CallSignals.topicOf(cur.roomId), CallSignals.EV,
-                    CallSignals.encodeIce(cur.callId, myUid, sdpMid, lineIndex, candidate))
+                // D81: sin offer/answer en vuelo, los ICE salen directos; si aún
+                // no salió el SDP, esperan (el POST del SDP va primero)
+                if (sdpSent) {
+                    broadcastSig(a, cur.roomId, CallSignals.encodeIce(cur.callId, myUid, sdpMid, lineIndex, candidate))
+                } else {
+                    iceHold.add(Triple(sdpMid, lineIndex, candidate))
+                }
             }
         }
 
@@ -266,11 +314,11 @@ object CallDispatcher {
         val cur = _state.value ?: return
         val myUid = app.engine.session?.uid ?: return
         scope.launch {
-            app.api.broadcast(CallSignals.topicOf(cur.roomId), CallSignals.EV,
-                CallSignals.encodeBye(cur.callId, myUid, reason))
+            broadcastSig(app, cur.roomId, CallSignals.encodeBye(cur.callId, myUid, reason))
         }
         finish(app, when (reason) {
             "missed" -> C.CALL_MISSED
+            "failed" -> C.CALL_CANCELLED // contestó pero no conectó (D81)
             "cancelled" -> C.CALL_CANCELLED
             else -> C.CALL_CANCELLED
         }, notify = false)
@@ -279,11 +327,12 @@ object CallDispatcher {
     private fun finish(app: ChatApp, status: Int, notify: Boolean) {
         cancelTimeout()
         stopRing()
+        resetSignalingOrder()
         session?.close()
         session = null
         val cur = _state.value
         _state.value = cur?.copy(phase = Phase.ENDED)
-        audioMode(app, inCall = false, false)
+        audioMode(app, inCall = false, speakerOn = false)
         if (cur != null && logId > 0) {
             val durSec = if (cur.connectedAt > 0) (System.currentTimeMillis() - cur.connectedAt) / 1000 else 0
             scope.launch {
@@ -345,18 +394,39 @@ object CallDispatcher {
         }
     }
 
-    private fun audioMode(app: ChatApp, inCall: Boolean, video: Boolean) {
+    /** Ruta de audio de la llamada (D81): API 31+ usa setCommunicationDevice
+     *  (lo exige Android 12+ — setSpeakerphoneOn está deprecado y varios OEM
+     *  lo ignoran, dejando la llamada sin audio); abajo, la vía clásica. */
+    private fun audioMode(app: ChatApp, inCall: Boolean, speakerOn: Boolean) {
         val am = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         try {
             if (inCall) {
                 am.mode = AudioManager.MODE_IN_COMMUNICATION
-                // vídeo (o altavoz manual) → altavoz; llamada de voz → oído
-                am.isSpeakerphoneOn = video
-                am.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                if (Build.VERSION.SDK_INT >= 31) {
+                    val wanted = if (speakerOn) android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                    else android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                    val dev = am.availableCommunicationDevices.firstOrNull { it.type == wanted }
+                    if (dev != null) am.setCommunicationDevice(dev)
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = speakerOn // vídeo → altavoz; voz → oído
+                }
+                try {
+                    am.requestAudioFocus(
+                        null, AudioManager.STREAM_VOICE_CALL,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                    )
+                } catch (_: Exception) {
+                }
             } else {
+                if (Build.VERSION.SDK_INT >= 31) {
+                    try { am.clearCommunicationDevice() } catch (_: Exception) {}
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = false
+                }
                 am.mode = AudioManager.MODE_NORMAL
-                am.isSpeakerphoneOn = false
-                am.abandonAudioFocus(null)
+                try { am.abandonAudioFocus(null) } catch (_: Exception) {}
             }
         } catch (_: Exception) {
         }
