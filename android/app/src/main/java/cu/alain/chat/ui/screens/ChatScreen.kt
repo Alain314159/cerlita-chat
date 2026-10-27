@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -38,12 +39,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.VisualTransformation
 import cu.alain.chat.ChatApp
 import cu.alain.chat.core.C
 import cu.alain.chat.db.Message
 import cu.alain.chat.db.Profile
+import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.work.WorkSync
 import kotlinx.coroutines.launch
@@ -55,12 +58,20 @@ import java.util.Locale
 @Composable
 fun ChatScreen(app: ChatApp, roomId: String) {
 
+    val ctx = LocalContext.current
     val messages by app.db.msgDao().observeChat(roomId).collectAsState(initial = emptyList())
     val profiles by app.db.profileDao().observeAll().collectAsState(initial = emptyList())
     var draft by remember { mutableStateOf("") }
     var sendError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // Sala abierta: suprime SU notificación (D63) y limpia la ya publicada
+    DisposableEffect(roomId) {
+        app.currentRoomId = roomId
+        Notifier.cancelRoom(ctx, roomId)
+        onDispose { if (app.currentRoomId == roomId) app.currentRoomId = null }
+    }
 
     // auto-scroll al último mensaje
     LaunchedEffect(messages.size) {

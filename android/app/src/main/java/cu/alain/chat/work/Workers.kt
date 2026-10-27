@@ -70,11 +70,9 @@ object WorkSync {
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as ChatApp
-        val n = app.engine.syncOnce()
-        when {
-            n > 0 -> if (!app.inForeground) cu.alain.chat.notify.Notifier.notifyNew(applicationContext, n)
-            n == -2 -> { /* sesión expirada: la UI lo mostrará al abrir; sin notificación ruidosa */ }
-        }
+        // Las notificaciones salen del callback del engine (misma política que
+        // el timbre Realtime, D63) — aquí solo se sincroniza.
+        app.engine.syncOnce()
         return Result.success() // el periódico nunca se rinde por red: reintenta en 15 min
     }
 }

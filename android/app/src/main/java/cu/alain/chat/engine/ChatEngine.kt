@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import kotlin.math.min
 import kotlin.random.Random
@@ -43,6 +44,20 @@ data class RoomJoined(
 )
 
 /**
+ * Mensaje nuevo ya descifrado y legible — lo que el Notificador necesita para
+ * el MessagingStyle (D63). Los ecos propios (mine) llegan por aquí también:
+ * decidir si avisan es política del Notifier, no del motor.
+ */
+data class NewMsg(
+    val roomId: String,
+    val senderUid: String,
+    val senderUname: String,
+    val body: String,
+    val ts: Long,
+    val mine: Boolean,
+)
+
+/**
  * Motor del chat (modelo rooms, D54).
  *
  * Único dueño de las roomKeys en RAM (cache del vault sellado por Keystore):
@@ -58,7 +73,7 @@ class ChatEngine(
     private val store: SessionStore,
     private val api: cu.alain.chat.net.Api,
     private val avatarsDir: File,
-    private val onNewMessages: (Int) -> Unit,
+    private val onNewMessages: (List<NewMsg>) -> Unit,
 ) {
 
     /** roomId → (roomKey, roomSalt). RAM solamente; persisten selladas en el vault. */
@@ -447,21 +462,27 @@ class ChatEngine(
 
     // ────────────────────────── recepción ──────────────────────────
 
+    /** Serializa los sync: el timbre, el polling, el worker y la UI pueden
+     * dispararlos a la vez y el cursor (last_seq) avanzaría dos veces. */
+    private val syncMutex = kotlinx.coroutines.sync.Mutex()
+
     /**
      * Un ciclo de sync: baja todo lo nuevo (hasta 204), descifra y guarda.
      * Devuelve nº de mensajes nuevos legibles, o -1/-2 si hubo error de red/auth.
+     * Las notificaciones salen por [onNewMessages] (misma vía para timbre,
+     * polling y worker — una sola política de aviso, D63).
      */
-    suspend fun syncOnce(): Int {
+    suspend fun syncOnce(): Int = syncMutex.withLock {
         val s = store.session ?: return -1
         var lastSeq = db.metaDao().getLong("last_seq") ?: 0
-        var total = 0
+        val fresh = mutableListOf<NewMsg>()
         val newPeerRooms = mutableSetOf<String>()
         try {
             while (true) {
                 val resp = api.sync(s.token, lastSeq)
                 if (resp.rows.isEmpty()) break
                 for (row in resp.rows) {
-                    if (ingest(row, s, newPeerRooms)) total++
+                    ingest(row, s, newPeerRooms)?.let { fresh.add(it) }
                 }
                 lastSeq = resp.nextSeq
                 db.metaDao().setLong("last_seq", lastSeq)
@@ -470,20 +491,27 @@ class ChatEngine(
             // pares desconocidos vistos → presentarme en esas salas (D61:
             // con last_seq global no pueden verme mensajes previos a su join)
             if (newPeerRooms.isNotEmpty()) announceToRooms(newPeerRooms)
-            if (total > 0) { lastSyncResult.value = total; onNewMessages(total) }
-            return total
+            if (fresh.isNotEmpty()) {
+                lastSyncResult.value = fresh.size
+                onNewMessages(fresh)
+            }
+            fresh.size
         } catch (e: ApiException) {
-            return if (e.http == 401) -2 else -1
+            if (e.http == 401) -2 else -1
         }
     }
 
     /**
-     * Procesa una fila del sync. Devuelve true si es un mensaje nuevo LEGIBLE
-     * de texto (los de salas sin clave van a pending y los anuncios de perfil
-     * no cuentan: no deben notificar ni aparecer en el chat).
+     * Procesa una fila del sync. Devuelve el mensaje NUEVO legible (kind=0)
+     * para notificar, o null si es eco conocido / va a pending / es evento de
+     * perfil (los anuncios no se notifican ni aparecen en el chat).
      */
-    private suspend fun ingest(row: SyncRow, s: Session, newPeerRooms: MutableSet<String>): Boolean {
-        if (db.msgDao().exists(row.msgId)) return false // eco de un mensaje propio ya en Room
+    private suspend fun ingest(
+        row: SyncRow,
+        s: Session,
+        newPeerRooms: MutableSet<String>,
+    ): NewMsg? {
+        if (db.msgDao().exists(row.msgId)) return null // eco de un mensaje propio ya en Room
         // par visto en la sala → lista de chats con SU nombre/avatar (D61).
         // Si es la 1ª vez: me presento (los mensajes previos a mi join no los vi).
         if (!row.senderId.equals(s.uid, ignoreCase = true) &&
@@ -498,11 +526,13 @@ class ChatEngine(
             db.pendingDao().insert(
                 PendingMsg(row.msgId, row.roomId, row.senderUname, row.senderId, row.nonceB64, row.ctB64, row.ts, row.seq)
             )
-            return false
+            return null
         }
         val msg = decryptRow(row, s, key.first)
         db.msgDao().insert(msg)
-        return msg.kind == 0
+        return if (msg.kind == 0) NewMsg(
+            msg.roomId, msg.senderUid, msg.senderUname, msg.body, msg.ts, msg.mine,
+        ) else null
     }
 
     private suspend fun decryptRow(
@@ -539,7 +569,7 @@ class ChatEngine(
     /** Descifra todo lo acumulado en pending (tras añadir una clave de sala). */
     private suspend fun drainPending() {
         val s = store.session ?: return
-        var n = 0
+        val fresh = mutableListOf<NewMsg>()
         val rows = db.pendingDao().all()
         if (rows.isEmpty()) return
         val ids = mutableListOf<String>()
@@ -552,7 +582,7 @@ class ChatEngine(
                         s, key.first,
                     )
                     db.msgDao().insert(msg)
-                    n++
+                    if (msg.kind == 0) fresh.add(NewMsg(msg.roomId, msg.senderUid, msg.senderUname, msg.body, msg.ts, msg.mine))
                 } else {
                     continue // sigue sin clave: permanece en pending
                 }
@@ -560,14 +590,14 @@ class ChatEngine(
             ids.add(p.msgId)
         }
         db.pendingDao().delete(ids)
-        if (n > 0) { lastSyncResult.value = n; onNewMessages(n) }
+        if (fresh.isNotEmpty()) { lastSyncResult.value = fresh.size; onNewMessages(fresh) }
     }
 
     /** Descifra los pendientes de UNA sala (tras join/restore de su clave). */
     private suspend fun drainPendingForRoom(roomId: String) {
         val s = store.session ?: return
         val key = keys[roomId.lowercase()] ?: return
-        var n = 0
+        val fresh = mutableListOf<NewMsg>()
         val rows = db.pendingDao().forRoom(roomId)
         val ids = mutableListOf<String>()
         for (p in rows) {
@@ -577,12 +607,12 @@ class ChatEngine(
                     s, key.first,
                 )
                 db.msgDao().insert(msg)
-                n++
+                if (msg.kind == 0) fresh.add(NewMsg(msg.roomId, msg.senderUid, msg.senderUname, msg.body, msg.ts, msg.mine))
             }
             ids.add(p.msgId)
         }
         db.pendingDao().delete(ids)
-        if (n > 0) { lastSyncResult.value = n; onNewMessages(n) }
+        if (fresh.isNotEmpty()) { lastSyncResult.value = fresh.size; onNewMessages(fresh) }
     }
 
     // ────────────────────────── polling adaptativo (D15) ──────────────────────────

@@ -1,6 +1,7 @@
 # Backend — Supabase Edge Functions + Postgres
 
-Estado: **desplegado y verificado E2E (37/37 checks) el 26-oct-2026** en el proyecto
+Estado: **desplegado y verificado E2E** (37/37 smoke + **13/13 timbre Realtime**,
+27-oct-2026) en el proyecto
 `wuptkddnkahmknolpxtp` (región us-east-2). Fase 1 completa del lado servidor, **modelo
 rooms** (Documento v2 corregido: sala con roomKey compartida por código de invitación
 que NUNCA toca el servidor; SAS verificado solo entre clientes).
@@ -14,7 +15,11 @@ App Android ──HTTPS──> Cloudflare/Supabase gateway ──> Edge Function
   auth       registro/login/logout/whoami + salas (room_new/room_join/rooms)
   sync       GET incremental por seq — 204 vacío, gzip
   outbox     POST lotes idempotentes a una sala — ON CONFLICT DO NOTHING
+             + timbre Realtime al canal room-<roomId> (D63; solo despierta,
+               jamás transporta contenido)
   heartbeat  latido anti-pausa del plan Free
+
+App Android ──WSS──> Supabase Realtime (timbre: broadcast room-<roomId>)
 ```
 
 El servidor **solo ve ciphertext y room_ids** (nunca la roomKey, nunca el código de
@@ -83,6 +88,14 @@ Reintentar es SIEMPRE seguro: `msg_id` (UUIDv7 del cliente) es PK con
 `ON CONFLICT DO NOTHING`. El servidor NO conoce el destinatario por username — solo
 verifica la membresía del emisor en la sala (404 genérico si no es miembro: no revela
 si la sala existe). Conocer el room_id (2^128, derivado de la roomKey) ES la capability.
+
+**Timbre Realtime (D63)**: si el lote insertó filas NUEVAS (RETURNING — un reintento
+idempotente no vuelve a timbrar), la función hace
+`POST /realtime/v1/api/broadcast {messages:[{topic:"room-<room_id>", event:"new-msg",
+payload:{roomId}}]}` con la anon key (hallazgo 11). Los clientes con el WebSocket
+abierto reciben el aviso y responden con `/sync` — el timbre NUNCA transporta
+contenido. Best-effort: si falla, el sync periódico de la app (15 min) alcanza.
+E2E: `python3 scripts/e2e_doorbell.py` (13 checks, requiere `pip install websockets`).
 
 ### heartbeat — anti-pausa
 
@@ -153,6 +166,18 @@ python3 scripts/deploy_functions.py --debug-off     # pasar a producción (recom
    va sin RETURNING.
 9. `deploy_functions.py --no-build` re-despliega el BUNDLE PREVIO: si se editó código
    TS, SIEMPRE re-compilar (sin `--no-build`) o el fix no llega a producción.
+10. **El REST broadcast de Realtime exige el topic SIN prefijo `realtime:`**: con
+    `realtime:<canal>` el gateway responde 202 (aceptado) pero NADIE lo recibe —
+    el mensaje se publica en el canal `realtime:realtime:<canal>`. El cliente se
+    suscribe a `realtime:<canal>`; el REST publica en `<canal>` a secas.
+11. **La autorización del REST broadcast en canales NO privados es la publishable
+    (anon) key**, no la service role: las claves nuevas `sb_secret_` dan 401/403
+    en Realtime (no son JWT). `Authorization: Bearer <anon>` + `apikey: <anon>`
+    → 202 y entrega verificada. Para canales privados haría falta RLS sobre
+    realtime (innecesario aquí: el nombre del canal ES la capability, D63).
+12. **La BD de producción ya tiene usuarios reales (27-oct: alain, amelia)**: los
+    smoke tests cuentan SOLO sus propios datos (`where room_id in (mis salas)`),
+    nunca absolutos. `smoke_test.py` ajustado en consecuencia.
 
 ## Estructura
 

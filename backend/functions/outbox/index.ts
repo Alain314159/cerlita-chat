@@ -77,13 +77,15 @@ Deno.serve(async (req) => {
       where room_id = ${room}::uuid and user_id = ${uid}::uuid limit 1`;
     if (!member) return json(404, { e: "no_room" });
 
-    await sql`
+    // RETURNING da SOLO las filas nuevas (los conflictos del reintento no):
+    // es exactamente la señal para tocar el timbre una única vez por mensaje.
+    const inserted = await sql`
       insert into messages ${
         sql(prepared.map((p) => ({
           msg_id: p.msg_id, room_id: room, sender_id: uid,
           sender_device_id: me.did, ciphertext: p.ct, nonce: p.nonce, client_ts: p.ts,
         })), "msg_id", "room_id", "sender_id", "sender_device_id", "ciphertext", "nonce", "client_ts")
-      } on conflict (msg_id) do nothing`;
+      } on conflict (msg_id) do nothing returning msg_id`;
 
     // Ack de los que existen (insertados ahora + aceptados en reintentos previos)
     const ids = prepared.map((p) => p.msg_id);
@@ -92,7 +94,54 @@ Deno.serve(async (req) => {
       where msg_id = any(${ids}::uuid[]) and room_id = ${room}::uuid and sender_id = ${uid}`;
 
     await sql`update sessions set last_seen_at = now() where token_hash = ${hash}`;
-    return json(200, { a: acked.map((r) => r.msg_id) });
+
+    // ── Timbre Realtime (D63) ─────────────────────────────────────────────────
+    // Aviso a los dispositivos conectados de la sala: SOLO el roomId, jamás
+    // contenido. Cada cliente responde con /sync (la fuente de verdad). Es
+    // best-effort: si falla, el sync periódico de la app (15 min) alcanza.
+    // Hallazgos 10-11:
+    //  10. El topic del REST broadcast va SIN prefijo "realtime:" (con prefijo
+    //      el gateway responde 202 pero nadie lo recibe).
+    //  11. El canal no es privado → la publishable/anon key ES la autorización
+    //      del broadcast (la sb_secret_ nueva da 401/403 en Realtime; el canal
+    //      es inadivinable: roomId = HKDF(roomKey) de 128 bits).
+    let bell = "skip"; // diagnóstico solo con DEBUG=1
+    if (inserted.length > 0) {
+      try {
+        const surl = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
+        const anon = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+        if (surl && anon) {
+          const r = await fetch(`${surl}/realtime/v1/api/broadcast`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${anon}`,
+              "apikey": anon,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              messages: [{
+                topic: `room-${room}`,
+                event: "new-msg",
+                payload: { roomId: room },
+              }],
+            }),
+          });
+          bell = `http_${r.status}`;
+          if (!r.ok) bell += " " + (await r.text()).slice(0, 120);
+        } else {
+          bell = `env url=${!!surl} anon=${!!anon}`;
+        }
+      } catch (e) {
+        bell = "err " + String(e).slice(0, 160);
+        console.error("doorbell error:", e);
+        // timbre caído ≠ mensaje perdido: el sync programado lo trae igual
+      }
+    }
+    if (DEBUG) console.log("doorbell:", bell, "inserted:", inserted.length);
+
+    return json(200, DEBUG
+      ? { a: acked.map((r) => r.msg_id), bell, n_ins: inserted.length }
+      : { a: acked.map((r) => r.msg_id) });
   } catch (e) {
     console.error("outbox error:", e);
     return json(500, fail(e));

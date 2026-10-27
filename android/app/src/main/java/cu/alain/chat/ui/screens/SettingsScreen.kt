@@ -1,6 +1,11 @@
 package cu.alain.chat.ui.screens
 
+import android.Manifest
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +54,9 @@ import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.export.HistoryExport
 import cu.alain.chat.export.HistoryImport
+import cu.alain.chat.notify.Doorbell
+import cu.alain.chat.notify.DoorbellService
+import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.AvatarView
 import kotlinx.coroutines.launch
 
@@ -84,6 +92,15 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
     var serverUrl by remember { mutableStateOf(app.prefs.baseUrl) }
     var ping by remember { mutableStateOf<String?>(null) }
     var pinging by remember { mutableStateOf(false) }
+
+    // ── estado notificaciones/batería (se refresca al recomponer) ──
+    var permTick by remember { mutableStateOf(0) }
+    val notifOk = remember(permTick) { Notifier.canNotify(ctx) }
+    val pm = ctx.getSystemService(PowerManager::class.java)
+    val batteryOk = remember(permTick) { pm.isIgnoringBatteryOptimizations(ctx.packageName) }
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { permTick++ }
 
     // perfil propio (D61): tarjeta con avatar + nombre elegido
     val myProfile by app.db.profileDao().observe(app.engine.session?.uid ?: "")
@@ -175,6 +192,73 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
             }
         }
 
+        // ── notificaciones y batería (D63/D67) ──
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Notificaciones", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Los mensajes nuevos avisan al instante aunque la app esté cerrada " +
+                        "(timbre en tiempo real). Si algo está en rojo, tócalo para arreglarlo:",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (DoorbellService.running && DoorbellService.connected) "● Timbre conectado"
+                    else if (DoorbellService.running) "● Timbre reconectando…"
+                    else "● Timbre detenido",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (DoorbellService.running) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.error,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (!notifOk) {
+                        Button(onClick = {
+                            if (Build.VERSION.SDK_INT >= 33) {
+                                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                try {
+                                    ctx.startActivity(
+                                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                            .putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName),
+                                    )
+                                } catch (_: Exception) {}
+                            }
+                        }) { Text("Permitir avisos") }
+                    }
+                    if (!batteryOk) {
+                        OutlinedButton(onClick = {
+                            try {
+                                ctx.startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:" + ctx.packageName),
+                                    ),
+                                )
+                            } catch (_: Exception) {}
+                        }) { Text("Quitar ahorro de batería") }
+                    }
+                    if (notifOk && batteryOk) {
+                        Text(
+                            "✓ Todo en orden",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+                if (!batteryOk) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "En Xiaomi/Redmi activa también Autoinicio y batería «Sin restricciones» " +
+                            "para Cerlita Chat (Ajustes del teléfono → Aplicaciones).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
         // ── red ──
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -248,7 +332,7 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
         }
 
         Text(
-            "v0.4.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
+            "v0.5.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),
@@ -428,6 +512,8 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                 TextButton(
                     onClick = {
                         showLogout = false
+                        Doorbell.stop(ctx)            // fuera el timbre y su notificación
+                        Notifier.cancelAllMessages(ctx) // fuera los avisos de mensajes
                         app.engine.logout(apiLogout = true)
                     },
                 ) { Text("Cerrar y borrar", color = MaterialTheme.colorScheme.error) }

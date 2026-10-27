@@ -283,13 +283,14 @@ def main() -> int:
     st2, _, raw2 = req("GET", "/auth", token=alice.get("tok", ""))
     check("logout revoca el token → whoami 401", st == 200 and st2 == 401, f"{st} {st2}")
 
-    # 30. verificación en la BD
+    # 30. verificación en la BD (solo MIS salas: desde el 27-oct hay usuarios
+    # reales en producción y los conteos absolutos ya no valen)
     st, res = api.call("POST", f"/v1/projects/{api.ref()}/database/query",
-                       {"query": "select count(*)::int as n from messages"})
+                       {"query": "select count(*)::int as n from messages where room_id in ('%s'::uuid, '%s'::uuid)" % (room_a, room_b)})
     n_msgs = 0
     if st in api.OK and isinstance(res, list) and res:
         n_msgs = res[0].get("n", -1)
-    check("BD: 23 mensajes de prueba en total", n_msgs == 23, f"count={n_msgs} res={str(res)[:120]}")
+    check("BD: 23 mensajes de prueba en mis salas", n_msgs == 23, f"count={n_msgs} res={str(res)[:120]}")
 
     # 31. limpieza (messages no tiene CASCADE → borrarlas primero)
     cleanup_sql = [
@@ -304,9 +305,9 @@ def main() -> int:
             ok_clean = False
             print(f"  limpieza: {st} {str(res)[:150]}")
     st, res = api.call("POST", f"/v1/projects/{api.ref()}/database/query",
-                       {"query": "select (select count(*) from messages) as msgs, (select count(*) from users) as usrs, (select count(*) from rooms) as rms, (select count(*) from room_members) as mem"})
+                       {"query": "select (select count(*) from messages where room_id in ('%s'::uuid, '%s'::uuid)) as msgs, (select count(*) from users where username in ('alice_t','bob_t','carol_t','lock_t')) as usrs, (select count(*) from rooms where room_id in ('%s'::uuid, '%s'::uuid)) as rms, (select count(*) from room_members where room_id in ('%s'::uuid, '%s'::uuid)) as mem" % (room_a, room_b, room_a, room_b, room_a, room_b)})
     counts = res[0] if st in api.OK and isinstance(res, list) and res else {}
-    check("limpieza: 0 mensajes, 0 usuarios, 0 salas, 0 membresías",
+    check("limpieza: 0 mensajes, 0 usuarios, 0 salas, 0 membresías (de prueba)",
           ok_clean and counts.get("msgs") == 0 and counts.get("usrs") == 0 and counts.get("rms") == 0 and counts.get("mem") == 0,
           f"limpieza_ok={ok_clean} counts={counts}")
 

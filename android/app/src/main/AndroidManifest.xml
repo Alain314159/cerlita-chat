@@ -5,6 +5,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Timbre Realtime en segundo plano (D63/D64): servicio foreground tipo
+         remoteMessaging (sin límite de 6 h de dataSync y permitido arrancar
+         desde BOOT_COMPLETED) + receptor de arranque para revivirlo. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:name=".ChatApp"
@@ -27,6 +34,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Timbre: WebSocket Realtime permanente; el push SOLO despierta (D63).
+             remoteMessaging revive tras reiniciar (FGS_BOOT_COMPLETED_ALLOWLIST). -->
+        <service
+            android:name=".notify.DoorbellService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <receiver
+            android:name=".notify.BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Compartir el export cifrado del historial -->
         <provider

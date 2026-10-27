@@ -1,7 +1,11 @@
 package cu.alain.chat.ui
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -14,18 +18,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -62,11 +70,13 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
         ActivityResultContracts.RequestPermission()
     ) { }
     LaunchedEffect(state) {
-        if (state is AppState.Main && Build.VERSION.SDK_INT >= 33 &&
-            !app.prefs.askedNotifPermission
-        ) {
-            app.prefs.askedNotifPermission = true
-            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (state is AppState.Main) {
+            // login hecho (o app abierta con sesión): timbre foreground (D63)
+            cu.alain.chat.notify.Doorbell.ensureStarted(ctx)
+            if (Build.VERSION.SDK_INT >= 33 && !app.prefs.askedNotifPermission) {
+                app.prefs.askedNotifPermission = true
+                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 
@@ -76,6 +86,59 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
         AppState.Main -> {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
+
+            // Tocar una notificación abre ESA sala (D63): el extra llega por
+            // MainActivity (onCreate/onNewIntent) y aquí se consume.
+            val pendingRoom by app.pendingOpenRoom.collectAsState()
+            LaunchedEffect(pendingRoom) {
+                val rid = pendingRoom ?: return@LaunchedEffect
+                app.pendingOpenRoom.value = null
+                val room = app.db.roomDao().get(rid) ?: return@LaunchedEffect
+                stack.removeAll { it is Screen.Chat || it is Screen.Settings || it is Screen.Profile }
+                stack.add(Screen.Chat(room))
+            }
+
+            // Exención de batería (D67): una sola vez, con explicación. Sin
+            // ella el sistema puede congelar el timbre con la pantalla apagada.
+            var askBattery by remember { mutableStateOf(false) }
+            LaunchedEffect(state) {
+                if (!app.prefs.askedBattery) {
+                    app.prefs.askedBattery = true
+                    val pm = ctx.getSystemService(PowerManager::class.java)
+                    if (!pm.isIgnoringBatteryOptimizations(ctx.packageName)) askBattery = true
+                }
+            }
+            if (askBattery) {
+                AlertDialog(
+                    onDismissRequest = { askBattery = false },
+                    title = { Text("Permitir avisos con la pantalla apagada") },
+                    text = {
+                        Text(
+                            "Para que los mensajes nuevos avisen al instante con la app cerrada, " +
+                                "Android debe eximir a Cerlita Chat del ahorro de batería.\n\n" +
+                                "En el próximo diálogo elige «Permitir».\n\n" +
+                                "En Xiaomi/Redmi revisa además: Autoinicio activado y batería " +
+                                "«Sin restricciones» para la app.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton({
+                            askBattery = false
+                            try {
+                                ctx.startActivity(
+                                    Intent(
+                                        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                        Uri.parse("package:" + ctx.packageName),
+                                    ),
+                                )
+                            } catch (_: Exception) {
+                                // algún OEM no lo soporta: queda el ajuste manual
+                            }
+                        }) { Text("Permitir") }
+                    },
+                    dismissButton = { TextButton({ askBattery = false }) { Text("Ahora no") } },
+                )
+            }
 
             // Onboarding de perfil (D61): sin perfil propio → pantalla de perfil
             // tras entrar. Con "Guardar" o "Ahora no" siempre queda uno (el

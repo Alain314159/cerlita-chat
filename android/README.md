@@ -1,9 +1,10 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.4.0 "Cerlita
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.5.0 "Cerlita
 Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60) +
-**sistema de perfiles E2EE con avatares (D61)**.
+perfiles E2EE con avatares (D61) + **notificaciones instantáneas por timbre
+Realtime (D63-D67)**.
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
@@ -32,8 +33,14 @@ Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60) +
   restaura completo en cualquier teléfono (o tras una limpieza): fusión no
   destructiva — no pisa nombres locales, claves solo si faltan, mensajes sin
   duplicar. Acepta respaldos de la v0.2.0 (AAD legacy).
-- **Notificaciones locales** al recibir mensajes con la app cerrada (D9; sin
-  Firebase por D44 — ntfy queda para fase posterior, D45).
+- **Notificaciones instantáneas con la app cerrada (D63-D67; sin Firebase por D44)**:
+  el servidor hace un broadcast Realtime al insertar mensajes (SOLO despierta, jamás
+  transporta contenido) → el servicio foreground `remoteMessaging` del teléfono
+  re-sincroniza por `/sync` (la fuente de verdad) y notifica. Un canal de notificación
+  POR SALA (IMPORTANCE_HIGH) con estilo de conversación (hasta 5 burbujas con el
+  nombre/avatar del par); tocar abre ese chat. Revive tras reiniciar el teléfono
+  (BootReceiver) y tras caídas del WebSocket (reconexión con backoff + re-sync).
+  ntfy (D45) queda degradada a Plan B futuro.
 - **Perfiles E2EE** (D61): nombre + **foto subida** O **avatar por capas**
   (2 bases placeholder: Cerdita y Koalita; 5 ropas, 5 accesorios). El perfil
   viaja CIFRADO como un mensaje más de la sala (kind=1, invisible): el servidor
@@ -65,8 +72,8 @@ y verificados E2E contra producción (`backend/scripts/e2e_rooms_client.py`, 22 
 export JAVA_HOME=/home/z/toolchain/jdk-21.0.13+9                 # JDK 21 COMPLETO
 export ANDROID_HOME=/home/z/toolchain/sdk                        # platform 37.0 + build-tools 36/37
 cd android
-./gradlew :app:testDebugUnitTest   # tests JVM+Robolectric (40: cripto + import + perfiles + smoke + migración)
-./gradlew :app:assembleRelease     # APK firmado + R8 (2.8 MB)
+./gradlew :app:testDebugUnitTest   # tests JVM+Robolectric (55: cripto + import + perfiles + phoenix + notificador + smoke + migración)
+./gradlew :app:assembleRelease     # APK firmado + R8 (2,8 MB)
 ```
 
 Nota (27-oct): si Maven Central devuelve `429 Too Many Requests`, `settings.gradle.kts`
@@ -102,7 +109,12 @@ app/src/main/java/cu/alain/chat/
   engine/ChatEngine.kt  claves por sala en RAM · createRoom/joinRoom/restoreRoomKey ·
                         send/syncOnce/drainOutbox · drainPending por sala · polling ·
                         perfiles: saveProfile + anuncios convergentes (D61)
-  work/Workers.kt       SyncWorker 15 min + OutboxWorker con jitter
+  work/Workers.kt       SyncWorker 15 min (fallback del timbre) + OutboxWorker
+  notify/Phoenix.kt     encuadre Phoenix v1.0.0 (join/heartbeat/leave/parse) —
+                        puro, testeado con frames reales de producción
+  notify/RealtimeDoorbell.kt  WS a mano sobre OkHttp (~150 líneas, D65):
+                        reconexión 5→60 s + jitter, heartbeat 30 s, diff de topics
+  notify/DoorbellService.kt   FGS remoteMessaging (D64) + BootReceiver + helper
   profile/Profile.kt    AvatarConfig (capas) + ProfileMsg (formato cable \u0000P)
   profile/Photos.kt     foto cuadrada JPEG con degradación 128→96→64 ≤5 KB + EXIF
   export/…              export .e2ee v2 (historial + claves) + import (D58)
@@ -115,23 +127,27 @@ app/src/test/java/cu/alain/chat/
   HistoryImportTest.kt  4 tests del import: roundtrip completo (gzip + claves),
                         AAD legacy v0.2.0, frase incorrecta, archivos inválidos
                         (derivación inyectada: argon2kt es JNI, D38)
+  PhoenixTest.kt        9 tests del encuadre Phoenix (frames capturados de producción)
+  NotifierTest.kt       6 tests: canal por sala HIGH, MessagingStyle, política de
+                        aviso (propios/viejos/sala abierta NO notifican)
+  DoorbellServiceTest.kt smoke del servicio (sin sesión → foreground + stopSelf)
   ProfileTest.kt        11 tests: prefijo NUL+P, límites, corruptos → texto,
                         roundtrip AvatarConfig, ids futuros desconocidos
 ```
 
 ## Pendiente (siguientes pasos)
 
-1. **Instalar v0.4.1 en los 2 móviles reales** (actualiza encima, misma firma).
-   ⚠️ IMPORTANTE: las versiones v0.1–v0.4.0 tenían un crash al abrir (D62 — bug de
-   constructores de ViewModels); si v0.3.0 «se cerraba sin abrir» era esto, ya
-   está arreglado. Registrar ambos usuarios, configurar los perfiles (nombre +
-   Cerdita/Koalita o foto), crear sala, compartir código, verificar SAS por voz
-   y que cada uno VEA el perfil del otro
+1. **Instalar v0.5.0 en los 2 móviles reales** (actualiza encima, misma firma) y
+   PROBAR LAS NOTIFICACIONES: al primer arranque aceptar el permiso de
+   notificaciones y «Permitir» en el diálogo de batería; en Xiaomi confirmar
+   Autoinicio ON + batería «Sin restricciones», en Samsung sacar la app de
+   «Sleeping apps». Verificar: mensaje con la app CERRADA avisa al instante,
+   tocar el aviso abre ese chat, y el aviso de la sala abierta no suena
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
 3. Avatares reales: sustituir los drawables placeholder (el catálogo y el
    AvatarConfig por capas ya son agnósticos al arte — D61)
-4. Notificaciones ntfy (D45, fase posterior) — el cron externo anti-pausa ya
-   quedó resuelto server-side (D59: pg_cron + pg_net → heartbeat cada 6 h)
+4. Si Xiaomi mata el servicio a pesar de todo → escalar a **Mi Push SDK** (D64;
+   ntfy ya no es la ruta)
 
 ## v0.4.1 — fix del crash al abrir (D62, 27-oct-2026)
 
@@ -165,3 +181,47 @@ ejecutado (ni en emulador — no hay KVM en el sandbox).
 # correr todo (40/40)
 ./gradlew :app:testDebugUnitTest
 ```
+
+## v0.5.0 — notificaciones instantáneas por timbre Realtime (D63-D67, 27-oct-2026)
+
+**Arquitectura** (veredicto técnico del usuario tras revisar todo el repo): el push
+SOLO despierta — el contenido JAMÁS viaja por él. `/sync` es la fuente de verdad.
+
+```
+Emisor                          Servidor Supabase                    Receptor (app cerrada)
+  │ POST /outbox ──────────────►│                                      │
+  │                             │ INSERT messages (RETURNING: nuevos) │
+  │                             │ POST /realtime/v1/api/broadcast ────┤ WSS: {"event":"new-msg",
+  │◄─ ack ──────────────────────│   topic: room-<roomId>,             │        "payload":{"roomId":…}}
+  │                             │   payload: {roomId} (NADA más)      │ → syncOnce() → descifra
+  │                             │ (reintento idempotente NO timbra)   │ → notificación por sala
+```
+
+- **Cliente a mano, sin supabase-kt (D65)**: arrastraría Ktor+serialization (~2 MB)
+  y realtime-kt pide API 26+ (minSdk 24). El protocolo necesario (phx_join,
+  heartbeat 30 s, broadcast, phx_leave) son ~150 líneas sobre el OkHttp existente —
+  el APK solo creció ~20 KB.
+- **FGS `remoteMessaging` (D64)**: sin el límite de 6 h de `dataSync` (Android 15+)
+  y permitido arrancar desde BOOT_COMPLETED (allowlist) → `BootReceiver` lo revive
+  al reiniciar el teléfono. `START_STICKY` + arranque en cada foreground.
+- **Reconexión autosanadora**: backoff 5→60 s con jitter; tras CADA reconexión hace
+  `syncOnce()` — lo timbrado durante el corte no se pierde. El worker de 15 min
+  queda como malla de seguridad.
+- **Notificador (D66)**: canal POR SALA (silenciar una conversación no silencia las
+  demás), MessagingStyle con el nombre real del par (perfil E2EE), grupo + resumen,
+  tocar abre ese chat. Política única: ajenos + ≤30 min + no la sala abierta.
+- **Hallazgos del protocolo** (validados en vivo): el REST broadcast exige el topic
+  SIN prefijo `realtime:` (con prefijo: 202 pero nadie lo recibe) y la anon/publishable
+  key ES la autorización (la `sb_secret_` nueva da 401/403 en Realtime). Detalle y
+  matriz completa: `backend/README.md` (hallazgos 10-11).
+
+**Validación**: `PhoenixTest` (9, frames capturados de producción) +
+`NotifierTest` (6, Robolectric) + `DoorbellServiceTest` (smoke) + E2E del timbre
+contra producción `backend/scripts/e2e_doorbell.py` **13/13** + smoke backend 37/37.
+Total app: **55/55**.
+
+**Nota Robolectric 4.16**: las clases de test nuevas usan config ÚNICA de SDK — con
+múltiples SDK la última sandbox de una clase nueva dispara
+`FileSystemAlreadyExistsException` en `maybeCopyFonts` (reproducido con un test
+vacío; SmokeTest no se ve afectado). La matriz multi-API de arranque la cubre
+SmokeTest (24/28/31/33/35).

@@ -6,9 +6,15 @@ import androidx.work.Configuration
 import cu.alain.chat.db.AppDatabase
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.engine.ChatEngine
+import cu.alain.chat.engine.NewMsg
 import cu.alain.chat.net.Api
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.vault.SessionStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import java.util.UUID
 
 /**
@@ -40,6 +46,16 @@ class ChatApp : Application(), Configuration.Provider {
     @Volatile
     var inForeground: Boolean = false
 
+    /** Sala abierta en la pantalla de chat (suprime SU notificación en foreground). */
+    @Volatile
+    var currentRoomId: String? = null
+
+    /** Sala que pide abrir una notificación (la consume AppRoot). */
+    val pendingOpenRoom = MutableStateFlow<String?>(null)
+
+    /** Scope de aplicación para lanzar el notificador desde el callback del engine. */
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
@@ -52,13 +68,34 @@ class ChatApp : Application(), Configuration.Provider {
             store = store,
             api = api,
             avatarsDir = java.io.File(filesDir, "avatars"), // fotos de perfil (D61)
-            onNewMessages = { /* el polling foreground refresca la UI por Room Flow */ },
+            onNewMessages = { msgs: List<NewMsg> -> announceIncoming(msgs) },
         )
 
-        Notifier.ensureChannel(this)
+        Notifier.ensureServiceChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
         engine.refreshState()
         engine.onProcessStart() // sesión viva tras reinicio: claves a RAM + salas del servidor
+    }
+
+    /**
+     * ÚNICA política de aviso (D63): la comparten timbre Realtime, polling
+     * de primer plano, worker de 15 min y drenaje de pendientes. Decide el
+     * Notifier: ajenos + recientes + no en la sala abierta en foreground.
+     */
+    private fun announceIncoming(msgs: List<NewMsg>) {
+        val s = store.session ?: return
+        val fg = inForeground
+        val cur = currentRoomId
+        appScope.launch {
+            Notifier.notifyNewMessages(
+                ctx = this@ChatApp,
+                db = db,
+                myUid = s.uid,
+                inForeground = fg,
+                suppressRoom = cur,
+                msgs = msgs,
+            )
+        }
     }
 }
 
@@ -84,4 +121,9 @@ class Prefs(ctx: Context) {
     var askedNotifPermission: Boolean
         get() = sp.getBoolean("asked_notif", false)
         set(v) = sp.edit().putBoolean("asked_notif", v).apply()
+
+    /** Ya se pidió (una vez) quitar la optimización de batería (D67). */
+    var askedBattery: Boolean
+        get() = sp.getBoolean("asked_battery", false)
+        set(v) = sp.edit().putBoolean("asked_battery", v).apply()
 }
