@@ -72,6 +72,7 @@ fun CallsScreen(app: ChatApp) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val calls by app.db.callLogDao().observeAll().collectAsState(initial = emptyList())
+    val nicknames by app.nicknames.collectAsState() // D78: apodos personales
 
     // ── nueva llamada: búsqueda de usuario ──
     var showSearch by remember { mutableStateOf(false) }
@@ -139,7 +140,21 @@ fun CallsScreen(app: ChatApp) {
         } else {
             LazyColumn(Modifier.fillMaxSize()) {
                 items(calls, key = { it.id }) { call ->
-                    CallRow(app, call, onCallAgain = { startCallTo(call.peerName.removePrefix("@"), call.kind == C.CALL_VIDEO) })
+                    CallRow(
+                        app, call,
+                        nickname = call.peerUid.takeIf { it.isNotEmpty() }
+                            ?.let { nicknames[it.lowercase()] },
+                        onCallAgain = {
+                            scope.launch {
+                                // el @usuario real sale del nombre de la sala DM;
+                                // peerName puede ser un perfil/apodo (D78)
+                                val uname = app.db.roomDao().get(call.roomId)?.name
+                                    ?.removePrefix("@")?.takeIf { it.isNotBlank() }
+                                    ?: call.peerName.removePrefix("@")
+                                startCallTo(uname, call.kind == C.CALL_VIDEO)
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -241,8 +256,9 @@ fun CallsScreen(app: ChatApp) {
 }
 
 @Composable
-private fun CallRow(app: ChatApp, call: CallLog, onCallAgain: () -> Unit) {
+private fun CallRow(app: ChatApp, call: CallLog, nickname: String?, onCallAgain: () -> Unit) {
     val missed = call.status == C.CALL_MISSED || call.status == C.CALL_DECLINED
+    val shownName = nickname ?: call.peerName // D78: apodo personal primero
     Row(
         Modifier
             .fillMaxWidth()
@@ -251,12 +267,12 @@ private fun CallRow(app: ChatApp, call: CallLog, onCallAgain: () -> Unit) {
     ) {
         AvatarView(
             photoUid = call.peerUid, photo = false, avatarJson = null,
-            fallbackInitial = call.peerName, size = 46.dp,
+            fallbackInitial = shownName, size = 46.dp,
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                call.peerName,
+                shownName,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = if (missed) FontWeight.Bold else FontWeight.SemiBold,
                 color = if (missed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,

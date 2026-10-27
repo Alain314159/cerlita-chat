@@ -75,6 +75,8 @@ fun CallScreenOverlay(app: ChatApp) {
 
     val s = state ?: return
     val peerProfile by app.db.profileDao().observe(s.peerUid).collectAsState(initial = null)
+    val nicknames by app.nicknames.collectAsState() // D78
+    val shownName = nicknames[s.peerUid.lowercase()] ?: s.peerName
 
     // permisos de llamada: se piden al ACEPTAR (mic siempre; cámara si vídeo)
     val callPerms = rememberLauncherForActivityResult(
@@ -130,14 +132,14 @@ fun CallScreenOverlay(app: ChatApp) {
                     photoUid = s.peerUid,
                     photo = peerProfile?.photo == true,
                     avatarJson = peerProfile?.avatarJson,
-                    fallbackInitial = s.peerName,
+                    fallbackInitial = shownName,
                     size = 120.dp,
                     photoVersion = peerProfile?.updatedAt ?: 0L,
                 )
                 Spacer(Modifier.height(16.dp))
             }
             Text(
-                s.peerName,
+                shownName,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = if (s.phase == CallDispatcher.Phase.ACTIVE && s.video) Color.White else Color.Unspecified,

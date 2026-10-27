@@ -61,6 +61,19 @@ class ChatApp : Application(), Configuration.Provider {
     /** Tema activo (D73): Ajustes lo cambia y toda la app recompone al vuelo. */
     val themeFlow = MutableStateFlow(cu.alain.chat.ui.theme.Themes.CERLITA)
 
+    /**
+     * Nombres personales (D78): cómo me aparece el otro a MÍ. uid (minúsculas)
+     * → apodo. Local y privado: la otra persona no se entera (viaja solo en
+     * este teléfono, nunca por la red). Ajustes/chats/llamadas/notifs lo leen.
+     */
+    val nicknames = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** Guarda (o borra con null/"") el apodo de un contacto y refresca el flow. */
+    fun setNickname(uid: String, name: String?) {
+        prefs.setNickname(uid, name)
+        nicknames.value = prefs.allNicknames()
+    }
+
     /** Scope de aplicación para lanzar el notificador desde el callback del engine. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -95,6 +108,8 @@ class ChatApp : Application(), Configuration.Provider {
             onNewMessages = { msgs: List<NewMsg> -> announceIncoming(msgs) },
             onSessionChanged = { syncDoorbell() }, // D72: login/logout enciende/apaga el timbre
         )
+
+        nicknames.value = prefs.allNicknames() // D78: apodos locales
 
         Notifier.ensureServiceChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
@@ -244,4 +259,20 @@ class Prefs(ctx: Context) {
     var theme: String
         get() = sp.getString("theme", cu.alain.chat.ui.theme.Themes.CERLITA)!!
         set(v) = sp.edit().putString("theme", v).apply()
+
+    // ── Apodos locales (D78): uid.minúsculas → nombre personal ──
+
+    fun nicknameOf(uid: String): String? = sp.getString("nick_${uid.lowercase()}", null)
+
+    fun setNickname(uid: String, name: String?) {
+        val k = "nick_${uid.lowercase()}"
+        val v = name?.trim()?.take(cu.alain.chat.profile.RoomInfoMsg.MAX_NAME)
+        if (v.isNullOrEmpty()) sp.edit().remove(k).apply()
+        else sp.edit().putString(k, v).apply()
+    }
+
+    fun allNicknames(): Map<String, String> =
+        sp.all.entries
+            .filter { it.key.startsWith("nick_") && it.value is String }
+            .associate { it.key.removePrefix("nick_") to it.value as String }
 }

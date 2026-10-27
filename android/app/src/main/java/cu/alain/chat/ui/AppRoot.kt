@@ -9,12 +9,14 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -30,6 +32,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -335,36 +338,93 @@ private fun HomeTabs(
 }
 
 /** Título del chat abierto: si la sala tiene foto/nombre propio (D69) se
- *  muestran; si no, el perfil del par (nombre + avatar, D61). */
+ *  muestran; si no, el perfil del par (nombre + avatar, D61). El apodo personal
+ *  (D78) gana en los chats directos: tocar el título lo edita. */
 @Composable
 private fun ChatTitle(app: ChatApp, room: Room) {
     val meUid = app.engine.session?.uid ?: ""
     val header by app.db.roomListDao().observeRoomHeader(room.roomId, meUid)
         .collectAsState(initial = null)
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    val nicknames by app.nicknames.collectAsState()
+    var rename by remember { mutableStateOf(false) }
+    val peerUid = header?.peerUid
+    val shownName = when {
+        peerUid != null ->
+            nicknames[peerUid.lowercase()] ?: header?.peerName ?: room.name
+        else -> header?.name ?: room.name
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable(
+            enabled = room.kind == cu.alain.chat.core.C.ROOM_DM && peerUid != null,
+        ) { rename = true },
+    ) {
         if (header?.roomPhoto == true) {
             AvatarView(
                 photoUid = "room-${room.roomId.lowercase()}",
                 photo = true,
                 avatarJson = null,
-                fallbackInitial = header?.name ?: room.name,
+                fallbackInitial = shownName,
                 size = 32.dp,
                 photoVersion = 0L,
             )
         } else {
             AvatarView(
-                photoUid = header?.peerUid,
+                photoUid = peerUid,
                 photo = header?.peerPhoto == true,
                 avatarJson = header?.peerAvatarJson,
-                fallbackInitial = header?.peerName ?: room.name,
+                fallbackInitial = shownName,
                 size = 32.dp,
                 photoVersion = 0L,
             )
         }
         Spacer(Modifier.width(10.dp))
-        if (header?.roomPhoto == true) Text(header?.name ?: room.name)
-        else Text(header?.peerName ?: room.name)
+        Text(shownName)
     }
+    if (rename && peerUid != null) {
+        NicknameDialog(
+            initial = nicknames[peerUid.lowercase()] ?: "",
+            realName = header?.peerName ?: room.name,
+            onSave = { app.setNickname(peerUid, it); rename = false },
+            onDismiss = { rename = false },
+        )
+    }
+}
+
+/** Diálogo de apodo personal (D78): solo afecta a este teléfono. */
+@Composable
+fun NicknameDialog(
+    initial: String,
+    realName: String,
+    onSave: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Nombre de tu contacto") },
+        text = {
+            Column {
+                Text(
+                    "Ponle el nombre que quieras ver. Es solo para ti: la otra " +
+                        "persona no se entera. Déjalo vacío para usar su nombre " +
+                        "real ($realName).",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { if (it.length <= 40) text = it },
+                    label = { Text("Nombre") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text.trim().ifBlank { null }) }) { Text("Guardar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } },
+    )
 }
 
 /** Arranca una llamada con el par del chat directo (nombre de su perfil). */

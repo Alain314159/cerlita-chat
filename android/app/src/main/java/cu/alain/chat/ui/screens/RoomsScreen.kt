@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Verified
@@ -75,6 +76,7 @@ import cu.alain.chat.engine.RoomJoined
 import cu.alain.chat.net.FoundUser
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.notify.Notifier
+import cu.alain.chat.ui.NicknameDialog
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -142,6 +144,7 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     val meUid = app.engine.session?.uid ?: ""
     val items by app.db.roomListDao().observeRoomList(meUid).collectAsState(initial = emptyList())
     val keysVersion by app.engine.keysVersion.collectAsState()
+    val nicknames by app.nicknames.collectAsState() // D78: apodos personales
 
     var showAdd by remember { mutableStateOf(false) }
     var addMode by remember { mutableStateOf(0) }              // 0=chat directo 1=grupo 2=unirme
@@ -175,9 +178,11 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     var restoreError by remember { mutableStateOf<String?>(null) }
 
     // ── menú long-press (v0.6.0, bug 6): vaciar / eliminar / marcar leído ──
+    // ── y renombrar contacto (D78) en chats directos ──
     val scope = rememberCoroutineScope()
     var clearRoom by remember { mutableStateOf<cu.alain.chat.db.RoomListItem?>(null) }
     var deleteRoom by remember { mutableStateOf<cu.alain.chat.db.RoomListItem?>(null) }
+    var renameItem by remember { mutableStateOf<cu.alain.chat.db.RoomListItem?>(null) }
     var deleting by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
 
@@ -215,6 +220,7 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                     )
                     RoomRow(
                         item = item, hasKey = hasKey,
+                        nickname = item.peerUid?.let { nicknames[it.lowercase()] },
                         onClick = {
                             if (hasKey) onOpenRoom(room)
                             else { lockedRoom = room; restoreCode = ""; restoreError = null }
@@ -222,6 +228,7 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                         onMarkRead = { scope.launch { app.db.roomDao().resetUnread(item.roomId) } },
                         onClear = { clearRoom = item },
                         onDelete = { deleteRoom = item; deleteError = null },
+                        onRename = { renameItem = item },
                     )
                 }
             }
@@ -526,6 +533,19 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
         )
     }
 
+    // ── renombrar contacto (D78): apodo personal, solo en este teléfono ──
+    renameItem?.let { item ->
+        val uid = item.peerUid
+        if (uid != null) {
+            NicknameDialog(
+                initial = nicknames[uid.lowercase()] ?: "",
+                realName = item.peerName ?: item.name,
+                onSave = { app.setNickname(uid, it); renameItem = null },
+                onDismiss = { renameItem = null },
+            )
+        }
+    }
+
     // ── confirmación: vaciar historial (long-press, v0.6.0) ──
     clearRoom?.let { item ->
         AlertDialog(
@@ -655,24 +675,27 @@ private fun sasLabel(sas: String): String =
 
 /** Fila de la lista de chats: click abre, long-press abre el menú (v0.6.0).
  *  Sala con foto/nombre propios (D69) → se muestra tal cual; si no, el perfil
- *  del par (D61); si no hay clave, candado. Badge numérico de no leídos. */
+ *  del par (D61) o su APODO personal (D78); si no hay clave, candado. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RoomRow(
     item: cu.alain.chat.db.RoomListItem,
     hasKey: Boolean,
+    nickname: String?,
     onClick: () -> Unit,
     onMarkRead: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
+    onRename: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     val custom = item.roomPhoto && hasKey
+    val baseName = nickname ?: (item.peerName ?: item.name)
     val title = when {
         custom -> item.name
-        hasKey -> (item.peerName ?: item.name)
-        else -> "${item.peerName ?: item.name} (sin clave)"
+        hasKey -> baseName
+        else -> "$baseName (sin clave)"
     }
     val unread = item.unread > 0
     Box {
@@ -752,6 +775,13 @@ private fun RoomRow(
             }
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (item.peerUid != null) {
+                DropdownMenuItem(
+                    text = { Text("Renombrar contacto") },
+                    leadingIcon = { Icon(Icons.Default.DriveFileRenameOutline, null) },
+                    onClick = { menu = false; onRename() },
+                )
+            }
             if (item.unread > 0) {
                 DropdownMenuItem(
                     text = { Text("Marcar como leído") },
