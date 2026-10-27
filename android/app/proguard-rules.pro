@@ -15,3 +15,7 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# WebRTC (D75): JNI llama a org.webrtc por nombre — no se puede shrink
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**

@@ -48,6 +48,7 @@ android {
                 "proguard-rules.pro"
             )
             if (keystoreProps.isNotEmpty()) signingConfig = signingConfigs.getByName("release")
+            ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") } // WebRTC: -2 ABIs de APK
         }
     }
 
@@ -98,6 +99,7 @@ dependencies {
     implementation(libs.tink.android)
     implementation(libs.argon2kt)
     implementation(libs.androidx.exifinterface) // rotación EXIF al comprimir fotos (D76)
+    implementation(libs.stream.webrtc)         // llamadas audio/vídeo (D75): libwebrtc
 
     testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
     testImplementation("junit:junit:4.13.2")

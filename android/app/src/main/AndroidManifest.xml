@@ -5,8 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Notas de voz (v0.7.0, D76) -->
+    <!-- Notas de voz + llamadas (v0.7.0, D75/D76) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Timbre Realtime en segundo plano (D63/D64): servicio foreground tipo
          remoteMessaging (sin límite de 6 h de dataSync y permitido arrancar
          desde BOOT_COMPLETED) + receptor de arranque para revivirlo. -->

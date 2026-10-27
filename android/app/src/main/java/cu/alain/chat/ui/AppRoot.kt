@@ -18,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -39,7 +41,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import cu.alain.chat.ChatApp
+import cu.alain.chat.calls.CallDispatcher
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.notify.Notifier
@@ -91,13 +95,18 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
 
+            // Llamada en curso (D75): overlay a pantalla completa ENCIMA de todo
+            // (la UI sigue compuesta: la pila de navegación no se pierde)
+            val callState by cu.alain.chat.calls.CallDispatcher.state.collectAsState()
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+
             // Botón ATRÁS del teléfono (v0.6.0): navega hacia atrás en vez de
             // cerrar la app desde cualquier pantalla. En la raíz (lista de
             // chats) el atrás sale de la app — comportamiento normal. En el
             // onboarding de perfil NO hay atrás: hay que poner nombre (o
             // "Ahora no"), si no el efecto lo re-abriría en bucle.
             val onboarding = current is Screen.Profile && current.firstRun
-            BackHandler(enabled = stack.size > 1 && !onboarding) {
+            BackHandler(enabled = stack.size > 1 && !onboarding && callState == null) {
                 stack.removeAt(stack.lastIndex)
             }
 
@@ -195,10 +204,21 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                 is Screen.Home -> IconButton(onClick = { stack.add(Screen.Settings) }) {
                                     Icon(Icons.Default.Settings, "Ajustes")
                                 }
-                                is Screen.Chat -> IconButton(onClick = {
-                                    stack.add(Screen.RoomSettings(current.room.roomId))
-                                }) {
-                                    Icon(Icons.Default.Settings, "Ajustes de la sala")
+                                is Screen.Chat -> {
+                                    // llamadas (D75): solo en chats directos
+                                    if (current.room.kind == cu.alain.chat.core.C.ROOM_DM) {
+                                        IconButton(onClick = { startCall(app, current.room, video = false) }) {
+                                            Icon(Icons.Default.Call, "Llamada de voz")
+                                        }
+                                        IconButton(onClick = { startCall(app, current.room, video = true) }) {
+                                            Icon(Icons.Default.Videocam, "Videollamada")
+                                        }
+                                    }
+                                    IconButton(onClick = {
+                                        stack.add(Screen.RoomSettings(current.room.roomId))
+                                    }) {
+                                        Icon(Icons.Default.Settings, "Ajustes de la sala")
+                                    }
                                 }
                                 else -> {}
                             }
@@ -238,6 +258,11 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                     }
                 }
             }
+            } // fin Box UI normal
+            if (callState != null) {
+                // se dibuja al final: ENCIMA de la barra de estado visualmente
+                cu.alain.chat.calls.CallScreenOverlay(app)
+            }
         }
     }
 }
@@ -272,5 +297,18 @@ private fun ChatTitle(app: ChatApp, room: Room) {
         Spacer(Modifier.width(10.dp))
         if (header?.roomPhoto == true) Text(header?.name ?: room.name)
         else Text(header?.peerName ?: room.name)
+    }
+}
+
+/** Arranca una llamada con el par del chat directo (nombre de su perfil). */
+private fun startCall(app: ChatApp, room: Room, video: Boolean) {
+    val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+    scope.launch {
+        val peerName = app.db.profileDao().get(room.peerUid ?: "")?.displayName
+            ?: app.db.roomPeerDao().peersOf(room.roomId)
+                .firstOrNull { !it.equals(app.engine.session?.uid ?: "", ignoreCase = true) }
+                ?.let { app.db.profileDao().get(it)?.displayName }
+            ?: "@${room.name.removePrefix("@")}"
+        CallDispatcher.startOutgoing(app, room, peerName, video)
     }
 }
