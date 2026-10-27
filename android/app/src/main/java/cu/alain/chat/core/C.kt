@@ -49,6 +49,11 @@ object C {
     const val CALL_DECLINED = 2
     const val CALL_CANCELLED = 3   // colgó antes de que contestaran
 
+    // ---- Adjuntos E2EE (v0.7.0, D76) ----
+    const val ATTACH_BUCKET = "attachments"
+    const val MAX_FILE = 20 * 1024 * 1024  // 20 MB cifrado (bucket: 25)
+    const val MAX_RECORD_MS = 5 * 60 * 1000L
+
     // ---- Polling adaptativo (D15) ----
     const val POLL_ACTIVE_MS = 5_000L        // tras actividad
     const val POLL_IDLE_MAX_MS = 300_000L    // reposo máximo: 5 min

@@ -33,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import api  # noqa: E402
 
-FUNCTIONS = ["auth", "sync", "outbox", "heartbeat"]
+FUNCTIONS = ["auth", "sync", "outbox", "heartbeat", "files"]
 BACKEND = Path(__file__).resolve().parents[1]
 BUILD = BACKEND / "build"
 
@@ -115,16 +115,25 @@ def multipart_deploy(name: str) -> bool:
 
 def set_secrets(debug: str) -> bool:
     invite = os.environ.get("REG_INVITE_CODE")
-    if not invite:
+    svc_jwt = os.environ.get("SUPA_SERVICE_ROLE_KEY", "")
+    if not invite or not svc_jwt:
         api.load_env()
-        invite = os.environ.get("REG_INVITE_CODE")
+        invite = invite or os.environ.get("REG_INVITE_CODE")
+        svc_jwt = svc_jwt or os.environ.get("SUPA_SERVICE_ROLE_KEY", "")
     if not invite:
         print("ERROR: falta REG_INVITE_CODE en el entorno")
         return False
+    if not svc_jwt.startswith("eyJ"):
+        print("ERROR: SUPA_SERVICE_ROLE_KEY del entorno no es un JWT clásico (Storage lo exige)")
+        return False
 
+    # v0.7.0: el Storage SOLO acepta JWTs clásicos; el SUPABASE_SERVICE_ROLE_KEY
+    # auto-inyectado en las funciones es el formato nuevo (sb_secret_) → 403
+    # Invalid Compact JWS. Guardamos la JWT como secret propio.
     secret_sets = [
         {"name": "REG_INVITE_CODE", "value": invite},
         {"name": "DEBUG", "value": debug},
+        {"name": "SUPA_SVC_JWT", "value": svc_jwt},
     ]
     for body in (secret_sets, {"secrets": secret_sets}):
         st, res = api.call("POST", f"/v1/projects/{api.ref()}/secrets", body)

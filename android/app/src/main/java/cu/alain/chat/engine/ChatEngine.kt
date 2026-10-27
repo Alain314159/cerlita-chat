@@ -14,6 +14,7 @@ import cu.alain.chat.db.RoomPeer
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.net.DmPickup
 import cu.alain.chat.net.SyncRow
+import cu.alain.chat.profile.AttachmentMsg
 import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
 import cu.alain.chat.profile.ReadReceipt
@@ -135,6 +136,7 @@ class ChatEngine(
         loadKeys()
         scope.launch {
             uploadDevicePub() // D74: la pública del teléfono siempre fresca en el servidor
+            recoverOrphanUploads() // D76: subidas interrumpidas → fallidas
             syncRoomsFromServer()
             drainPending()
         }
@@ -600,6 +602,7 @@ class ChatEngine(
             db.profileDao().wipe(); db.roomPeerDao().wipe()   // perfiles + pares (D61)
             db.callLogDao().wipe()                              // registro de llamadas (v0.7.0)
             avatarsDir.deleteRecursively()                     // fotos propias, de pares y de salas
+            File(avatarsDir.parentFile, "attcache").deleteRecursively() // blobs y descargas de adjuntos (D76)
             db.metaDao().setLong("last_seq", 0)
             db.metaDao().deleteByPrefix("ri_")                 // ts de room-info (D69)
             db.metaDao().deleteByPrefix("rr_")                 // últimos recibos de lectura (D68)
@@ -753,6 +756,150 @@ class ChatEngine(
         poke()
         return Result.success(msgId)
     }
+
+    /**
+     * Envia un ADJUNTO (v0.7.0, D76): el archivo se cifra con una fileKey
+     * aleatoria propia, sube CIFRADO directo a Storage y la clave viaja E2EE
+     * dentro del mensaje de chat. El blob cifrado queda en attcache para
+     * reintentos hasta que el mensaje sale del outbox.
+     *
+     * onProgress: 0f..1f de la SUBIDA (la UI lo pinta en la burbuja).
+     */
+    suspend fun sendAttachment(
+        roomId: String,
+        type: String,
+        name: String,
+        mime: String,
+        ext: String,
+        originalSize: Long,
+        bytes: ByteArray,
+        durMs: Long = 0,
+        width: Int = 0,
+        height: Int = 0,
+        waveformB64: String? = null,
+        onProgress: (msgId: String, fraction: Float) -> Unit = { _, _ -> },
+    ): Result<String> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val key = keys[roomId.lowercase()]
+            ?: return Result.failure(IllegalStateException("esta sala no tiene clave en este teléfono"))
+        if (bytes.isEmpty()) return Result.failure(IllegalArgumentException("archivo vacío"))
+        if (bytes.size > C.MAX_FILE) {
+            return Result.failure(IllegalArgumentException("El archivo supera 20 MB"))
+        }
+
+        val msgId = Crypto.uuid7()
+        val ts = System.currentTimeMillis()
+        // 1. cifrar el archivo con clave PROPIA (AAD ligado a sala+mensaje)
+        val fileKey = Crypto.newRoomKey()
+        val aad = "file-v1|${roomId.lowercase()}|$msgId".toByteArray(Charsets.UTF_8)
+        val (nonce, ct) = Crypto.seal(fileKey, bytes, aad)
+        val blob = nonce + ct
+        val path = "$roomId/$msgId.$ext"
+
+        // 2. burbuja local (enviando) con TODO el sobre: sin la roomKey es ruido
+        val envelope = AttachmentMsg.encode(
+            type, name, mime, originalSize, path,
+            b64(fileKey), durMs, height, width, waveformB64,
+        )
+        db.msgDao().insert(
+            Message(msgId, roomId, s.uname, mine = true, body = envelope, ts = ts,
+                state = C.ST_SENDING, senderUid = s.uid)
+        )
+        try {
+            // 3. subir el blob cifrado directo a Storage (capability del roomId)
+            api.storageUpload(path, blob) { f -> onProgress(msgId, f) }
+            attCacheFile(msgId).writeBytes(blob) // para reintentos
+        } catch (e: Exception) {
+            db.msgDao().setState(msgId, C.ST_FAILED)
+            return Result.failure(e)
+        }
+
+        // 4. el MENSAJE (con la fileKey dentro) por el camino E2EE de siempre
+        return try {
+            val convKey = Crypto.convKey(key.first, roomId)
+            val mk = Crypto.msgKey(convKey, msgId)
+            val maad = Crypto.aad(msgId, s.uid, roomId)
+            val (mnonce, mct) = Crypto.seal(mk, Crypto.frame(envelope), maad)
+            if (mct.size < C.MIN_CT || mct.size > C.MAX_CT) {
+                db.msgDao().setState(msgId, C.ST_FAILED)
+                return Result.failure(IllegalArgumentException("El adjunto no cabe en el sobre"))
+            }
+            db.outboxDao().insert(OutboxMsg(msgId, roomId, b64(mct), b64(mnonce), ts))
+            poke()
+            Result.success(msgId)
+        } catch (e: Exception) {
+            db.msgDao().setState(msgId, C.ST_FAILED)
+            Result.failure(e)
+        }
+    }
+
+    /** Reintenta un adjunto FALLIDO cuyo blob cifrado sigue en attcache. */
+    suspend fun retryAttachment(msgId: String, onProgress: (Float) -> Unit = {}): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val m = db.msgDao().exists(msgId)
+        if (!m) return Result.failure(IllegalStateException("el mensaje ya no existe"))
+        val envelope = db.msgDao().chatBody(msgId) // body completo del mensaje
+            ?: return Result.failure(IllegalStateException("el mensaje ya no existe"))
+        val att = AttachmentMsg.parse(envelope)
+            ?: return Result.failure(IllegalStateException("no es un adjunto"))
+        val cache = attCacheFile(msgId)
+        if (!cache.exists()) {
+            return Result.failure(IllegalStateException("Los datos del adjunto ya no están en este teléfono: bórralo y envíalo de nuevo"))
+        }
+        val key = keys[att.path.substringBefore('/').lowercase()]
+            ?: return Result.failure(IllegalStateException("esta sala no tiene clave en este teléfono"))
+        return try {
+            db.msgDao().setState(msgId, C.ST_SENDING)
+            api.storageUpload(att.path, cache.readBytes(), onProgress)
+            val ts = System.currentTimeMillis()
+            val convKey = Crypto.convKey(key.first, att.path.substringBefore('/'))
+            val mk = Crypto.msgKey(convKey, msgId)
+            val maad = Crypto.aad(msgId, s.uid, att.path.substringBefore('/'))
+            val (mnonce, mct) = Crypto.seal(mk, Crypto.frame(envelope), maad)
+            db.outboxDao().insert(OutboxMsg(msgId, att.path.substringBefore('/'), b64(mct), b64(mnonce), ts))
+            poke()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            db.msgDao().setState(msgId, C.ST_FAILED)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Descarga y descifra un adjunto (caché local por msgId). Devuelve el
+     * archivo claro en attcache/dl-<msgId>.<ext>. Lanza si falla red/clave.
+     */
+    suspend fun downloadAttachment(msgId: String, att: AttachmentMsg.Parsed): File {
+        val s = store.session ?: throw IllegalStateException("sin sesión")
+        val out = File(attCacheDir(), "dl-$msgId.${extOf(att.path)}")
+        if (out.exists() && out.length() > 0) return out
+        val url = api.filesUrlDl(s.token, att.path)
+        val blob = api.getBytes(url)
+        if (blob.size < 12 + 16) throw ApiException(0, "download_failed")
+        val nonce = blob.copyOfRange(0, 12)
+        val ct = blob.copyOfRange(12, blob.size)
+        val roomId = att.path.substringBefore('/').lowercase()
+        val fileKey = Base64.decode(att.keyB64, Base64.NO_WRAP)
+        val plain = Crypto.open(fileKey, nonce, ct, "file-v1|$roomId|$msgId".toByteArray(Charsets.UTF_8))
+            ?: throw ApiException(0, "download_failed")
+        out.parentFile?.mkdirs()
+        out.writeBytes(plain)
+        Crypto.zero(fileKey)
+        return out
+    }
+
+    /** Marca como FALLIDOS los adjuntos que quedaron «enviando» sin outbox
+     *  (el proceso murió a mitad de la subida). Lo llama onProcessStart. */
+    private suspend fun recoverOrphanUploads() {
+        try {
+            db.msgDao().failOrphanSending()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun attCacheDir(): File = File(avatarsDir.parentFile, "attcache").apply { mkdirs() }
+    private fun attCacheFile(msgId: String) = File(attCacheDir(), "$msgId.bin")
+    private fun extOf(path: String): String = path.substringAfterLast('.', "bin").take(8)
 
     /**
      * Drenar el outbox (lo llama el OutboxWorker y tras un envío).

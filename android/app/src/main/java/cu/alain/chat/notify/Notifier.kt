@@ -14,6 +14,7 @@ import cu.alain.chat.MainActivity
 import cu.alain.chat.R
 import cu.alain.chat.db.AppDatabase
 import cu.alain.chat.engine.NewMsg
+import cu.alain.chat.profile.AttachmentMsg
 
 /**
  * Notificaciones de mensajes (reescrito en v0.5.0, D63/D66):
@@ -121,7 +122,9 @@ object Notifier {
                 val person = Person.Builder()
                     .setName(db.profileDao().get(m.senderUid)?.displayName ?: m.senderUname.ifBlank { "—" })
                     .build()
-                style.addMessage(m.body, m.ts, person)
+                // adjuntos (D76): el sobre E2EE no se muestra — sí su resumen
+                val shown = AttachmentMsg.preview(m.body) ?: m.body
+                style.addMessage(shown, m.ts, person)
             }
 
             val pi = PendingIntent.getActivity(
@@ -136,7 +139,7 @@ object Notifier {
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
                 .setStyle(style)
                 .setContentTitle(title)
-                .setContentText(roomMsgs.last().body)
+                .setContentText(AttachmentMsg.preview(roomMsgs.last().body) ?: roomMsgs.last().body)
                 .setNumber(roomMsgs.size)
                 .setWhen(roomMsgs.last().ts)
                 .setShowWhen(true)

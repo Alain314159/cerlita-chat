@@ -81,7 +81,11 @@ object HistoryExport {
             arr.put(
                 JSONArray()
                     .put(m.msgId).put(m.roomId).put(m.senderUname)
-                    .put(if (m.mine) 1 else 0).put(m.body).put(m.ts).put(m.state)
+                    .put(if (m.mine) 1 else 0)
+                    // adjuntos (D76): los bytes no viajan en el export; el sobre E2EE se
+                    // resume legible para que el historial siga teniendo sentido
+                    .put(cu.alain.chat.profile.AttachmentMsg.preview(m.body) ?: m.body)
+                    .put(m.ts).put(m.state)
             )
         }
         val json = JSONObject()

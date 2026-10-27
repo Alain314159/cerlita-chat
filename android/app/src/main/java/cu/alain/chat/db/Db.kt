@@ -190,6 +190,18 @@ interface MsgDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE msgId = :id)")
     suspend fun exists(id: String): Boolean
 
+    /** Body completo de un mensaje (reintento de adjuntos, D76). */
+    @Query("SELECT body FROM messages WHERE msgId = :id LIMIT 1")
+    suspend fun chatBody(id: String): String?
+
+    /** Subidas de adjuntos huérfanas: «enviando» sin fila en outbox (proceso
+     *  muerto a mitad de subida) → FALLIDAS para que el usuario reintente. */
+    @Query(
+        "UPDATE messages SET state = :failed WHERE state = :sending AND mine = 1 " +
+            "AND msgId NOT IN (SELECT msgId FROM outbox)"
+    )
+    suspend fun failOrphanSending(failed: Int = 2, sending: Int = 0)
+
     /** Eco propio (D68): guarda el seq del SERVIDOR de un mensaje ya insertado
      *  localmente al enviarlo (el seq nace en el servidor). Sin esto, los ✓✓
      *  de entrega/lectura jamás encontrarían mis mensajes (seq IS NOT NULL). */

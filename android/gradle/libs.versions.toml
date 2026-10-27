@@ -13,6 +13,7 @@ okhttp = "5.5.1"
 tink = "1.24.0"
 argon2kt = "1.6.0"
 desugar = "2.1.5"
+exifinterface = "1.4.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -37,6 +38,7 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 tink-android = { group = "com.google.crypto.tink", name = "tink-android", version.ref = "tink" }
 argon2kt = { group = "com.lambdapioneer.argon2kt", name = "argon2kt", version.ref = "argon2kt" }
 desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version.ref = "exifinterface" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -97,6 +97,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.tink.android)
     implementation(libs.argon2kt)
+    implementation(libs.androidx.exifinterface) // rotación EXIF al comprimir fotos (D76)
 
     testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
     testImplementation("junit:junit:4.13.2")

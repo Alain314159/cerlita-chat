@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
@@ -353,5 +354,75 @@ class Api(private val baseUrl: () -> String) {
         val t0 = System.currentTimeMillis()
         val (code, _) = get("/heartbeat", null)
         if (code == 200) System.currentTimeMillis() - t0 else throw ApiException(code, "heartbeat")
+    }
+
+    // ---------- adjuntos E2EE (v0.7.0, D76) ----------
+
+    /** Cliente para Storage: sin callTimeout (los archivos son grandes). */
+    private val fileClient = client.newBuilder()
+        .callTimeout(0, TimeUnit.MILLISECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+
+    /**
+     * Sube bytes CIFRADOS directo a Storage con la anon key. La política RLS
+     * del bucket solo admite <roomId>/<uuid>.<ext>: conocer el roomId YA es la
+     * capability de la sala (D76). onProgress informa 0f..1f.
+     */
+    suspend fun storageUpload(path: String, bytes: ByteArray, onProgress: (Float) -> Unit = {}) {
+        withContext(Dispatchers.IO) {
+            val root = base.substringBefore("/functions/v1")
+            val total = bytes.size.coerceAtLeast(1)
+            val body = object : okhttp3.RequestBody() {
+                override fun contentType() = "application/octet-stream".toMediaType()
+                override fun contentLength() = bytes.size.toLong()
+                override fun writeTo(sink: BufferedSink) {
+                    val src = okio.Buffer().write(bytes)
+                    val buf = ByteArray(32 * 1024)
+                    var sent = 0L
+                    while (true) {
+                        val n = src.read(buf)
+                        if (n == -1) break
+                        sink.write(buf, 0, n)
+                        sent += n
+                        onProgress((sent.toFloat() / total).coerceIn(0f, 1f))
+                    }
+                }
+            }
+            val req = Request.Builder()
+                .url(root.removeSuffix("/") + "/storage/v1/object/" + C.ATTACH_BUCKET + "/" + path)
+                .header("apikey", C.ANON_KEY)
+                .header("Authorization", "Bearer " + C.ANON_KEY)
+                .post(body)
+                .build()
+            fileClient.newCall(req).execute().use { r ->
+                if (r.code != 200) {
+                    throw ApiException(
+                        r.code,
+                        if (r.code == 413) "file_too_big" else "upload_failed",
+                    )
+                }
+            }
+        }
+    }
+
+    /** URL firmada de descarga (solo miembros de la sala del path, /files). */
+    suspend fun filesUrlDl(token: String, path: String): String = withContext(Dispatchers.IO) {
+        val (code, j) = post("/files", JSONObject().put("a", "urlDl").put("p", path), token)
+        when {
+            code == 200 -> j.getString("u")
+            code == 404 -> throw ApiException(404, "no_room")
+            else -> throw ApiException(code, j.errOr("storage_error"))
+        }
+    }
+
+    /** GET binario de una URL firmada. */
+    suspend fun getBytes(url: String): ByteArray = withContext(Dispatchers.IO) {
+        val req = Request.Builder().url(url).header("apikey", C.ANON_KEY).get().build()
+        fileClient.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) throw ApiException(r.code, "download_failed")
+            r.body?.bytes() ?: throw ApiException(r.code, "download_failed")
+        }
     }
 }
