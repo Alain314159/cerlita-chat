@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
@@ -221,7 +222,7 @@ fun ChatScreen(app: ChatApp, roomId: String) {
             }
         }
     }
-    // guardar archivo descargado (SAF)
+    // guardar archivo descargado (SAF — solo API <29; en 29+ guarda directo)
     val saveLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
@@ -236,6 +237,28 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                     } catch (_: Exception) { false }
                 }
                 sendError = if (ok) null else "No se pudo guardar el archivo"
+            }
+        }
+    }
+
+    // guardar FOTO en la galería (D80): directo en API 29+, SAF en <29
+    val saveImageSaf = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("image/jpeg"),
+    ) { uri ->
+        val bmp = viewerBitmap
+        if (uri != null && bmp != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        ctx.contentResolver.openOutputStream(uri)?.use {
+                            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, it)
+                        }
+                        true
+                    } catch (_: Exception) { false }
+                }
+                if (ok) android.widget.Toast.makeText(
+                    ctx, "Foto guardada ✓", android.widget.Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }
@@ -424,6 +447,27 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                     onClick = { viewerBitmap = null },
                     modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
                 ) { Icon(Icons.Default.Close, "Cerrar", tint = androidx.compose.ui.graphics.Color.White) }
+                // guardar en la galería (D80)
+                IconButton(
+                    onClick = {
+                        val b = bmp
+                        scope.launch {
+                            val direct = withContext(Dispatchers.IO) {
+                                cu.alain.chat.ui.attachments.AttachSaver.saveImageToGallery(ctx, b)
+                            }
+                            if (direct) {
+                                android.widget.Toast.makeText(
+                                    ctx, "Guardada en Imágenes/Cerlita ✓", android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                saveImageSaf.launch(
+                                    "cerlita_" + System.currentTimeMillis() + ".jpg",
+                                )
+                            }
+                        }
+                    },
+                    modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                ) { Icon(Icons.Default.Download, "Guardar foto", tint = androidx.compose.ui.graphics.Color.White) }
             }
         }
     }
@@ -535,7 +579,7 @@ private fun MessageBubble(
                             att?.type == AttachmentMsg.TYPE_IMAGE ->
                                 ImageBubble(app, m.msgId, att, onOpenImage)
                             att?.type == AttachmentMsg.TYPE_AUDIO ->
-                                AudioBubble(app, m.msgId, att, mine)
+                                AudioBubble(app, m.msgId, att, mine, onSaveDoc)
                             att?.type == AttachmentMsg.TYPE_DOC ->
                                 DocBubble(app, m.msgId, att, onSaveDoc)
                             else -> Text(

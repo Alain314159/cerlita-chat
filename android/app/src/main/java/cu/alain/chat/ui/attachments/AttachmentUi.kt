@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.util.LruCache
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.InsertDriveFile
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.profile.AttachmentMsg
@@ -159,10 +162,19 @@ class AudioPlayerState {
     }
 }
 
-/** Burbuja de NOTA DE VOZ: play/pausa + waveform con progreso + duración. */
+/** Burbuja de NOTA DE VOZ: play/pausa + waveform con progreso + duración
+ *  + guardar en Descargas (D80). */
 @Composable
-fun AudioBubble(app: ChatApp, msgId: String, att: AttachmentMsg.Parsed, mine: Boolean) {
+fun AudioBubble(
+    app: ChatApp,
+    msgId: String,
+    att: AttachmentMsg.Parsed,
+    mine: Boolean,
+    onSave: (AttachmentMsg.Parsed, File) -> Unit = { _, _ -> },
+) {
     val st = rememberAudioPlayer(app, msgId, att)
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     LaunchedEffect(st.playing) { while (st.playing) { st.tick(); delay(100) } }
     val palette = LocalChatPalette.current
     val fg = if (mine) palette.onSentBubble else palette.onRecvBubble
@@ -222,6 +234,32 @@ fun AudioBubble(app: ChatApp, msgId: String, att: AttachmentMsg.Parsed, mine: Bo
                 color = fg.copy(alpha = 0.8f),
             )
         }
+        // guardar la nota (D80): un toque a Descargas/Cerlita (SAF en API<29)
+        var saving by remember(msgId) { mutableStateOf(false) }
+        IconButton(enabled = !saving, onClick = {
+            saving = true
+            scope.launch {
+                try {
+                    val f = app.engine.downloadAttachment(msgId, att)
+                    val direct = withContext(Dispatchers.IO) {
+                        AttachSaver.saveToDownloads(
+                            ctx, "${att.name.ifBlank { "Nota de voz" }}.m4a", "audio/mp4", f.readBytes(),
+                        )
+                    }
+                    if (direct) {
+                        Toast.makeText(ctx, "Guardada en Descargas/Cerlita ✓", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onSave(att, f) // API <29: elegir ubicación (SAF)
+                    }
+                } catch (_: Exception) {
+                    Toast.makeText(ctx, "Sin conexión o el audio ya no está", Toast.LENGTH_SHORT).show()
+                }
+                saving = false
+            }
+        }) {
+            if (saving) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Default.Download, "Guardar nota", tint = fg, modifier = Modifier.size(20.dp))
+        }
     }
 }
 
@@ -253,7 +291,8 @@ fun ImageBubble(
     }
 }
 
-/** Burbuja de ARCHIVO: chip con icono + nombre + tamaño + botón guardar. */
+/** Burbuja de ARCHIVO: chip con icono + nombre + tamaño + botón guardar
+ *  (D80): un toque a Descargas/Cerlita en API 29+; en API <29 SAF). */
 @Composable
 fun DocBubble(
     app: ChatApp,
@@ -263,6 +302,7 @@ fun DocBubble(
 ) {
     var downloading by remember(msgId) { mutableStateOf(false) }
     var error by remember(msgId) { mutableStateOf<String?>(null) }
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Default.InsertDriveFile, null, tint = MaterialTheme.colorScheme.secondary)
@@ -284,7 +324,16 @@ fun DocBubble(
                 scope.launch {
                     try {
                         val f = app.engine.downloadAttachment(msgId, att)
-                        onSave(att, f)
+                        val direct = withContext(Dispatchers.IO) {
+                            AttachSaver.saveToDownloads(ctx, att.name, att.mime, f.readBytes())
+                        }
+                        if (direct) {
+                            Toast.makeText(
+                                ctx, "Guardado en Descargas/Cerlita ✓", Toast.LENGTH_SHORT,
+                            ).show()
+                        } else {
+                            onSave(att, f) // API <29: elegir ubicación (SAF)
+                        }
                     } catch (e: Exception) {
                         error = "Sin conexión o el archivo ya no está"
                     }
