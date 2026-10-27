@@ -282,3 +282,12 @@ SmokeTest (24/28/31/33/35).
 - **Pestañas**: Chats · Llamadas · Ajustes (sin «estados», por decisión).
 - BD v5 (rooms.kind/peerUid + calls), migración real v4→v5.
 - Tests 84/84 · APK 19,2 MB (WebRTC; arm64+armv7) · versionCode 8.
+
+## v0.7.1 — «Contestó» (fix de llamadas + peticiones del uso real)
+- **Llamadas arregladas (D81)**: 3 bugs — (1) candidatos ICE perdidos por llegar antes que el SDP remoto (POSTs separados sin orden): IceQueue los acumula y drena en orden + el offer/answer sale siempre antes que los ICE propios + broadcast con reintento x3; (2) fase CONNECTING al contestar («Conectando…» visible al instante; cronómetro solo con el medio conectado); (3) audio Android 12+ con setCommunicationDevice (el deprecado lo ignoraban varios OEM). Aceptar ya no le gana a la aplicación del offer; FAILED corta siempre.
+- **Tema Cerlita medido al píxel (D77)**: la paleta anterior era estimación del VLM; ahora cada color se MUESTREÓ de la imagen (listas #F6D8D8, chat #E0C2C4, enviada #F6C6CC con texto ciruela OSCURO, recibida #CCBABA, coral #D87884). LocalChatPalette desacopla burbujas de acentos; claro/oscuro intactos.
+- **Apodos (D78)**: tocar el título del chat (o long-press → «Renombrar contacto») pone el nombre que QUIERAS ver — local y privado. Aplican en lista, llamadas y notificaciones.
+- **Notificaciones (D79)**: avatar real (foto → cerdita/koalita → inicial coral), color Cerlita, **Responder sin abrir la app** (RemoteInput, envía cifrado con reintentos) y Marcar leído.
+- **Descargas (D80)**: fotos con botón «Guardar» en el visor; notas de voz y archivos a Descargas/Cerlita en UN toque (API 29+; API <29 selector SAF). Todo sin permisos nuevos.
+- **Instantáneo ON por defecto (D82)**: la notificación persistente (canal MIN: sin sonido ni icono) queda activada por defecto — es la única vía de tiempo real con la app cerrada sin FCM; migración única para quien venía de v0.7.0. Arreglado: AppRoot ya no arranca el FGS esquivando el D72.
+- Tests: **91/91** (4 apodos + 3 IceQueue + 1 acciones de notificación nuevos). APK 19,2 MB, misma firma (actualiza encima).
