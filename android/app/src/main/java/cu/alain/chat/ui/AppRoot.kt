@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -41,9 +42,11 @@ import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.AppState
+import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.screens.AuthScreens
 import cu.alain.chat.ui.screens.ChatScreen
 import cu.alain.chat.ui.screens.ProfileScreen
+import cu.alain.chat.ui.screens.RoomSettingsScreen
 import cu.alain.chat.ui.screens.RoomsScreen
 import cu.alain.chat.ui.screens.SettingsScreen
 
@@ -53,6 +56,7 @@ private sealed interface Screen {
     data class Chat(val room: Room) : Screen
     data object Settings : Screen
     data class Profile(val firstRun: Boolean) : Screen
+    data class RoomSettings(val roomId: String) : Screen
 }
 
 /**
@@ -87,6 +91,16 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
 
+            // Botón ATRÁS del teléfono (v0.6.0): navega hacia atrás en vez de
+            // cerrar la app desde cualquier pantalla. En la raíz (lista de
+            // chats) el atrás sale de la app — comportamiento normal. En el
+            // onboarding de perfil NO hay atrás: hay que poner nombre (o
+            // "Ahora no"), si no el efecto lo re-abriría en bucle.
+            val onboarding = current is Screen.Profile && current.firstRun
+            BackHandler(enabled = stack.size > 1 && !onboarding) {
+                stack.removeAt(stack.lastIndex)
+            }
+
             // Tocar una notificación abre ESA sala (D63): el extra llega por
             // MainActivity (onCreate/onNewIntent) y aquí se consume.
             val pendingRoom by app.pendingOpenRoom.collectAsState()
@@ -94,7 +108,7 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                 val rid = pendingRoom ?: return@LaunchedEffect
                 app.pendingOpenRoom.value = null
                 val room = app.db.roomDao().get(rid) ?: return@LaunchedEffect
-                stack.removeAll { it is Screen.Chat || it is Screen.Settings || it is Screen.Profile }
+                stack.removeAll { it is Screen.Chat || it is Screen.Settings || it is Screen.Profile || it is Screen.RoomSettings }
                 stack.add(Screen.Chat(room))
             }
 
@@ -162,20 +176,31 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                 Screen.Settings -> Text("Ajustes")
                                 is Screen.Profile ->
                                     Text(if (c.firstRun) "Tu perfil" else "Editar perfil")
+                                is Screen.RoomSettings -> Text("Ajustes de la sala")
                             }
                         },
                         navigationIcon = {
-                            if (stack.size > 1 && current !is Screen.Profile) {
+                            // atrás visible en toda sub-pantalla menos el onboarding
+                            // de perfil (v0.6.0: antes faltaba en «Editar perfil»)
+                            if (stack.size > 1 &&
+                                !(current is Screen.Profile && current.firstRun)
+                            ) {
                                 IconButton(onClick = { stack.removeAt(stack.lastIndex) }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Volver")
                                 }
                             }
                         },
                         actions = {
-                            if (current is Screen.Home) {
-                                IconButton(onClick = { stack.add(Screen.Settings) }) {
+                            when (current) {
+                                is Screen.Home -> IconButton(onClick = { stack.add(Screen.Settings) }) {
                                     Icon(Icons.Default.Settings, "Ajustes")
                                 }
+                                is Screen.Chat -> IconButton(onClick = {
+                                    stack.add(Screen.RoomSettings(current.room.roomId))
+                                }) {
+                                    Icon(Icons.Default.Settings, "Ajustes de la sala")
+                                }
+                                else -> {}
                             }
                         },
                     )
@@ -189,7 +214,7 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                 ) {
                     when (val c = current) {
                         Screen.Home -> RoomsScreen(app) { room ->
-                            stack.removeAll { it is Screen.Chat }
+                            stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
                             stack.add(Screen.Chat(room))
                         }
                         is Screen.Chat -> ChatScreen(app, c.room.roomId)
@@ -201,6 +226,15 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                             firstRun = c.firstRun,
                             onDone = { stack.removeAt(stack.lastIndex) },
                         )
+                        is Screen.RoomSettings -> RoomSettingsScreen(
+                            app = app,
+                            roomId = c.roomId,
+                            onDeleted = {
+                                // la sala murió: volver a la lista de chats
+                                stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
+                                Notifier.cancelRoom(ctx, c.roomId)
+                            },
+                        )
                     }
                 }
             }
@@ -208,22 +242,35 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
     }
 }
 
-/** Título del chat abierto: avatar + nombre del par (D61), o nombre local. */
+/** Título del chat abierto: si la sala tiene foto/nombre propio (D69) se
+ *  muestran; si no, el perfil del par (nombre + avatar, D61). */
 @Composable
 private fun ChatTitle(app: ChatApp, room: Room) {
     val meUid = app.engine.session?.uid ?: ""
     val header by app.db.roomListDao().observeRoomHeader(room.roomId, meUid)
         .collectAsState(initial = null)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        AvatarView(
-            photoUid = header?.peerUid,
-            photo = header?.peerPhoto == true,
-            avatarJson = header?.peerAvatarJson,
-            fallbackInitial = header?.peerName ?: room.name,
-            size = 32.dp,
-            photoVersion = 0L,
-        )
+        if (header?.roomPhoto == true) {
+            AvatarView(
+                photoUid = "room-${room.roomId.lowercase()}",
+                photo = true,
+                avatarJson = null,
+                fallbackInitial = header?.name ?: room.name,
+                size = 32.dp,
+                photoVersion = 0L,
+            )
+        } else {
+            AvatarView(
+                photoUid = header?.peerUid,
+                photo = header?.peerPhoto == true,
+                avatarJson = header?.peerAvatarJson,
+                fallbackInitial = header?.peerName ?: room.name,
+                size = 32.dp,
+                photoVersion = 0L,
+            )
+        }
         Spacer(Modifier.width(10.dp))
-        Text(header?.peerName ?: room.name)
+        if (header?.roomPhoto == true) Text(header?.name ?: room.name)
+        else Text(header?.peerName ?: room.name)
     }
 }

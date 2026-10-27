@@ -36,18 +36,20 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         app.inForeground = true
+        app.engine.inForeground = true   // D71: tope de polling 15 s con la app abierta
         if (app.engine.state.value != AppState.Login) {
             WorkSync.syncNow(this)
             app.engine.startPolling()
-            // Timbre foreground (D63): arranca tras login/reinicio del proceso
-            Doorbell.ensureStarted(this)
         }
+        app.syncDoorbell() // D72: timbre in-app (o FGS si el usuario pidió instantáneo)
     }
 
     override fun onStop() {
         super.onStop()
         app.inForeground = false
-        app.engine.stopPolling() // el servicio del timbre sigue vivo
+        app.engine.inForeground = false
+        app.engine.stopPolling() // cierra el polling; el timbre decide syncDoorbell
+        app.syncDoorbell()       // D72: fuera el in-app; FGS solo en modo instantáneo
     }
 
     override fun onNewIntent(intent: Intent) {

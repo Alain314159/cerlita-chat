@@ -23,6 +23,8 @@ data class Room(
     val owner: Boolean,
     val sas: String,            // 6 dígitos, se muestra en la sala (D43)
     val createdAt: Long,
+    val unread: Int = 0,        // mensajes del par sin leer (badge, v0.6.0)
+    val photo: Boolean = false, // foto de sala E2EE en avatars/room-<id>.jpg (D69)
 )
 
 /** Mensaje descifrado (o marcado ilegible) para la UI. */
@@ -124,6 +126,20 @@ interface RoomDao {
     @Query("DELETE FROM rooms WHERE roomId = :id")
     suspend fun delete(id: String)
 
+    // ── v0.6.0: no leídos y foto de sala ──
+
+    /** +1 mensaje del par sin abrir (badge de la lista de chats). */
+    @Query("UPDATE rooms SET unread = unread + 1 WHERE roomId = :id")
+    suspend fun bumpUnread(id: String)
+
+    /** Al abrir la sala: contador a cero. */
+    @Query("UPDATE rooms SET unread = 0 WHERE roomId = :id")
+    suspend fun resetUnread(id: String)
+
+    /** Cambia SOLO el nombre local (renombrar sin foto, o sala sin clave). */
+    @Query("UPDATE rooms SET name = :name WHERE roomId = :id")
+    suspend fun rename(id: String, name: String)
+
     @Query("SELECT COUNT(*) FROM rooms")
     suspend fun count(): Int
 
@@ -155,6 +171,40 @@ interface MsgDao {
     @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE msgId = :id)")
     suspend fun exists(id: String): Boolean
 
+    /** Eco propio (D68): guarda el seq del SERVIDOR de un mensaje ya insertado
+     *  localmente al enviarlo (el seq nace en el servidor). Sin esto, los ✓✓
+     *  de entrega/lectura jamás encontrarían mis mensajes (seq IS NOT NULL). */
+    @Query("UPDATE messages SET seq = :seq WHERE msgId = :id AND seq IS NULL")
+    suspend fun fillSeq(id: String, seq: Long)
+
+    // ── v0.6.0: recibos de entrega y lectura (D68) ──
+
+    /** Marca ✓✓ entregados mis mensajes enviados con seq ≤ seq (el otro los bajó). */
+    @Query(
+        "UPDATE messages SET state = :delivered WHERE roomId = :room AND mine = 1 " +
+            "AND state = :sent AND seq IS NOT NULL AND seq <= :seq"
+    )
+    suspend fun markDeliveredUpTo(room: String, seq: Long, sent: Int, delivered: Int)
+
+    /** Marca ✓✓ leídos mis mensajes con seq ≤ seq (recibo E2EE kind=3 del par). */
+    @Query(
+        "UPDATE messages SET state = :read WHERE roomId = :room AND mine = 1 " +
+            "AND state IN (:from) AND seq IS NOT NULL AND seq <= :seq"
+    )
+    suspend fun markReadUpTo(room: String, seq: Long, from: List<Int>, read: Int)
+
+    /** Seq global máximo de la sala (para el recibo de lectura: "leí hasta aquí"). 0 si nada tiene seq (offline). */
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE roomId = :room")
+    suspend fun maxSeq(room: String): Long
+
+    /** Último seq de mensajes DEL PAR (¿tengo algo nuevo que acusar lectura?). */
+    @Query("SELECT COALESCE(MAX(seq), 0) FROM messages WHERE roomId = :room AND mine = 0")
+    suspend fun maxPeerSeq(room: String): Long
+
+    /** Vaciar historial local de una sala (los mensajes del servidor no se tocan). */
+    @Query("DELETE FROM messages WHERE roomId = :room")
+    suspend fun clearForRoom(room: String)
+
     // Lista de conversaciones: último mensaje TEXTO por sala
     @Query(
         """SELECT m.* FROM messages m
@@ -182,6 +232,10 @@ interface OutboxDao {
     @Query("SELECT COUNT(*) FROM outbox")
     fun observeCount(): Flow<Int>
 
+    /** Eliminar pendientes de una sala (al borrar la sala localmente). */
+    @Query("DELETE FROM outbox WHERE roomId = :room")
+    suspend fun deleteForRoom(room: String)
+
     @Query("DELETE FROM outbox")
     suspend fun wipe()
 }
@@ -196,6 +250,9 @@ interface PendingDao {
 
     @Query("SELECT * FROM pending WHERE roomId = :room ORDER BY seq ASC")
     suspend fun forRoom(room: String): List<PendingMsg>
+
+    @Query("DELETE FROM pending WHERE roomId = :room")
+    suspend fun deleteForRoom(room: String)
 
     @Query("DELETE FROM pending WHERE msgId IN (:ids)")
     suspend fun delete(ids: List<String>)
@@ -215,6 +272,12 @@ interface MetaDao {
     suspend fun getLong(k: String): Long? = get(k)?.toLongOrNull()
 
     suspend fun setLong(k: String, v: Long) = set(MetaRow(k, v.toString()))
+
+    @Query("DELETE FROM meta WHERE k = :k")
+    suspend fun delete(k: String)
+
+    @Query("DELETE FROM meta WHERE k LIKE :prefix || '%'")
+    suspend fun deleteByPrefix(prefix: String)
 }
 
 // ───────────── DAOs v3 (perfiles) ─────────────
@@ -250,6 +313,13 @@ interface RoomPeerDao {
     @Query("SELECT COUNT(*) FROM room_peer WHERE roomId = :room")
     suspend fun countFor(room: String): Int
 
+    /** Miembros vistos en una sala (para Ajustes de la sala). */
+    @Query("SELECT uid FROM room_peer WHERE roomId = :room")
+    suspend fun peersOf(room: String): List<String>
+
+    @Query("DELETE FROM room_peer WHERE roomId = :room")
+    suspend fun deleteForRoom(room: String)
+
     @Query("DELETE FROM room_peer")
     suspend fun wipe()
 }
@@ -261,6 +331,8 @@ data class RoomListItem(
     val owner: Boolean,
     val createdAt: Long,
     val sas: String,
+    val unread: Int,
+    val roomPhoto: Boolean,
     val peerUid: String?,
     val peerName: String?,
     val peerAvatarJson: String?,
@@ -274,6 +346,7 @@ data class RoomListItem(
 data class RoomHeader(
     val roomId: String,
     val name: String,
+    val roomPhoto: Boolean,
     val peerName: String?,
     val peerAvatarJson: String?,
     val peerPhoto: Boolean?,
@@ -289,7 +362,7 @@ interface RoomListDao {
      */
     @Query(
         """SELECT r.roomId AS roomId, r.name AS name, r.owner AS owner, r.createdAt AS createdAt,
-           r.sas AS sas,
+           r.sas AS sas, r.unread AS unread, r.photo AS roomPhoto,
            (SELECT COUNT(*) FROM room_peer rp2 WHERE rp2.roomId = r.roomId) > 0 AS hasPeers,
            p.uid AS peerUid,
            p.displayName AS peerName, p.avatarJson AS peerAvatarJson, p.photo AS peerPhoto,
@@ -309,7 +382,7 @@ interface RoomListDao {
 
     /** Cabecera de UNA sala (título del chat: avatar + nombre del par). */
     @Query(
-        """SELECT r.roomId AS roomId, r.name AS name,
+        """SELECT r.roomId AS roomId, r.name AS name, r.photo AS roomPhoto,
            p.displayName AS peerName, p.avatarJson AS peerAvatarJson,
            p.photo AS peerPhoto, p.uid AS peerUid
            FROM rooms r
@@ -344,10 +417,21 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/**
+ * v3 → v4 (v0.6.0): columnas unread/photo en rooms (badge de no leídos +
+ * foto de sala E2EE). Migración REAL: hay teléfonos reales con v0.4.1/v0.5.0.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE rooms ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE rooms ADD COLUMN photo INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 @Database(
     entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class,
         Profile::class, RoomPeer::class],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -364,8 +448,8 @@ abstract class AppDatabase : RoomDatabase() {
         fun build(ctx: Context): AppDatabase =
             // androidx.room.Room (calificado: la entidad local se llama Room)
             androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                .addMigrations(MIGRATION_2_3)
-                // Solo para rutas FUTURAS desconocidas; 2→3 tiene migración real.
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+                // Solo para rutas FUTURAS desconocidas; 2→3 y 3→4 tienen migración real.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
     }

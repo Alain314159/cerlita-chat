@@ -22,15 +22,26 @@ object C {
 
     // ---- Estados de mensaje en Room ----
     const val ST_SENDING = 0
-    const val ST_SENT = 1
+    const val ST_SENT = 1          // ✓ en el servidor (ack del outbox)
     const val ST_FAILED = 2
     const val ST_RECEIVED = 3
     const val ST_UNREADABLE = 4
+    const val ST_DELIVERED = 5     // ✓✓ lo bajó el otro (rd del /sync, D68)
+    const val ST_READ = 6          // ✓✓ azul: recibo de lectura E2EE (kind=3, D68)
+
+    // ---- Kinds de mensaje (solo locales: el servidor ve ciphertext opaco) ----
+    const val KIND_TEXT = 0        // burbuja normal
+    const val KIND_PROFILE = 1     // anuncio de perfil (D61)
+    const val KIND_ROOM_INFO = 2   // nombre/foto de la sala (v0.6.0, D69)
+    const val KIND_READ = 3        // recibo de lectura (v0.6.0, D68)
 
     // ---- Polling adaptativo (D15) ----
     const val POLL_ACTIVE_MS = 5_000L        // tras actividad
     const val POLL_IDLE_MAX_MS = 300_000L    // reposo máximo: 5 min
     const val POLL_BACKOFF = 2.0             // x2 por sondeo vacío
+    const val POLL_FG_MAX_MS = 15_000L       // tope con la app ABIERTA (D71):
+                                             // aunque el timbre esté muerto, el
+                                             // chat abierto nunca pasa de 15 s
 
     // ---- Cripto (D3, D33, D34, D35) ----
     const val ARGON_T = 3

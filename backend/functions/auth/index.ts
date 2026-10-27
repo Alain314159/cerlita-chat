@@ -12,6 +12,9 @@
 //       Capability-based: conocer el room_id (2^128) ES la invitación.
 //       SIN sas_confirmed: el SAS se compara por voz SOLO entre los
 //       clientes; el servidor únicamente registra "B está en la sala X".
+//   {a:"room_leave", r:room_id} — salir de la sala (v0.6.0, D70).
+//       Borra la membresía y TODO el historial de la sala si queda
+//       vacía (messages.room_id no tiene CASCADE → borrado explícito).
 //   {a:"rooms"}               — lista de salas propias (multi-dispositivo).
 import postgres from "npm:postgres@3.4.9";
 import { argon2id } from "@noble/hashes/argon2.js";
@@ -214,6 +217,27 @@ async function roomJoin(me: any, body: any) {
   return json(200, { ok: true });
 }
 
+// ---------- room_leave: salir de la sala (v0.6.0, D70) ----------
+// Idempotente (salir 2 veces = ok, salir de una sala ajena = ok sin efecto).
+// Si la sala queda VACÍA se borra entera: mensajes + estado + fila.
+// Si queda un miembro, su historial se conserva intacto y el que salió
+// puede volver a entrar con el código de invitación.
+async function roomLeave(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_room" });
+  const uid = String(me.uid);
+  await sql`delete from room_members where room_id = ${r}::uuid and user_id = ${uid}::uuid`;
+  // ¿Quedó vacía? → borrar historial + estado + sala (messages/room_state
+  // NO tienen ON DELETE CASCADE en 0002 → borrado explícito y en orden).
+  const [{ n }] = await sql`select count(*)::int as n from room_members where room_id = ${r}::uuid`;
+  if (n === 0) {
+    await sql`delete from messages where room_id = ${r}::uuid`;
+    await sql`delete from room_state where room_id = ${r}::uuid`;
+    await sql`delete from rooms where room_id = ${r}::uuid`;
+  }
+  return json(200, { ok: true });
+}
+
 // ---------- rooms: listar salas propias (para multi-dispositivo) ----------
 // Solo ids y flag de propietario. Sin roomKey no se descifra nada;
 // la roomKey se recupera con el código de invitación o el export cifrado.
@@ -247,6 +271,7 @@ Deno.serve(async (req) => {
     if (!me) return json(401, { e: "unauthorized" });
     if (body.a === "room_new") return await roomNew(me, body);
     if (body.a === "room_join") return await roomJoin(me, body);
+    if (body.a === "room_leave") return await roomLeave(me, body);
     if (body.a === "rooms") return await roomList(me);
     return json(400, { e: "bad_action" });
   } catch (e) {

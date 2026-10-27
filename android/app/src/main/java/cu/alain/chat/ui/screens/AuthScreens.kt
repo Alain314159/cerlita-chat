@@ -16,9 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -106,6 +109,8 @@ private fun LoginScreen(vm: AuthViewModel) {
     var mode by rememberSaveable { mutableStateOf(0) } // 0=entrar 1=crear cuenta
     var user by rememberSaveable { mutableStateOf("") }
     var pass by rememberSaveable { mutableStateOf("") }
+    var pass2 by rememberSaveable { mutableStateOf("") }   // v0.6.0: repetir contraseña
+    var showPass by rememberSaveable { mutableStateOf(false) } // ojo ver/ocultar
     var invite by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -145,9 +150,14 @@ private fun LoginScreen(vm: AuthViewModel) {
         Field(Icons.Default.Person, "Usuario (a-z, 0-9, _)", user, { user = it.trim().lowercase() },
             KeyboardOptions(keyboardType = KeyboardType.Ascii))
         Spacer(Modifier.height(12.dp))
-        Field(Icons.Default.VpnKey, "Contraseña (mínimo 8)", pass, { pass = it },
-            KeyboardOptions(keyboardType = KeyboardType.Password), secret = true)
+        Field(Icons.Default.VpnKey, "Contraseña (mínimo 8)", pass, { pass = it; error = null },
+            KeyboardOptions(keyboardType = KeyboardType.Password), secret = true,
+            show = showPass, onToggleShow = { showPass = !showPass })
         if (mode == 1) {
+            Spacer(Modifier.height(12.dp))
+            Field(Icons.Default.Lock, "Repetir la contraseña", pass2, { pass2 = it; error = null },
+                KeyboardOptions(keyboardType = KeyboardType.Password), secret = true,
+                show = showPass, onToggleShow = { showPass = !showPass })
             Spacer(Modifier.height(12.dp))
             Field(Icons.Default.Lock, "Código de invitación de la app", invite, { invite = it.trim().uppercase() },
                 KeyboardOptions(keyboardType = KeyboardType.Ascii))
@@ -165,17 +175,18 @@ private fun LoginScreen(vm: AuthViewModel) {
         Button(
             onClick = {
                 error = null
-                if (!C.validUsername(user)) {
-                    error = "Usuario inválido: 3-24 letras minúsculas, números o _"
-                } else if (mode == 0) {
-                    vm.login(user, pass) { }
-                } else {
-                    vm.register(user, pass, invite) { }
+                when {
+                    !C.validUsername(user) ->
+                        error = "Usuario inválido: 3-24 letras minúsculas, números o _"
+                    mode == 1 && pass != pass2 ->
+                        error = "Las contraseñas no coinciden"
+                    mode == 0 -> vm.login(user, pass) { }
+                    else -> vm.register(user, pass, invite) { }
                 }
             },
             modifier = fieldModifier,
             enabled = busy == null && user.isNotEmpty() && pass.length >= 8 &&
-                (mode == 0 || invite.isNotEmpty()),
+                (mode == 0 || (invite.isNotEmpty() && pass2.length >= 8 && pass == pass2)),
         ) {
             if (busy == "") {
                 CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
@@ -200,12 +211,24 @@ private fun LoginScreen(vm: AuthViewModel) {
 private fun Field(
     icon: ImageVector, label: String, value: String, onChange: (String) -> Unit,
     keyboard: KeyboardOptions, secret: Boolean = false,
+    show: Boolean = false, onToggleShow: (() -> Unit)? = null,
 ) {
     OutlinedTextField(
         modifier = Modifier.fillMaxWidth(), value = value, onValueChange = onChange,
         label = { Text(label) },
         leadingIcon = { Icon(icon, null) },
-        visualTransformation = if (secret) PasswordVisualTransformation()
+        // v0.6.0: ojo para ver/ocultar la contraseña (login Y repetir)
+        trailingIcon = if (secret && onToggleShow != null) {
+            {
+                IconButton(onClick = onToggleShow) {
+                    Icon(
+                        if (show) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                        if (show) "Ocultar contraseña" else "Ver contraseña",
+                    )
+                }
+            }
+        } else null,
+        visualTransformation = if (secret && !show) PasswordVisualTransformation()
         else VisualTransformation.None,
         keyboardOptions = keyboard,
         singleLine = true,

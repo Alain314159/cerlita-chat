@@ -1,7 +1,7 @@
 # Backend — Supabase Edge Functions + Postgres
 
-Estado: **desplegado y verificado E2E** (37/37 smoke + **13/13 timbre Realtime**,
-27-oct-2026) en el proyecto
+Estado: **desplegado y verificado E2E** (37/37 smoke + **13/13 timbre Realtime** +
+**24/24 recibos/salida de sala**, 28-oct-2026) en el proyecto
 `wuptkddnkahmknolpxtp` (región us-east-2). Fase 1 completa del lado servidor, **modelo
 rooms** (Documento v2 corregido: sala con roomKey compartida por código de invitación
 que NUNCA toca el servidor; SAS verificado solo entre clientes).
@@ -12,8 +12,8 @@ que NUNCA toca el servidor; SAS verificado solo entre clientes).
 App Android ──HTTPS──> Cloudflare/Supabase gateway ──> Edge Functions ──SQL──> Postgres
                         (gzip automático)               (Deno runtime)
 
-  auth       registro/login/logout/whoami + salas (room_new/room_join/rooms)
-  sync       GET incremental por seq — 204 vacío, gzip
+  auth       registro/login/logout/whoami + salas (room_new/room_join/room_leave/rooms)
+  sync       GET incremental por seq — 204 vacío, gzip, rd (recibos de entrega, D68)
   outbox     POST lotes idempotentes a una sala — ON CONFLICT DO NOTHING
              + timbre Realtime al canal room-<roomId> (D63; solo despierta,
                jamás transporta contenido)

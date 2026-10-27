@@ -11,8 +11,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/** Respuesta exitosa de /sync (204 → rows vacías). */
-data class SyncResp(val nextSeq: Long, val rows: List<SyncRow>)
+/** Respuesta exitosa de /sync (204 → rows vacías). rd = seq entregado por otros por sala (D68). */
+data class SyncResp(val nextSeq: Long, val rows: List<SyncRow>, val rd: List<Pair<String, Long>> = emptyList())
 
 /** Fila de /sync: [msg_id, room_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]. */
 data class SyncRow(
@@ -139,6 +139,12 @@ class Api(private val baseUrl: () -> String) {
         if (code != 200) throw ApiException(code, j.errOr("room_join_failed"))
     }
 
+    /** Salir de la sala + borrado local (v0.6.0, D70). Si queda alguien, la sala vive. */
+    suspend fun roomLeave(token: String, roomId: String) = withContext(Dispatchers.IO) {
+        val (code, j) = post("/auth", JSONObject().put("a", "room_leave").put("r", roomId), token)
+        if (code != 200) throw ApiException(code, j.errOr("room_leave_failed"))
+    }
+
     /** Salas propias según el servidor (multi-dispositivo: sin roomKey no se descifra nada). */
     suspend fun rooms(token: String): List<ServerRoom> = withContext(Dispatchers.IO) {
         val (code, j) = post("/auth", JSONObject().put("a", "rooms"), token)
@@ -179,7 +185,15 @@ class Api(private val baseUrl: () -> String) {
                             )
                         }
                     }
-                    SyncResp(j.getLong("n"), rows)
+                    // rd (v0.6.0): [[room_id, seq_entregado_por_otros], ...] — opcional
+                    val rdArr = j.optJSONArray("rd")
+                    val rd = if (rdArr != null) buildList {
+                        for (i in 0 until rdArr.length()) {
+                            val r = rdArr.getJSONArray(i)
+                            add(r.getString(0) to r.getLong(1))
+                        }
+                    } else emptyList()
+                    SyncResp(j.getLong("n"), rows, rd)
                 }
                 else -> {
                     val e = try { JSONObject(raw).optString("e") } catch (_: Exception) { "" }

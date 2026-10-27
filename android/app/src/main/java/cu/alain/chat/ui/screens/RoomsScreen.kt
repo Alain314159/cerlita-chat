@@ -2,7 +2,8 @@ package cu.alain.chat.ui.screens
 
 import android.app.Application
 import android.content.Intent
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,6 +24,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Verified
@@ -31,6 +35,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -44,11 +50,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +69,7 @@ import cu.alain.chat.core.C
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.RoomJoined
 import cu.alain.chat.net.ApiException
+import cu.alain.chat.notify.Notifier
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -130,6 +140,13 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
     var restoreCode by remember { mutableStateOf("") }
     var restoreError by remember { mutableStateOf<String?>(null) }
 
+    // ── menú long-press (v0.6.0, bug 6): vaciar / eliminar / marcar leído ──
+    val scope = rememberCoroutineScope()
+    var clearRoom by remember { mutableStateOf<cu.alain.chat.db.RoomListItem?>(null) }
+    var deleteRoom by remember { mutableStateOf<cu.alain.chat.db.RoomListItem?>(null) }
+    var deleting by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
+
     val busy = vm.busy.value
 
     Box(Modifier.fillMaxSize()) {
@@ -162,10 +179,16 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                         roomId = item.roomId, name = item.name, owner = item.owner,
                         sas = item.sas, createdAt = item.createdAt,
                     )
-                    RoomRow(item = item, hasKey = hasKey) {
-                        if (hasKey) onOpenRoom(room)
-                        else { lockedRoom = room; restoreCode = ""; restoreError = null }
-                    }
+                    RoomRow(
+                        item = item, hasKey = hasKey,
+                        onClick = {
+                            if (hasKey) onOpenRoom(room)
+                            else { lockedRoom = room; restoreCode = ""; restoreError = null }
+                        },
+                        onMarkRead = { scope.launch { app.db.roomDao().resetUnread(item.roomId) } },
+                        onClear = { clearRoom = item },
+                        onDelete = { deleteRoom = item; deleteError = null },
+                    )
                 }
             }
         }
@@ -352,6 +375,77 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
         )
     }
 
+    // ── confirmación: vaciar historial (long-press, v0.6.0) ──
+    clearRoom?.let { item ->
+        AlertDialog(
+            onDismissRequest = { clearRoom = null },
+            title = { Text("¿Vaciar el historial?") },
+            text = {
+                Text("Se borran los mensajes de «${item.peerName ?: item.name}» SOLO en este " +
+                    "teléfono. Los del otro teléfono y los del servidor no se tocan.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clearRoom = null
+                    scope.launch { app.engine.clearHistory(item.roomId) }
+                }) { Text("Vaciar", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton({ clearRoom = null }) { Text("Cancelar") } },
+        )
+    }
+
+    // ── confirmación: eliminar sala (long-press, v0.6.0/D70) ──
+    deleteRoom?.let { item ->
+        AlertDialog(
+            onDismissRequest = { if (!deleting) deleteRoom = null },
+            title = { Text("¿Eliminar la sala?") },
+            text = {
+                Column {
+                    Text(
+                        "Sales de «${item.peerName ?: item.name}» y se borran sus mensajes y su clave " +
+                            "de este teléfono. La otra persona conserva su copia. Si eras el último " +
+                            "miembro, la sala se borra del servidor por completo. Necesita conexión " +
+                            "(para volver a entrar necesitarás el código de invitación)."
+                    )
+                    deleteError?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleting,
+                    onClick = {
+                        deleting = true; deleteError = null
+                        scope.launch {
+                            val r = app.engine.deleteRoom(item.roomId)
+                            deleting = false
+                            r.fold(
+                                onSuccess = {
+                                    deleteRoom = null
+                                    Notifier.cancelRoom(ctx, item.roomId)
+                                },
+                                onFailure = { e ->
+                                    deleteError = (e as? ApiException)?.userMsg
+                                        ?: "Sin conexión: la sala no se puede eliminar ahora"
+                                },
+                            )
+                        }
+                    },
+                ) {
+                    if (deleting) {
+                        CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Eliminar", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton({ if (!deleting) deleteRoom = null }) { Text("Cancelar") } },
+        )
+    }
+
     // ── sala sin clave en este teléfono (2º dispositivo / clave perdida) ──
     lockedRoom?.let { room ->
         AlertDialog(
@@ -408,60 +502,123 @@ private fun errText(e: Throwable): String =
 private fun sasLabel(sas: String): String =
     if (sas.length == 6) "${sas.substring(0, 3)} ${sas.substring(3)}" else sas
 
+/** Fila de la lista de chats: click abre, long-press abre el menú (v0.6.0).
+ *  Sala con foto/nombre propios (D69) → se muestra tal cual; si no, el perfil
+ *  del par (D61); si no hay clave, candado. Badge numérico de no leídos. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun RoomRow(
     item: cu.alain.chat.db.RoomListItem,
     hasKey: Boolean,
     onClick: () -> Unit,
+    onMarkRead: () -> Unit,
+    onClear: () -> Unit,
+    onDelete: () -> Unit,
 ) {
-    val title = (item.peerName ?: item.name).let { if (hasKey) it else "$it (sin clave)" }
-    val unread = item.lastTs != null && item.lastMine == false
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (hasKey) {
-            cu.alain.chat.ui.AvatarView(
-                photoUid = item.peerUid,
-                photo = item.peerPhoto == true,
-                avatarJson = item.peerAvatarJson,
-                fallbackInitial = title,
-                size = 48.dp,
-            )
-        } else {
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape) {
-                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Lock, "Sin clave",
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+    val haptic = LocalHapticFeedback.current
+    var menu by remember { mutableStateOf(false) }
+    val custom = item.roomPhoto && hasKey
+    val title = when {
+        custom -> item.name
+        hasKey -> (item.peerName ?: item.name)
+        else -> "${item.peerName ?: item.name} (sin clave)"
+    }
+    val unread = item.unread > 0
+    Box {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menu = true
+                    },
+                )
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            when {
+                !hasKey -> Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = CircleShape) {
+                    Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Lock, "Sin clave",
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        )
+                    }
+                }
+                custom -> cu.alain.chat.ui.AvatarView(
+                    photoUid = "room-${item.roomId.lowercase()}",
+                    photo = true,
+                    avatarJson = null,
+                    fallbackInitial = title,
+                    size = 48.dp,
+                )
+                else -> cu.alain.chat.ui.AvatarView(
+                    photoUid = item.peerUid,
+                    photo = item.peerPhoto == true,
+                    avatarJson = item.peerAvatarJson,
+                    fallbackInitial = title,
+                    size = 48.dp,
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
+                )
+                if (!item.lastBody.isNullOrEmpty()) {
+                    Text(
+                        item.lastBody,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (unread) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
             }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (unread) FontWeight.Bold else FontWeight.SemiBold,
-            )
-            if (!item.lastBody.isNullOrEmpty()) {
-                Text(
-                    item.lastBody,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+            Column(horizontalAlignment = Alignment.End) {
+                item.lastTs?.let {
+                    Text(
+                        SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(it)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (unread) {
+                    Spacer(Modifier.height(4.dp))
+                    Surface(color = MaterialTheme.colorScheme.primary, shape = CircleShape) {
+                        Text(
+                            if (item.unread > 99) "99+" else "${item.unread}",
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                        )
+                    }
+                }
             }
         }
-        item.lastTs?.let {
-            Text(
-                SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(it)),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            if (item.unread > 0) {
+                DropdownMenuItem(
+                    text = { Text("Marcar como leído") },
+                    leadingIcon = { Icon(Icons.Default.DoneAll, null) },
+                    onClick = { menu = false; onMarkRead() },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("Vaciar historial") },
+                leadingIcon = { Icon(Icons.Default.DeleteSweep, null) },
+                onClick = { menu = false; onClear() },
+            )
+            DropdownMenuItem(
+                text = { Text("Eliminar sala", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = { menu = false; onDelete() },
             )
         }
     }

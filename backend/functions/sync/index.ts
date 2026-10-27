@@ -1,12 +1,16 @@
 // Edge Function: sync — GET incremental de mensajes desde un seq
 // GET /functions/v1/sync?s=<seq>&l=<limit>  (Bearer token de sesión)
 // 200 JSON compacto {n: next_seq, m: [[msg_id, room_id, sender_id, seq, nonce_b64,
-//   ct_b64, sender_uname, ts_ms], ...]}
+//   ct_b64, sender_uname, ts_ms], ...], rd: [[room_id, delivered_seq], ...]}
 //   sender_uname: nombre del emisor — la UI lo muestra sin lookup adicional.
 //                 (En el modelo rooms ya NO se usa para derivar convKey: el salt es
 //                  roomId y la clave madre es roomKey — ver docs/DECISIONES.md D40/D41.)
 //   ts_ms:        coalesce(client_ts, created_at) en epoch ms — hora de muestra.
-// 204 si no hay nada nuevo (0 bytes de cuerpo)
+//   rd (v0.6.0, D68): por cada sala mía, el seq máximo que OTROS miembros ya
+//   bajaron → el cliente marca sus mensajes ✓✓ «entregado». Metadato que el
+//   servidor ya conocía (quién sincronizó qué). Si no hay mensajes nuevos PERO
+//   sí entregas nuevas, se responde 200 con m: [] (el cliente viejo lo ignora).
+// 204 si no hay nada nuevo NI entregas (0 bytes de cuerpo)
 // gzip cuando el cuerpo supera 1 KB (OkHttp lo descomprime solo)
 // Membresía: solo mensajes de las rooms donde el usuario es miembro.
 import postgres from "npm:postgres@3.4.9";
@@ -69,7 +73,43 @@ Deno.serve(async (req) => {
       order by m.seq asc
       limit ${limit}`;
 
-    if (rows.length === 0) return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+    // ── Recibos de entrega (D68): registrar lo que ESTE usuario ya bajó ──
+    // delivered_seq(room, member) = seq global máximo servido en este ciclo.
+    // Una sola query (mismo patrón any() del outbox) sobre los msg_id servidos.
+    if (rows.length > 0) {
+      const ids = rows.map((r) => r.msg_id);
+      await sql`
+        update room_members rm set delivered_seq = s.mx
+        from (
+          select room_id, max(seq) as mx from messages
+          where msg_id = any(${ids}::uuid[])
+          group by room_id
+        ) s
+        where rm.room_id = s.room_id and rm.user_id = ${me.uid}::uuid
+          and rm.delivered_seq < s.mx`;
+    }
+
+    // Entregas de OTROS en mis salas (para mis ✓✓). Se calcula SIEMPRE:
+    // puede haber entregas nuevas aunque yo no tenga mensajes pendientes.
+    const rdRows = await sql`
+      select rm.room_id as rid, max(rm.delivered_seq) as mx
+      from room_members rm
+      join room_members mine on mine.room_id = rm.room_id and mine.user_id = ${me.uid}::uuid
+      where rm.user_id <> ${me.uid}::uuid and rm.delivered_seq > 0
+      group by rm.room_id`;
+    const rd = rdRows.map((x: any) => [x.rid, Number(x.mx)]);
+
+    if (rows.length === 0) {
+      // Sin mensajes nuevos: 204 solo si tampoco hay entregas que reportar.
+      if (rd.length === 0) {
+        return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+      }
+      const empty = enc.encode(JSON.stringify({ n: since, m: [], rd }));
+      return new Response(empty as BodyInit, {
+        status: 200,
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      });
+    }
 
     const nextSeq = Number(rows[rows.length - 1].seq);
     const msgs = rows.map((r) => [
@@ -77,7 +117,9 @@ Deno.serve(async (req) => {
       b64(new Uint8Array(r.nonce)), b64(new Uint8Array(r.ciphertext)),
       r.suname, new Date(r.ts).getTime(),
     ]);
-    const body = enc.encode(JSON.stringify({ n: nextSeq, m: msgs }));
+    const payload: Record<string, unknown> = { n: nextSeq, m: msgs };
+    if (rd.length > 0) payload.rd = rd;
+    const body = enc.encode(JSON.stringify(payload));
     const headers: Record<string, string> = {
       "content-type": "application/json",
       "x-next-seq": String(nextSeq),

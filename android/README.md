@@ -1,10 +1,11 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.5.0 "Cerlita
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.6.0 "Cerlita
 Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60) +
-perfiles E2EE con avatares (D61) + **notificaciones instantáneas por timbre
-Realtime (D63-D67)**.
+perfiles E2EE con avatares (D61) + notificaciones por timbre Realtime
+(D63-D67) + **recibos ✓/✓✓, ajustes de sala y tiempo real SIN notificación
+persistente (D68-D72)**.
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
@@ -137,17 +138,53 @@ app/src/test/java/cu/alain/chat/
 
 ## Pendiente (siguientes pasos)
 
-1. **Instalar v0.5.0 en los 2 móviles reales** (actualiza encima, misma firma) y
-   PROBAR LAS NOTIFICACIONES: al primer arranque aceptar el permiso de
-   notificaciones y «Permitir» en el diálogo de batería; en Xiaomi confirmar
-   Autoinicio ON + batería «Sin restricciones», en Samsung sacar la app de
-   «Sleeping apps». Verificar: mensaje con la app CERRADA avisa al instante,
-   tocar el aviso abre ese chat, y el aviso de la sala abierta no suena
+1. **Instalar v0.6.0 en los 2 móviles reales** (actualiza encima, misma firma) y
+   PROBAR: tiempo real con la app abierta (sin notificación permanente — ya no
+   existe por defecto), ✓✓ al bajar y ✓✓ azul al abrir la sala, long-press en
+   la lista (marcar leído/vaciar/eliminar), ajustes de la sala (nombre/foto
+   compartidos), atrás del teléfono en cada pantalla. Si quieren avisos
+   instantáneos CON la app cerrada: Ajustes → «Avisos instantáneos con la app
+   cerrada» (esa opción sí muestra la notificación permanente — la exige
+   Android); en Xiaomi: Autoinicio ON + batería «Sin restricciones»
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
 3. Avatares reales: sustituir los drawables placeholder (el catálogo y el
    AvatarConfig por capas ya son agnósticos al arte — D61)
-4. Si Xiaomi mata el servicio a pesar de todo → escalar a **Mi Push SDK** (D64;
-   ntfy ya no es la ruta)
+4. Si Xiaomi mata el FGS instantáneo a pesar de todo → escalar a **Mi Push
+   SDK** (D64; ntfy ya no es la ruta)
+
+## v0.6.0 — lista de bugs del usuario + sin notificación persistente (D68-D72, 28-oct-2026)
+
+**Los 8 bugs reportados + el rediseño del timbre** (petición: «no me gusta esa
+notificación persistente"):
+
+1. **Registro**: campo «Repetir la contraseña» + ojo ver/ocultar en login y
+   registro (contraseñas que no coinciden → error claro, botón deshabilitado)
+2. **Botón ATRÁS del teléfono**: `BackHandler` en la navegación — atrás entre
+   pantallas, solo sale de la app desde la lista de chats (antes: la cerraba
+   desde cualquier pantalla)
+3. **«Editar perfil» sin botón atrás**: el arrow-back ahora aparece en toda
+   sub-pantalla (excepto el onboarding obligatorio de primera ejecución)
+4. **Ajustes dentro de la sala** (engranaje del chat, D69): nombre y FOTO de
+   sala compartidos E2EE (kind=2, latest-ts-wins — los dos teléfonos se
+   actualizan solos), SAS, código de invitación con copiar/compartir,
+   miembros, vaciar historial local y eliminar la sala
+5. **Unirse sin nombre**: el creador SIEMPRE anuncia el nombre → quien entra
+   sin escribir nada hereda el nombre real de la sala al primer sync
+6. **Long-press en la lista de chats**: menú con Marcar como leído / Vaciar
+   historial / Eliminar sala (D70) + badge numérico de no leídos por sala
+7. **Recibos ✓/✓✓/✓✓ azul** (D68): entrega = metadato del servidor
+   (`delivered_seq` → `rd` en /sync); lectura = recibo E2EE kind=3 solo con la
+   sala abierta. BUG crítico corregido: el eco propio no guardaba el seq del
+   servidor → sin `fillSeq` NINGÚN recibo habría funcionado jamás
+8. **Tiempo real con la app abierta** (D71/D72): el timbre WebSocket vive
+   DENTRO del proceso con la app abierta (sin servicio, sin notificación) +
+   tope de polling 15 s como respaldo. Con la app cerrada: worker ~15 min,
+   SIN notificación permanente. Toggle opcional «Avisos instantáneos con la
+   app cerrada» (FGS remoteMessaging de la v0.5.0) para quien lo quiera
+
+Validación: 64/64 tests (9 nuevos de RoomInfoMsg/ReadReceipt) + migración DB
+v2→v4 validada con datos reales + E2E backend 24/24 (recibos + leave) y
+smoke 37/37. APK 2,8 MB, misma firma (versionCode 7).
 
 ## v0.4.1 — fix del crash al abrir (D62, 27-oct-2026)
 

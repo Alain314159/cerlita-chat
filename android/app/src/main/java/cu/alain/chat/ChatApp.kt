@@ -8,11 +8,16 @@ import cu.alain.chat.engine.AppState
 import cu.alain.chat.engine.ChatEngine
 import cu.alain.chat.engine.NewMsg
 import cu.alain.chat.net.Api
+import cu.alain.chat.notify.Doorbell
+import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
+import cu.alain.chat.notify.RealtimeDoorbell
 import cu.alain.chat.vault.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -56,6 +61,21 @@ class ChatApp : Application(), Configuration.Provider {
     /** Scope de aplicación para lanzar el notificador desde el callback del engine. */
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    // ── Timbre (D72): SIN notificación persistente por defecto ──
+    // Con la app ABIERTA el WebSocket Realtime vive DENTRO del proceso (sin
+    // servicio, sin notificación): los mensajes llegan al instante. Con la
+    // app CERRADA no hay servicio por defecto — el WorkManager periódico
+    // (~15 min) sincroniza y notifica. Quien quiera instantáneo con la app
+    // cerrada activa «Avisos instantáneos» en Ajustes: solo entonces corre
+    // el FGS remoteMessaging con su notificación permanente.
+    private var appDoorbell: RealtimeDoorbell? = null
+    private var topicsJob: Job? = null
+
+    /** ¿Conectado el timbre vivo (in-app o FGS)? Para Ajustes. */
+    val doorbellConnected: Boolean
+        get() = if (DoorbellService.running) DoorbellService.connected
+        else appDoorbell?.isConnected ?: false
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
@@ -69,12 +89,78 @@ class ChatApp : Application(), Configuration.Provider {
             api = api,
             avatarsDir = java.io.File(filesDir, "avatars"), // fotos de perfil (D61)
             onNewMessages = { msgs: List<NewMsg> -> announceIncoming(msgs) },
+            onSessionChanged = { syncDoorbell() }, // D72: login/logout enciende/apaga el timbre
         )
 
         Notifier.ensureServiceChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
         engine.refreshState()
         engine.onProcessStart() // sesión viva tras reinicio: claves a RAM + salas del servidor
+
+        // topics siempre al día para el timbre que esté vivo (setTopics sobre
+        // un timbre parado solo actualiza el set: inofensivo)
+        topicsJob = appScope.launch {
+            db.roomDao().observeAll().collect { rooms ->
+                appDoorbell?.setTopics(rooms.map { it.roomId }.toSet())
+            }
+        }
+
+        // Watchdog (D71): cada 30 s, con la app ABIERTA y sesión viva, el timbre
+        // in-app debe estar vivo (algunos OEMs son creativos). syncDoorbell es
+        // idempotente: si todo está bien, no hace nada.
+        appScope.launch {
+            while (true) {
+                delay(30_000)
+                if (inForeground && store.session != null) syncDoorbell()
+            }
+        }
+    }
+
+    /**
+     * ÚNICO punto de decisión del timbre (D72). Llaman: onStart/onStop de la
+     * Activity, login/logout (via onSessionChanged), el toggle de Ajustes y
+     * el watchdog. Idempotente.
+     *
+     *  - instantBg ON  → FGS remoteMessaging (notificación permanente) siempre.
+     *  - instantBg OFF → FGS parado; timbre in-app SOLO con la app abierta.
+     */
+    fun syncDoorbell() {
+        val hasSession = store.session != null
+        if (prefs.instantBg && hasSession) {
+            Doorbell.ensureStarted(this)
+        } else if (DoorbellService.running) {
+            Doorbell.stop(this) // modo cambiado a OFF o logout: fuera el FGS
+        }
+        if (inForeground && hasSession && !DoorbellService.running) {
+            startAppDoorbell()
+        } else {
+            stopAppDoorbell()
+        }
+    }
+
+    private fun startAppDoorbell() {
+        if (appDoorbell != null) return
+        val d = RealtimeDoorbell(
+            baseUrl = { prefs.baseUrl },
+            anonKey = { cu.alain.chat.core.C.ANON_KEY },
+            scope = appScope,
+            onDoorbell = { _ -> appScope.launch { engine.syncOnce() } },
+            onConnected = { appScope.launch { engine.syncOnce() } },
+        )
+        appDoorbell = d
+        d.start()
+        // el collector de topics ya corre: emítelle el set actual
+        appScope.launch {
+            val rooms = db.roomDao().all()
+            d.setTopics(rooms.map { it.roomId }.toSet())
+        }
+    }
+
+    private fun stopAppDoorbell() {
+        // stop (no shutdown): una sola instancia y un solo OkHttpClient por
+        // proceso — los ciclos abrir/cerrar no filtran hilos
+        appDoorbell?.stop()
+        appDoorbell = null
     }
 
     /**
@@ -126,4 +212,11 @@ class Prefs(ctx: Context) {
     var askedBattery: Boolean
         get() = sp.getBoolean("asked_battery", false)
         set(v) = sp.edit().putBoolean("asked_battery", v).apply()
+
+    /** D72: avisos instantáneos con la app CERRADA (FGS con notificación
+     *  permanente). Default FALSE: sin notificación persistente — con la app
+     *  abierta SIEMPRE es tiempo real vía el timbre in-app. */
+    var instantBg: Boolean
+        get() = sp.getBoolean("instant_bg", false)
+        set(v) = sp.edit().putBoolean("instant_bg", v).apply()
 }

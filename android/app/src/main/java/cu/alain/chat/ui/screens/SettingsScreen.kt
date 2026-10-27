@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -192,23 +193,53 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
             }
         }
 
-        // ── notificaciones y batería (D63/D67) ──
+        // ── notificaciones y batería (D63/D67/D72) ──
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("Notificaciones", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Los mensajes nuevos avisan al instante aunque la app esté cerrada " +
-                        "(timbre en tiempo real). Si algo está en rojo, tócalo para arreglarlo:",
+                    "Con la app abierta los mensajes llegan SIEMPRE al instante " +
+                        "(sin notificación permanente). Con la app cerrada puedes elegir:",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = app.prefs.instantBg,
+                        onCheckedChange = {
+                            app.prefs.instantBg = it
+                            app.syncDoorbell()
+                            permTick++ // refresca el texto de estado
+                        },
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Avisos instantáneos con la app cerrada", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (app.prefs.instantBg)
+                                "Mantiene la conexión activa para avisar en el momento. " +
+                                    "Android exige una notificación permanente mientras esté activo."
+                            else
+                                "Desactivado: sin notificación permanente. Los mensajes se buscan " +
+                                    "cada ~15 minutos (o al abrir la app) y avisan igual.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    if (DoorbellService.running && DoorbellService.connected) "● Timbre conectado"
-                    else if (DoorbellService.running) "● Timbre reconectando…"
-                    else "● Timbre detenido",
+                    when {
+                        DoorbellService.running && DoorbellService.connected ->
+                            "● Tiempo real también con la app cerrada (modo instantáneo)"
+                        DoorbellService.running -> "● Conectando el timbre permanente…"
+                        app.doorbellConnected -> "● Tiempo real con la app abierta"
+                        else -> "● Timbre sin conexión ahora"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = if (DoorbellService.running) MaterialTheme.colorScheme.primary
+                    color = if (DoorbellService.running || app.doorbellConnected)
+                        MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.error,
                 )
                 Spacer(Modifier.height(10.dp))
@@ -250,8 +281,9 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                 if (!batteryOk) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "En Xiaomi/Redmi activa también Autoinicio y batería «Sin restricciones» " +
-                            "para Cerlita Chat (Ajustes del teléfono → Aplicaciones).",
+                        "El ahorro de batería puede retrasar los avisos. En Xiaomi/Redmi activa " +
+                            "también Autoinicio y batería «Sin restricciones» para Cerlita Chat " +
+                            "(Ajustes del teléfono → Aplicaciones) — imprescindible si usas el modo instantáneo.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -332,7 +364,7 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
         }
 
         Text(
-            "v0.5.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
+            "v0.6.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),

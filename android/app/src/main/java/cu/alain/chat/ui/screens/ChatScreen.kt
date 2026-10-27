@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Icon
@@ -66,16 +68,23 @@ fun ChatScreen(app: ChatApp, roomId: String) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    // Sala abierta: suprime SU notificación (D63) y limpia la ya publicada
+    // Sala abierta: suprime SU notificación (D63), limpia la ya publicada,
+    // pone el badge de no leídos a cero y acusa lectura (✓✓ azul, D68)
     DisposableEffect(roomId) {
         app.currentRoomId = roomId
         Notifier.cancelRoom(ctx, roomId)
+        scope.launch {
+            app.db.roomDao().resetUnread(roomId)
+            app.engine.maybeSendReadReceipt(roomId)
+        }
         onDispose { if (app.currentRoomId == roomId) app.currentRoomId = null }
     }
 
-    // auto-scroll al último mensaje
+    // auto-scroll al último mensaje + acusar lectura de lo recién llegado
+    // (barato: si no hay nada nuevo del par, no manda nada)
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        app.engine.maybeSendReadReceipt(roomId)
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -215,6 +224,7 @@ private fun MessageBubble(m: Message, prev: Message?, profiles: List<Profile>) {
                         )
                         if (mine) {
                             Spacer(Modifier.width(4.dp))
+                            // ✓/✓✓ (D68): enviado → entregado (lo bajó) → leído (E2EE)
                             when (m.state) {
                                 C.ST_SENDING -> Icon(
                                     Icons.Default.Schedule, "Enviando",
@@ -223,6 +233,18 @@ private fun MessageBubble(m: Message, prev: Message?, profiles: List<Profile>) {
                                 C.ST_FAILED -> Icon(
                                     Icons.Default.ErrorOutline, "Falló",
                                     Modifier.width(13.dp), tint = MaterialTheme.colorScheme.error,
+                                )
+                                C.ST_SENT -> Icon(
+                                    Icons.Default.Check, "Enviado",
+                                    Modifier.width(14.dp), tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                )
+                                C.ST_DELIVERED -> Icon(
+                                    Icons.Default.DoneAll, "Entregado",
+                                    Modifier.width(16.dp), tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                )
+                                C.ST_READ -> Icon(
+                                    Icons.Default.DoneAll, "Leído",
+                                    Modifier.width(16.dp), tint = MaterialTheme.colorScheme.tertiary,
                                 )
                             }
                         }

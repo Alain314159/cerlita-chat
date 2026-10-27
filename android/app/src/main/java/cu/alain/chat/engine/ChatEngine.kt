@@ -14,6 +14,8 @@ import cu.alain.chat.net.ApiException
 import cu.alain.chat.net.SyncRow
 import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
+import cu.alain.chat.profile.ReadReceipt
+import cu.alain.chat.profile.RoomInfoMsg
 import cu.alain.chat.vault.Session
 import cu.alain.chat.vault.SessionStore
 import kotlinx.coroutines.CoroutineScope
@@ -74,6 +76,8 @@ class ChatEngine(
     private val api: cu.alain.chat.net.Api,
     private val avatarsDir: File,
     private val onNewMessages: (List<NewMsg>) -> Unit,
+    /** D72: avisa de login/logout para encender/apagar el timbre (lo cablea ChatApp). */
+    private val onSessionChanged: () -> Unit = {},
 ) {
 
     /** roomId → (roomKey, roomSalt). RAM solamente; persisten selladas en el vault. */
@@ -93,6 +97,15 @@ class ChatEngine(
     private var pollJob: Job? = null
     private var pollInterval = C.POLL_ACTIVE_MS
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * true mientras la Activity está visible (lo fija MainActivity). Con la app
+     * ABIERTA el polling nunca pasa de [C.POLL_FG_MAX_MS] (D71): aunque el timbre
+     * esté muerto (OEM lo mató), un mensaje tarda ≤ 15 s en llegar con la sala
+     * abierta. En background manda el timbre y el tope vuelve a 5 min.
+     */
+    @Volatile
+    var inForeground: Boolean = false
 
     // ────────────────────────── estado / sesión ──────────────────────────
 
@@ -126,11 +139,22 @@ class ChatEngine(
 
     fun hasKey(roomId: String): Boolean = keys.containsKey(roomId.lowercase())
 
+    /** Código de invitación reconstruido de la clave del vault (ajustes de sala):
+     *  con él un miembro nuevo entra, o este teléfono recupera el acceso. */
+    fun getInviteCode(roomId: String): String? {
+        val ks = keys[roomId.lowercase()] ?: return null
+        return Crypto.encodeInvite(ks.second, ks.first)
+    }
+
+    /** Id de archivo de la foto de sala: avatars/room-<roomId>.jpg (D69). */
+    private fun roomPhotoId(roomId: String) = "room-${roomId.lowercase()}"
+
     /** Login/registro correcto: guarda la sesión cifrada por Keystore y refresca salas. */
     fun onAuthed(uid: String, uname: String, token: String, did: String) {
         store.saveSession(cu.alain.chat.vault.Session(token, uid, uname, did))
         loadKeys()
         refreshState()
+        onSessionChanged() // D72: enciende el timbre sin esperar al próximo onStart
         scope.launch {
             syncRoomsFromServer()
             drainPending() // mensajes que llegaron de salas ya conocidas
@@ -177,9 +201,10 @@ class ChatEngine(
         val sas = Crypto.sas6(roomKey, roomSalt)
         return try {
             api.roomNew(s.token, roomId)
+            val finalName = name.trim().ifBlank { "Sala ${roomId.take(8)}" }
             val room = Room(
                 roomId = roomId,
-                name = name.ifBlank { "Sala ${roomId.take(8)}" },
+                name = finalName,
                 owner = true,
                 sas = sas,
                 createdAt = System.currentTimeMillis(),
@@ -188,6 +213,12 @@ class ChatEngine(
             store.putRoomKey(roomId, roomKey, roomSalt)
             keys = keys + (roomId to (roomKey to roomSalt))
             _keysVersion.value += 1
+            // nombre COMPARTIDO (D69): SIEMPRE se anuncia — quien entre con el
+            // código hereda por el historial el nombre real de la sala, aunque
+            // no escriba ninguno (bug 5 de la v0.6.0)
+            val ts = System.currentTimeMillis()
+            sendControl(roomId, RoomInfoMsg.encode(finalName, null, ts), C.KIND_ROOM_INFO, finalName)
+            db.metaDao().setLong("ri_${roomId.lowercase()}", ts)
             // anunciar mi perfil: los que entren después lo verán en el historial (D61)
             db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
             Result.success(RoomJoined(room, Crypto.encodeInvite(roomSalt, roomKey), sas))
@@ -250,6 +281,155 @@ class ChatEngine(
         return Result.success(roomId)
     }
 
+    // ────────────────────────── ajustes de sala (v0.6.0, D69/D70) ──────────────────────────
+
+    /**
+     * Cambia el nombre y/o la foto de la sala. Viaja E2EE como mensaje de
+     * control kind=2 (latest-ts-wins): el otro miembro lo recibe y su sala se
+     * renombra sola. foto: bytes nuevos | null+keepPhoto=true (no tocar) |
+     * null+false (quitar). Sin clave en este teléfono: solo renombra local.
+     */
+    suspend fun setRoomInfo(
+        roomId: String,
+        name: String,
+        photoBytes: ByteArray?,
+        keepPhoto: Boolean,
+    ): Result<Unit> {
+        val n = name.trim()
+        if (n.isEmpty() || n.length > RoomInfoMsg.MAX_NAME) {
+            return Result.failure(IllegalArgumentException("El nombre debe tener entre 1 y ${RoomInfoMsg.MAX_NAME} caracteres"))
+        }
+        val cur = db.roomDao().get(roomId)
+            ?: return Result.failure(IllegalStateException("La sala ya no existe en este teléfono"))
+        if (!hasKey(roomId)) { // sala sin clave (2º dispositivo sin restaurar): local
+            db.roomDao().rename(roomId, n)
+            return Result.success(Unit)
+        }
+        val ts = System.currentTimeMillis()
+        // foto para el mensaje: nueva | la existente (keep) | ninguna (quitar)
+        val photoB64: String? = when {
+            photoBytes != null -> Photos.bytesToB64(photoBytes)
+            keepPhoto -> Photos.photoFile(avatarsDir, roomPhotoId(roomId)).takeIf { it.exists() }
+                ?.readBytes()?.let { Photos.bytesToB64(it) }
+            else -> null
+        }
+        val sent = sendControl(roomId, RoomInfoMsg.encode(n, photoB64, ts), C.KIND_ROOM_INFO, n)
+        // aplicar localmente (el eco del servidor llegará y el guard ts lo saltará)
+        when {
+            photoBytes != null -> Photos.saveProfilePhoto(avatarsDir, roomPhotoId(roomId), photoBytes)
+            !keepPhoto -> Photos.saveProfilePhoto(avatarsDir, roomPhotoId(roomId), null)
+        }
+        val photoNow = when {
+            photoBytes != null -> true
+            keepPhoto -> cur.photo
+            else -> false
+        }
+        db.roomDao().upsert(cur.copy(name = n, photo = photoNow))
+        db.metaDao().setLong("ri_${roomId.lowercase()}", ts)
+        if (sent) poke()
+        return Result.success(Unit)
+    }
+
+    /** Aplica un room-info descifrado: gana el ts mayor (como los perfiles, D61). */
+    private suspend fun applyRoomInfo(roomId: String, p: RoomInfoMsg.Parsed) {
+        try {
+            val mkey = "ri_${roomId.lowercase()}"
+            val known = db.metaDao().getLong(mkey) ?: 0L
+            if (p.ts <= known) return
+            val photoBytes = p.photoB64?.let { Photos.b64ToBytes(it) }
+            Photos.saveProfilePhoto(avatarsDir, roomPhotoId(roomId), photoBytes) // null → borra
+            db.roomDao().get(roomId)?.let {
+                db.roomDao().upsert(it.copy(name = p.name, photo = photoBytes != null))
+            }
+            db.metaDao().setLong(mkey, p.ts)
+        } catch (_: Exception) {
+            // un anuncio corrupto jamás rompe la sincronización
+        }
+    }
+
+    /** Vaciar el historial local de una sala (los mensajes del servidor no se tocan). */
+    suspend fun clearHistory(roomId: String) {
+        db.msgDao().clearForRoom(roomId)
+        db.roomDao().resetUnread(roomId)
+    }
+
+    /**
+     * Salir de la sala y borrar TODO lo local (D70). El leave del servidor DEBE
+     * salir bien antes de borrar: si falla (sin red) no se toca nada — si no,
+     * la sala reaparecería vacía en el próximo sync de salas. Si era el último
+     * miembro, el servidor borra la sala entera (historial incluido).
+     */
+    suspend fun deleteRoom(roomId: String): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        return try {
+            api.roomLeave(s.token, roomId)
+            keys[roomId.lowercase()]?.let { Crypto.zero(it.first); Crypto.zero(it.second) }
+            keys = keys - roomId.lowercase()
+            _keysVersion.value += 1
+            store.removeRoomKey(roomId)
+            db.roomDao().delete(roomId)
+            db.msgDao().clearForRoom(roomId)
+            db.outboxDao().deleteForRoom(roomId)
+            db.pendingDao().deleteForRoom(roomId)
+            db.roomPeerDao().deleteForRoom(roomId)
+            Photos.saveProfilePhoto(avatarsDir, roomPhotoId(roomId), null)
+            db.metaDao().delete("ri_${roomId.lowercase()}")
+            db.metaDao().delete("rr_${roomId.lowercase()}")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ────────────────────────── recibos de lectura (D68) ──────────────────────────
+
+    /**
+     * Enviar recibo de lectura si hay mensajes del par sin acusar (lo llama la
+     * ChatScreen al abrir y ante cada mensaje nuevo con la sala visible).
+     * u = seq global máximo que tengo → el par marca ✓✓ azul todo lo suyo ≤ u.
+     */
+    suspend fun maybeSendReadReceipt(roomId: String) {
+        if (!hasKey(roomId)) return
+        val lastPeer = db.msgDao().maxPeerSeq(roomId)
+        if (lastPeer <= 0) return                       // nada del par que acusar
+        val mkey = "rr_${roomId.lowercase()}"
+        val lastSent = db.metaDao().getLong(mkey) ?: 0L
+        if (lastPeer <= lastSent) return                // ya acusé todo esto
+        val u = db.msgDao().maxSeq(roomId)              // "vi todo hasta aquí"
+        if (u <= lastSent) return
+        if (sendControl(roomId, ReadReceipt.encode(u, System.currentTimeMillis()), C.KIND_READ, "")) {
+            db.metaDao().setLong(mkey, u)
+            poke()
+        }
+    }
+
+    /** Llegó el recibo del par: marca leídos mis mensajes con seq ≤ u. */
+    private suspend fun applyReadReceipt(roomId: String, upToSeq: Long) {
+        try {
+            db.msgDao().markReadUpTo(roomId, upToSeq, listOf(C.ST_SENT, C.ST_DELIVERED), C.ST_READ)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Encola un mensaje de control cifrado (kind≠0, invisible en el chat). */
+    private suspend fun sendControl(roomId: String, plain: String, kind: Int, listBody: String): Boolean {
+        val s = store.session ?: return false
+        val key = keys[roomId.lowercase()] ?: return false
+        val msgId = Crypto.uuid7()
+        val ts = System.currentTimeMillis()
+        val convKey = Crypto.convKey(key.first, roomId)
+        val mk = Crypto.msgKey(convKey, msgId)
+        val aad = Crypto.aad(msgId, s.uid, roomId)
+        val (nonce, ct) = Crypto.seal(mk, Crypto.frame(plain), aad)
+        if (ct.size < C.MIN_CT || ct.size > C.MAX_CT) return false
+        db.msgDao().insert(
+            Message(msgId, roomId, s.uname, mine = true, body = listBody, ts = ts,
+                state = C.ST_SENDING, kind = kind, senderUid = s.uid)
+        )
+        db.outboxDao().insert(OutboxMsg(msgId, roomId, b64(ct), b64(nonce), ts))
+        return true
+    }
+
     /** Cerrar sesión: revoca en el servidor (best-effort), borra TODO lo local. */
     fun logout(apiLogout: Boolean) {
         val s = store.session
@@ -262,11 +442,14 @@ class ChatEngine(
         stopPolling()
         store.clearSession()
         store.clearRoomKeys()
+        onSessionChanged() // D72: apaga el timbre (in-app y FGS) ya mismo
         scope.launch {
             db.roomDao().wipe(); db.msgDao().wipe(); db.outboxDao().wipe(); db.pendingDao().wipe()
             db.profileDao().wipe(); db.roomPeerDao().wipe()   // perfiles + pares (D61)
-            avatarsDir.deleteRecursively()                     // fotos propias y de pares
+            avatarsDir.deleteRecursively()                     // fotos propias, de pares y de salas
             db.metaDao().setLong("last_seq", 0)
+            db.metaDao().deleteByPrefix("ri_")                 // ts de room-info (D69)
+            db.metaDao().deleteByPrefix("rr_")                 // últimos recibos de lectura (D68)
         }
         refreshState()
     }
@@ -480,6 +663,11 @@ class ChatEngine(
         try {
             while (true) {
                 val resp = api.sync(s.token, lastSeq)
+                // recibos de entrega (D68): lo que otros ya bajaron en mis salas.
+                // Se aplica en CADA página (también en la 200-vacía-con-rd).
+                resp.rd.forEach { (rid, seq) ->
+                    try { db.msgDao().markDeliveredUpTo(rid, seq, C.ST_SENT, C.ST_DELIVERED) } catch (_: Exception) {}
+                }
                 if (resp.rows.isEmpty()) break
                 for (row in resp.rows) {
                     ingest(row, s, newPeerRooms)?.let { fresh.add(it) }
@@ -511,7 +699,16 @@ class ChatEngine(
         s: Session,
         newPeerRooms: MutableSet<String>,
     ): NewMsg? {
-        if (db.msgDao().exists(row.msgId)) return null // eco de un mensaje propio ya en Room
+        if (db.msgDao().exists(row.msgId)) {
+            // eco de un mensaje propio ya en Room. El seq del SERVIDOR nace
+            // aquí (el insert local fue ANTES del envío): guardarlo para que
+            // los recibos ✓✓ (markDeliveredUpTo/markReadUpTo) lo encuentren.
+            // No se toca state/body: los locales mandan (ST_SENT/DELIVERED/READ).
+            if (row.seq != null && row.senderId.equals(s.uid, ignoreCase = true)) {
+                try { db.msgDao().fillSeq(row.msgId, row.seq) } catch (_: Exception) {}
+            }
+            return null
+        }
         // par visto en la sala → lista de chats con SU nombre/avatar (D61).
         // Si es la 1ª vez: me presento (los mensajes previos a mi join no los vi).
         if (!row.senderId.equals(s.uid, ignoreCase = true) &&
@@ -530,7 +727,11 @@ class ChatEngine(
         }
         val msg = decryptRow(row, s, key.first)
         db.msgDao().insert(msg)
-        return if (msg.kind == 0) NewMsg(
+        // badge de no leídos (v0.6.0): mensaje de texto del par sin la sala abierta
+        if (msg.kind == C.KIND_TEXT && !msg.mine) {
+            try { db.roomDao().bumpUnread(msg.roomId) } catch (_: Exception) {}
+        }
+        return if (msg.kind == C.KIND_TEXT) NewMsg(
             msg.roomId, msg.senderUid, msg.senderUname, msg.body, msg.ts, msg.mine,
         ) else null
     }
@@ -556,10 +757,27 @@ class ChatEngine(
                     val p = ProfileMsg.parse(body)
                     if (p != null) {
                         applyProfile(row.senderId, p)
-                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, 1, row.senderId)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, C.KIND_PROFILE, row.senderId)
                     }
                 }
-                Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, row.seq, 0, row.senderId)
+                // info de sala (D69): nombre/foto compartidos — invisible en el chat
+                if (RoomInfoMsg.isRoomInfo(body)) {
+                    val p = RoomInfoMsg.parse(body)
+                    if (p != null) {
+                        applyRoomInfo(row.roomId, p)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, C.KIND_ROOM_INFO, row.senderId)
+                    }
+                }
+                // recibo de lectura (D68): el par leyó hasta u → mis ✓✓ azules.
+                // El eco propio no hace nada (ya está aplicado localmente).
+                if (ReadReceipt.isRead(body)) {
+                    val p = ReadReceipt.parse(body)
+                    if (p != null) {
+                        if (!mine) applyReadReceipt(row.roomId, p.upToSeq)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, row.seq, C.KIND_READ, row.senderId)
+                    }
+                }
+                Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, row.seq, C.KIND_TEXT, row.senderId)
             }
         } catch (_: Exception) {
             Message(row.msgId, row.roomId, row.senderUname, mine, "[error]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
@@ -626,10 +844,14 @@ class ChatEngine(
             poke()
             while (isActive) {
                 val n = try { syncOnce() } catch (_: Exception) { -1 }
+                // D71: con la app abierta el sondeo nunca duerme más de 15 s —
+                // el timbre debería hacerlo instantáneo, pero si el OEM lo mató
+                // esto acota el daño sin quemar batería en background.
+                val cap = if (inForeground) C.POLL_FG_MAX_MS else C.POLL_IDLE_MAX_MS
                 pollInterval = when {
                     n > 0 -> C.POLL_ACTIVE_MS                    // hay actividad → rápido
                     n == -2 -> C.POLL_ACTIVE_MS                  // auth perdida: reintenta corto
-                    else -> min((pollInterval * C.POLL_BACKOFF).toLong(), C.POLL_IDLE_MAX_MS)
+                    else -> min((pollInterval * C.POLL_BACKOFF).toLong(), cap)
                 }
                 // jitter completo ±40% para no sincronizar los 2 teléfonos
                 val jit = (pollInterval * (0.6 + Random.nextDouble(0.8))).toLong()

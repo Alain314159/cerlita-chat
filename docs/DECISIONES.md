@@ -76,6 +76,11 @@ ordenó 3 correcciones — D42, D43, D46 — antes de implementar).
 | D65 | Cliente Phoenix a mano | WebSocket del timbre **escrito a mano sobre OkHttp** (~150 líneas, `notify/Phoenix.kt` + `notify/RealtimeDoorbell.kt`), NO supabase-kt: arrastra Ktor+kotlinx-serialization (~2 MB contra APK de 2,8 MB) y realtime-kt exige API 26+ (minSdk 24). Protocolo mínimo: phx_join con config de broadcast, heartbeat phoenix cada 30 s (el servidor corta a los mudos ~75 s), OkHttp pingInterval 25 s detecta sockets muertos, reconexión con backoff 5→60 s + jitter ±25 %, diff de topics sin cerrar conexión al cambiar las salas. **Tras cada reconexión → syncOnce** (lo timbrado durante el corte no se pierde). Framing testeado con frames REALES capturados de producción (`PhoenixTest`, 9 tests) | Implementación v0.5.0 |
 | D66 | Notificador por sala | **Un canal de notificación por sala** (`room_<roomId[:8]>`, IMPORTANCE_HIGH: sonido + heads-up) con el nombre del par (perfil E2EE) — el usuario silencia cada conversación desde Ajustes del sistema. `MessagingStyle` (hasta 5 burbujas de contexto, Person con el nombre real), grupo `messages` + resumen, `setAutoCancel`, tocar abre ESA sala (extra `room` → `pendingOpenRoom` → navegación). **Política única de aviso** (una sola vía: callback del engine, la comparten timbre/polling/worker/pendientes): mensajes **ajenos** (ecos propios multi-dispositivo no avisan) + **recientes** (≤30 min: el historial que baja de golpe en un teléfono nuevo no spammea) + **no de la sala abierta en foreground**. Al abrir un chat se cancela su aviso. Icono `ic_launcher_monochrome` (D60). Robolectric: `NotifierTest` 6 tests | Implementación v0.5.0 |
 | D67 | Batería/OEM | Pedir UNA vez (con explicación) la exención `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (permiso normal; app fuera de Play). Ajustes muestra el estado del timbre (conectado/reconectando/detenido), del permiso de notificaciones y de la batería, con botones para arreglar cada uno + recordatorio Xiaomi (Autoinicio + Sin restricciones) / Samsung (fuera de Sleeping apps, "optimización de notificaciones" desactivada). Sin la exención el Doze puede congelar el socket con la pantalla apagada | Implementación v0.5.0 |
+| D68 | Recibos de entrega y lectura (✓/✓✓) | **Entrega (✓✓ gris)**: metadato que el servidor YA conocía (quién sincronizó qué) — `room_members.delivered_seq` (migración 0003) = seq global máximo servido a ese miembro; `/sync` lo devuelve como `rd: [[room, seq]]` y responde **200 con `m:[]`** aunque no haya mensajes nuevos (antes 204: la entrega quedaba invisible hasta el siguiente mensaje). El cliente marca `mine=1 AND state=ST_SENT AND seq<=rd` → `ST_DELIVERED`. **Lectura (✓✓ azul)**: recibo E2EE kind=3 (`\u0000L`+JSON `{u,t}` = «vi todo lo de esta sala hasta seq u»), invisible para el servidor, enviado SOLO con la sala abierta (`maybeSendReadReceipt`: dedupe por meta `rr_<room>`; eco propio ignorado). **BUG crítico corregido durante el desarrollo**: el eco propio se descartaba en `ingest` ANTES de guardar el seq del servidor → los mensajes propios vivían con `seq NULL` y NINGÚN recibo los encontraría jamás; ahora `fillSeq` rellena el seq sin tocar state. UI: reloj (enviando) → ✓ (servidor) → ✓✓ gris (entregado) → ✓✓ azul (leído, `tertiary`). E2E `e2e_receipts.py` 24/24 | Implementación v0.6.0 |
+| D69 | Ajustes de sala (nombre/foto compartidos) | **Pantalla Ajustes de la sala** (engranaje del chat): nombre y FOTO de la sala viajan E2EE como mensaje de control kind=2 (`\u0000S`+JSON `{n,p?,t}`, latest-ts-wins con meta `ri_<room>` — mismo truco que los perfiles D61, presupuesto de foto idéntico ≤5 KB). Los dos teléfonos se renombran solos. **Al crear una sala SIEMPRE se anuncia el nombre** (aunque sea el default): quien entra con el código SIN poner nombre hereda el nombre real de la sala por el historial (bug 5). Sin clave en el teléfono: solo renombra local. La sala también muestra SAS, código de invitación (reconstruido del vault) con copiar/compartir, miembros vistos y zona peligrosa (vaciar historial local / eliminar). Lista y cabecera del chat priorizan foto+nombre propios si la sala fue personalizada; si no, el perfil del par (D61) | Implementación v0.6.0 |
+| D70 | Eliminar salas (room_leave) | `auth` acción **`room_leave`** (idempotente): borra la membresía; si la sala queda VACÍA se borra entera (messages + room_state + rooms, en orden: 0002 no tiene CASCADE) y el código de invitación muere con ella. Si queda alguien, conserva su historial y el que salió puede volver con el código. Cliente `deleteRoom`: el leave del servidor DEBE salir bien antes de borrar lo local (sin red → error claro, nada se toca: la sala no reaparece vacía en el próximo sync); borra clave del vault+RAM, mensajes, outbox, pendientes, pares, foto y metas. Acceso: long-press en la lista (menú: marcar leído / vaciar historial / eliminar) y Ajustes de la sala. E2E 24/24 incluye leave idempotente + borrado total + join post-borrado 404 | Implementación v0.6.0 |
+| D71 | Tiempo real garantizado con la app abierta | Doble seguro para «tardo en llegar con la app abierta»: (1) **tope de polling en foreground 15 s** (`POLL_FG_MAX_MS`; el backoff normal sigue hasta 5 min en background): aunque TODOS los timbres mueran, un mensaje con la app abierta tarda ≤15 s; (2) **watchdog cada 30 s** que re-invoca `syncDoorbell()` con la app abierta (idempotente). Además `onSessionChanged` (login/logout) enciende/apaga el timbre sin esperar al siguiente onStart | Implementación v0.6.0 |
+| D72 | SIN notificación persistente (nuevo default) | **Petición del usuario: «no me gusta esa notificación persistente»**. Nuevo reparto: (1) **app ABIERTA**: el WebSocket del timbre vive DENTRO del proceso (una instancia `RealtimeDoorbell` gestionada por `ChatApp.syncDoorbell()`, sin servicio, sin notificación — Android no puede matar el proceso de una Activity visible) → tiempo real garantizado + D71 de respaldo; (2) **app CERRADA (default)**: NINGÚN servicio — el WorkManager periódico (~15 min) sincroniza y notifica igual (aviso normal, sin permanente); (3) **«Avisos instantáneos con la app cerrada»** (toggle en Ajustes, default OFF): solo entonces corre el FGS `remoteMessaging` de la v0.5.0 con su notificación permanente (requisito de Android para FGS). `syncDoorbell()` es el ÚNICO punto de decisión (lo llaman onStart/onStop, login/logout, el toggle y el watchdog). El `BootReceiver` solo revive el FGS si el modo instantáneo está activo | Petición usuario + implementación v0.6.0 |
 
 ## Resueltas (26-oct-2026 — usuario: «Usa las recomendadas»)
 
@@ -108,22 +113,29 @@ deploy: [backend/README.md](../backend/README.md). Sin Firebase (D44). **Timbre 
 broadcast a `room-<roomId>` tras insertar (E2E 13/13, `scripts/e2e_doorbell.py`);
 smoke 37/37 (ajustado para convivir con los usuarios reales alain/amelia).
 
-## Cliente Android — estado (27-oct-2026, v0.5.0)
+## Cliente Android — estado (28-oct-2026, v0.6.0)
 
-**"Cerlita Chat" (D18), modelo rooms (D54) + perfiles E2EE (D61) + notificaciones
-en tiempo real (D63-D67), firmada**: APK
-release **~2,9 MB** (misma firma que v0.2.0+ → actualiza sin desinstalar).
+**"Cerlita Chat" (D18), modelo rooms (D54) + perfiles E2EE (D61) + tiempo real
+SIN notificación persistente (D63-D67, D72), firmada**: APK
+release **~2,8 MB** (misma firma que v0.2.0+ → actualiza sin desinstalar).
 **v0.4.1 arregla el crash al abrir de las v0.1–v0.4.0** (D62: constructores de
-ViewModels + WorkManager on-demand) — era la causa de «la toco y se cierra sin
-abrir» en los móviles reales. Emparejamiento por código de invitación (D42) con
+ViewModels + WorkManager on-demand). Emparejamiento por código de invitación (D42) con
 pantalla de SAS (D43), outbox/sync por sala, vault de roomKeys sellado por
 Keystore (D55), export v2 (D47) + import del respaldo (D58), icono propio (D60),
 onboarding y editor de perfil (nombre + foto subida O avatar por capas —
 Cerdita/Koalita placeholder con ropa y accesorios, D61), lista de chats y
-burbujas con el nombre y avatar del par. Validación: **40/40 tests JVM+Robolectric**
-(18 cripto + 4 import + 11 perfiles + 5 smoke de arranque en API 24-35 + 1
-migración DB v2→v3) + E2E del protocolo 22/22 contra producción.
-**v0.5.0 añade notificaciones instantáneas** (D63): timbre Realtime en un servicio
-foreground `remoteMessaging` (D64) con cliente Phoenix a mano (D65), notificador
-por sala con MessagingStyle (D66) y gestión de batería/OEM (D67).
+burbujas con el nombre y avatar del par.
+**v0.6.0 (lista de bugs del usuario + notificación persistente fuera)**:
+registro con repetir contraseña y ojo ver/ocultar (login y registro); botón
+ATRÁS del teléfono navega en vez de cerrar la app + atrás en «Editar perfil»;
+Ajustes de la sala con nombre/foto compartidos E2EE, SAS, código, miembros,
+vaciar y eliminar (D69/D70); quien entra sin nombre hereda el de la sala;
+long-press en la lista → marcar leído / vaciar / eliminar, badge numérico de
+no leídos; ✓/✓✓/✓✓ azul de entrega y lectura (D68, con el fix del seq del eco);
+**tiempo real con la app abierta SIN notificación persistente** (D71/D72:
+timbre in-app + tope de polling 15 s; FGS solo si se activa «Avisos
+instantáneos»). Validación: **64/64 tests JVM+Robolectric** (18 cripto + 4
+import + 9 room-info/recibos + 11 perfiles + 5 smoke de arranque API 24-35 +
+1 migración DB v2→v4 + 6 notificador + 9 phoenix + 1 servicio) + E2E
+backend 24/24 recibos/leave y 37/37 smoke.
 Ver [android/README.md](../android/README.md).
