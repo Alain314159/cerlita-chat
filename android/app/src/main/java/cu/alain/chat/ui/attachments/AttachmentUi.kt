@@ -48,6 +48,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import cu.alain.chat.ChatApp
 import cu.alain.chat.profile.AttachmentMsg
+import cu.alain.chat.ui.theme.LocalChatPalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -163,8 +164,9 @@ class AudioPlayerState {
 fun AudioBubble(app: ChatApp, msgId: String, att: AttachmentMsg.Parsed, mine: Boolean) {
     val st = rememberAudioPlayer(app, msgId, att)
     LaunchedEffect(st.playing) { while (st.playing) { st.tick(); delay(100) } }
-    val fg = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-    val bg = if (mine) Color.White.copy(alpha = 0.35f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    val palette = LocalChatPalette.current
+    val fg = if (mine) palette.onSentBubble else palette.onRecvBubble
+    val bg = if (mine) Color.White.copy(alpha = 0.45f) else palette.accent.copy(alpha = 0.12f)
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Surface(color = bg, shape = androidx.compose.foundation.shape.CircleShape) {
@@ -195,7 +197,7 @@ fun AudioBubble(app: ChatApp, msgId: String, att: AttachmentMsg.Parsed, mine: Bo
                 ) {
                     val n = wf.size
                     val step = size.width / n
-                    val played = Color(0xFFE56B8C) // rosa Cerlita para lo reproducido
+                    val played = palette.accent // rosa del tema para lo reproducido (D77)
                     val pending = fg.copy(alpha = 0.35f)
                     wf.forEachIndexed { i, a ->
                         val h = (a / 255f) * size.height * 0.9f + 2f

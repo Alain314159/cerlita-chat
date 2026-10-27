@@ -75,6 +75,7 @@ import cu.alain.chat.db.Profile
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.profile.AttachmentMsg
 import cu.alain.chat.ui.AvatarView
+import cu.alain.chat.ui.theme.LocalChatPalette
 import cu.alain.chat.ui.attachments.AudioBubble
 import cu.alain.chat.ui.attachments.Attach
 import cu.alain.chat.ui.attachments.DocBubble
@@ -474,6 +475,7 @@ private fun MessageBubble(
     val haptic = LocalHapticFeedback.current
     val att = remember(m.msgId) { AttachmentMsg.parse(m.body) }
     var menu by remember { mutableStateOf(false) }
+    val palette = LocalChatPalette.current // D77: burbujas pastel + texto oscuro en Cerlita
 
     // perfil del emisor (mensajes viejos pre-v3 no traen uid → fallback a inicial)
     val profile = profiles.firstOrNull { it.uid.equals(m.senderUid, ignoreCase = true) }
@@ -509,9 +511,9 @@ private fun MessageBubble(
                 }
                 Surface(
                     color = when {
-                        mine -> MaterialTheme.colorScheme.primary
+                        mine -> palette.sentBubble
                         m.state == C.ST_UNREADABLE -> MaterialTheme.colorScheme.errorContainer
-                        else -> MaterialTheme.colorScheme.surfaceVariant
+                        else -> palette.recvBubble
                     },
                     shape = RoundedCornerShape(
                         topStart = 16.dp, topEnd = 16.dp,
@@ -540,9 +542,9 @@ private fun MessageBubble(
                                 m.body,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = when {
-                                    mine -> MaterialTheme.colorScheme.onPrimary
+                                    mine -> palette.onSentBubble
                                     m.state == C.ST_UNREADABLE -> MaterialTheme.colorScheme.onErrorContainer
-                                    else -> MaterialTheme.colorScheme.onSurface
+                                    else -> palette.onRecvBubble
                                 },
                             )
                         }
@@ -558,13 +560,13 @@ private fun MessageBubble(
                                 Text(
                                     "Subiendo… ${(p * 100).toInt()}%",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                                    color = palette.onSentBubble.copy(alpha = 0.8f),
                                 )
                             } else {
                                 Text(
                                     "Cifrando…",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                                    color = palette.onSentBubble.copy(alpha = 0.8f),
                                 )
                             }
                         }
@@ -572,7 +574,7 @@ private fun MessageBubble(
                             Text(
                                 time,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (mine) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                                color = if (mine) palette.onSentBubble.copy(alpha = 0.7f)
                                 else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             if (mine) {
@@ -580,7 +582,7 @@ private fun MessageBubble(
                                 when (m.state) {
                                     C.ST_SENDING -> Icon(
                                         Icons.Default.Schedule, "Enviando",
-                                        Modifier.width(13.dp), tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                        Modifier.width(13.dp), tint = palette.onSentBubble.copy(alpha = 0.7f),
                                     )
                                     C.ST_FAILED -> Icon(
                                         Icons.Default.ErrorOutline, "Falló",
@@ -588,15 +590,15 @@ private fun MessageBubble(
                                     )
                                     C.ST_SENT -> Icon(
                                         Icons.Default.Check, "Enviado",
-                                        Modifier.width(14.dp), tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                        Modifier.width(14.dp), tint = palette.onSentBubble.copy(alpha = 0.7f),
                                     )
                                     C.ST_DELIVERED -> Icon(
                                         Icons.Default.DoneAll, "Entregado",
-                                        Modifier.width(16.dp), tint = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f),
+                                        Modifier.width(16.dp), tint = palette.onSentBubble.copy(alpha = 0.7f),
                                     )
                                     C.ST_READ -> Icon(
                                         Icons.Default.DoneAll, "Leído",
-                                        Modifier.width(16.dp), tint = MaterialTheme.colorScheme.tertiary,
+                                        Modifier.width(16.dp), tint = palette.readTick,
                                     )
                                 }
                             }

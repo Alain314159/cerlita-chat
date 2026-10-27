@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import cu.alain.chat.ChatApp
 import cu.alain.chat.ui.AvatarView
+import cu.alain.chat.ui.theme.CallColors
 import kotlinx.coroutines.delay
 import org.webrtc.RendererCommon
 import org.webrtc.SurfaceViewRenderer
@@ -170,12 +171,12 @@ fun CallScreenOverlay(app: ChatApp) {
                 CallDispatcher.Phase.INCOMING -> {
                     // rechazar (rojo) — aceptar (verde): como el mockup
                     RoundCallButton(
-                        icon = Icons.Default.CallEnd, tint = Color(0xFFEF5350), label = "Rechazar",
+                        icon = Icons.Default.CallEnd, tint = CallColors.reject, label = "Rechazar",
                         size = 68.dp,
                     ) { CallDispatcher.decline(app) }
                     RoundCallButton(
                         icon = if (s.video) Icons.Default.Videocam else Icons.Default.Call,
-                        tint = Color(0xFF66BB6A), label = "Aceptar", size = 68.dp,
+                        tint = CallColors.accept, label = "Aceptar", size = 68.dp,
                     ) {
                         callPerms.launch(
                             if (s.video) arrayOf(
@@ -189,7 +190,7 @@ fun CallScreenOverlay(app: ChatApp) {
 
                 CallDispatcher.Phase.OUTGOING -> {
                     RoundCallButton(
-                        icon = Icons.Default.CallEnd, tint = Color(0xFFEF5350), label = "Colgar",
+                        icon = Icons.Default.CallEnd, tint = CallColors.reject, label = "Colgar",
                         size = 68.dp,
                     ) { CallDispatcher.hangup(app) }
                 }
@@ -218,7 +219,7 @@ fun CallScreenOverlay(app: ChatApp) {
                         ) { CallDispatcher.toggleSpeaker(app) }
                     }
                     RoundCallButton(
-                        icon = Icons.Default.CallEnd, tint = Color(0xFFEF5350), label = "Colgar",
+                        icon = Icons.Default.CallEnd, tint = CallColors.reject, label = "Colgar",
                         size = 68.dp,
                     ) { CallDispatcher.hangup(app) }
                 }

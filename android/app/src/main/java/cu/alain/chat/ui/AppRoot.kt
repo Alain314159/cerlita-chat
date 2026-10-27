@@ -27,12 +27,14 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -181,8 +183,20 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                 }
 
                 Scaffold(
+                    // D77: en Cerlita el chat tiene su propio fondo (más rosado que
+                    // las listas, como el mockup); la barra superior va a juego
+                    containerColor = if (current is Screen.Chat)
+                        cu.alain.chat.ui.theme.LocalChatPalette.current.chatWallpaper
+                            ?: MaterialTheme.colorScheme.background
+                    else MaterialTheme.colorScheme.background,
                     topBar = {
                         TopAppBar(
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = if (current is Screen.Chat)
+                                    cu.alain.chat.ui.theme.LocalChatPalette.current.chatWallpaper
+                                        ?: MaterialTheme.colorScheme.background
+                                else MaterialTheme.colorScheme.background,
+                            ),
                             title = {
                                 when (val c = current) {
                                     Screen.Home -> Text(

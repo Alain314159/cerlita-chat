@@ -8,6 +8,8 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
@@ -45,47 +47,98 @@ private val LightScheme = lightColorScheme(
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tema CERLITA (v0.7.0, D73): la paleta del mockup de la pareja — cerdito rosa
-// + koala gris. Claro, rosado y cálido: burbujas propias salmón, recibidas
-// rosa pálido, acentos lavanda (la burbuja del koala) y ✓✓ en rosa profundo.
+// Tema CERLITA (v0.7.1, D77) — paleta MEDIDA PÍXEL A PÍXEL del mockup de la
+// pareja (muestreo real de la imagen, no estimaciones):
+//
+//   · fondo de listas / ajustes ... #F6D8D8  (rosa clarito)
+//   · tarjetas / superficies ....... #FBEAEA  (rosa casi blanco)
+//   · fondo del chat ............... #E0C2C4  (rosa polvo — más intenso que la lista)
+//   · burbuja ENVIADA .............. #F6C6CC  (rosa pastel) con texto ciruela oscuro
+//   · burbuja RECIBIDA ............. #CCBABA  (gris malva) con texto gris oscuro
+//   · acento (enviar/FAB/badges) ... #D87884  (coral)
+//   · aceptar / rechazar llamada ... #4FA07C / #E07070
+//   El texto dentro de las burbujas del mockup es OSCURO (muestreado #6A4849
+//   y #5D5050) — no blanco.
 // ─────────────────────────────────────────────────────────────────────────────
+
 private val CerlitaScheme = lightColorScheme(
-    primary = Color(0xFFE56B8C),          // rosa medio: FAB, burbujas propias
+    primary = Color(0xFFD87884),          // coral del mockup: FAB, enviar, badges, tab activo
     onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFFBD0DD),  // chips, tarjetas de acento suaves
-    onPrimaryContainer = Color(0xFF5C2E3E),
-    secondary = Color(0xFF9B87C9),        // lavanda (burbuja del koala)
+    primaryContainer = Color(0xFFF9CBD0),  // píldora del composer / barra de grabación
+    onPrimaryContainer = Color(0xFF5C3440),
+    secondary = Color(0xFFB08A96),        // rosa malva (iconos de archivo)
     onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFE9E0F7),
-    onSecondaryContainer = Color(0xFF3E3059),
-    tertiary = Color(0xFFC2185B),         // ✓✓ azul → aquí rosa profundo
+    secondaryContainer = Color(0xFFF3DCDF),
+    onSecondaryContainer = Color(0xFF4E3038),
+    tertiary = Color(0xFFC24D5E),         // ✓✓ leído: rosa profundo
     onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFF8D4E2),
-    onTertiaryContainer = Color(0xFF51122F),
-    background = Color(0xFFFCF2F5),       // blanco rosado cálido (mockup)
-    onBackground = Color(0xFF4A3540),     // ciruela oscuro, no negro puro
-    surface = Color(0xFFFFF9FB),
-    onSurface = Color(0xFF4A3540),
-    surfaceVariant = Color(0xFFF6E3EB),   // burbujas recibidas: rosa pálido
-    onSurfaceVariant = Color(0xFF8A6B76),
-    surfaceContainer = Color(0xFFFFF7FA),
-    surfaceContainerLow = Color(0xFFFFFAFB),
-    surfaceContainerHigh = Color(0xFFFBEFF4),
-    surfaceContainerHighest = Color(0xFFF8E6ED),
-    surfaceContainerLowest = Color(0xFFFFFFFF),
-    surfaceDim = Color(0xFFF3DEE6),
-    surfaceBright = Color(0xFFFFF9FB),
-    inverseSurface = Color(0xFF4A3540),
-    inverseOnSurface = Color(0xFFFBEFF4),
-    inversePrimary = Color(0xFFF3A7BE),
-    outline = Color(0xFFE5C6D2),
-    outlineVariant = Color(0xFFF2DEE6),
-    error = Color(0xFFD32F2F),
+    tertiaryContainer = Color(0xFFF6D2D8),
+    onTertiaryContainer = Color(0xFF511223),
+    background = Color(0xFFF6D8D8),       // listas / llamadas / ajustes (píxel del mockup)
+    onBackground = Color(0xFF4A3D3F),     // ciruela oscuro — nunca negro puro
+    surface = Color(0xFFFBEAEA),          // tarjetas y barra inferior
+    onSurface = Color(0xFF4A3D3F),
+    surfaceVariant = Color(0xFFCCBABA),   // burbujas recibidas (gris malva del mockup)
+    onSurfaceVariant = Color(0xFF7A6167),
+    surfaceContainer = Color(0xFFFBE9E9),
+    surfaceContainerLow = Color(0xFFFBEFEF),
+    surfaceContainerHigh = Color(0xFFF8E2E4),
+    surfaceContainerHighest = Color(0xFFF5DADD),
+    surfaceContainerLowest = Color(0xFFFFF6F7),
+    surfaceDim = Color(0xFFEFDBDD),
+    surfaceBright = Color(0xFFFFF4F6),
+    inverseSurface = Color(0xFF4A3D3F),
+    inverseOnSurface = Color(0xFFFBEAEA),
+    inversePrimary = Color(0xFFF0AFBB),
+    outline = Color(0xFFE3C3C8),
+    outlineVariant = Color(0xFFF0DADD),
+    error = Color(0xFFD25454),
     onError = Color(0xFFFFFFFF),
-    errorContainer = Color(0xFFFFDAD6),
-    onErrorContainer = Color(0xFF410002),
-    scrim = Color(0xFF4A3540),
+    errorContainer = Color(0xFFF8D7D5),
+    onErrorContainer = Color(0xFF490909),
+    scrim = Color(0xFF4A3D3F),
 )
+
+/**
+ * Colores del CHAT que NO caben en el esquema M3 (D77): en Cerlita las
+ * burbujas propias son PASTEL con texto oscuro y el fondo del chat es más
+ * rosado que el fondo de las listas — el mockup lo hace así. En claro/oscuro
+ * se derivan del esquema y el look queda exactamente igual que siempre.
+ */
+data class ChatPalette(
+    /** Fondo del área de chat; null = usar el fondo por defecto del esquema. */
+    val chatWallpaper: Color? = null,
+    val sentBubble: Color,
+    val onSentBubble: Color,
+    val recvBubble: Color,
+    val onRecvBubble: Color,
+    /** Color del ✓✓ de «leído» dentro de la burbuja propia. */
+    val readTick: Color,
+    /** Acento fuerte (waveform reproducida, FAB, enviar). */
+    val accent: Color,
+) {
+    companion object {
+        fun fromScheme(s: androidx.compose.material3.ColorScheme) = ChatPalette(
+            chatWallpaper = null,
+            sentBubble = s.primary,
+            onSentBubble = s.onPrimary,
+            recvBubble = s.surfaceVariant,
+            onRecvBubble = s.onSurface,
+            readTick = s.tertiary,
+            accent = s.primary,
+        )
+    }
+}
+
+val LocalChatPalette = staticCompositionLocalOf {
+    ChatPalette.fromScheme(androidx.compose.material3.lightColorScheme())
+}
+
+/** Botones de llamada del mockup (D77): verde menta y rojo coral. */
+object CallColors {
+    val accept = Color(0xFF4FA07C)   // «Aceptar» (muestreado #58A080)
+    val reject = Color(0xFFE07070)   // «Rechazar» (muestreado #E07070)
+}
 
 /** Modos de tema (v0.7.0): sistema / claro / oscuro / cerlita. */
 object Themes {
@@ -106,10 +159,10 @@ object Themes {
 }
 
 /**
- * Tema (P2 + D73): el modo lo elige el usuario en Ajustes (default: cerlita).
- *  - cerlita → paleta fija de la pareja (ignora el color dinámico)
+ * Tema (P2 + D73/D77): el modo lo elige el usuario en Ajustes (default: cerlita).
+ *  - cerlita → paleta MEDIDA del mockup (ignora el color dinámico)
  *  - claro/oscuro → esquemas propios; en API 31+ usan color dinámico del
- *    fondo de pantalla, como siempre (solo se reserva el modo cerlita)
+ *    fondo de pantalla (solo se reserva el modo cerlita)
  *  - sistema → claro/oscuro según el teléfono (API <29 siempre oscuro)
  */
 @Composable
@@ -130,5 +183,17 @@ fun ChatTheme(mode: String = Themes.SYSTEM, content: @Composable () -> Unit) {
             else -> LightScheme
         }
     }
-    MaterialTheme(colorScheme = scheme, content = content)
+    val palette = if (mode == Themes.CERLITA) ChatPalette(
+        chatWallpaper = Color(0xFFE0C2C4),
+        sentBubble = Color(0xFFF6C6CC),
+        onSentBubble = Color(0xFF5E4247),
+        recvBubble = Color(0xFFCCBABA),
+        onRecvBubble = Color(0xFF4A3E3E),
+        readTick = Color(0xFFC24D5E),
+        accent = Color(0xFFD87884),
+    ) else ChatPalette.fromScheme(scheme)
+
+    CompositionLocalProvider(LocalChatPalette provides palette) {
+        MaterialTheme(colorScheme = scheme, content = content)
+    }
 }
