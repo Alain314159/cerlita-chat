@@ -110,6 +110,7 @@ class ChatApp : Application(), Configuration.Provider {
         )
 
         nicknames.value = prefs.allNicknames() // D78: apodos locales
+        prefs.migrateInstantDefault() // D82: instantáneo ON por defecto
 
         Notifier.ensureServiceChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
@@ -247,12 +248,24 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("asked_battery", false)
         set(v) = sp.edit().putBoolean("asked_battery", v).apply()
 
-    /** D72: avisos instantáneos con la app CERRADA (FGS con notificación
-     *  permanente). Default FALSE: sin notificación persistente — con la app
-     *  abierta SIEMPRE es tiempo real vía el timbre in-app. */
+    /** D72/D82: avisos instantáneos con la app CERRADA (FGS con notificación
+     *  permanente). Default TRUE desde v0.7.1: es la única forma de avisos
+     *  en tiempo real sin FCM, y el usuario lo pidió así. Con la app abierta
+     *  SIEMPRE es tiempo real vía el timbre (FGS o in-app). */
     var instantBg: Boolean
-        get() = sp.getBoolean("instant_bg", false)
+        get() = sp.getBoolean("instant_bg", true)
         set(v) = sp.edit().putBoolean("instant_bg", v).apply()
+
+    /** Migración única v0.7.1 (D82): encender el modo instantáneo a quien
+     *  venía con el default antiguo (OFF). Quien lo apunte luego, manda. */
+    fun migrateInstantDefault() {
+        if (!sp.getBoolean("instant_migrated_v071", false)) {
+            sp.edit()
+                .putBoolean("instant_bg", true)
+                .putBoolean("instant_migrated_v071", true)
+                .apply()
+        }
+    }
 
     /** Tema de la app (D73): system | light | dark | cerlita. Default cerlita —
      *  es la identidad de la pareja (el mockup). Se cambia en Ajustes. */

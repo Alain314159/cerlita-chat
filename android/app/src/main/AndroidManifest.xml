@@ -56,6 +56,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Acciones de la notificación (D79): responder directo + marcar leído -->
+        <receiver
+            android:name=".notify.ReplyReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="cu.alain.chat.action.REPLY" />
+                <action android:name="cu.alain.chat.action.MARK_READ" />
+            </intent-filter>
+        </receiver>
+
         <!-- Compartir el export cifrado del historial -->
         <provider
             android:name="androidx.core.content.FileProvider"

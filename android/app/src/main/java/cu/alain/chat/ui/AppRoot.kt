@@ -91,8 +91,9 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
     ) { }
     LaunchedEffect(state) {
         if (state is AppState.Main) {
-            // login hecho (o app abierta con sesión): timbre foreground (D63)
-            cu.alain.chat.notify.Doorbell.ensureStarted(ctx)
+            // login hecho (o app abierta con sesión): el ÚNICO punto de
+            // decisión del timbre decide (D72) — FGS si toca, in-app si no
+            app.syncDoorbell()
             if (Build.VERSION.SDK_INT >= 33 && !app.prefs.askedNotifPermission) {
                 app.prefs.askedNotifPermission = true
                 notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)

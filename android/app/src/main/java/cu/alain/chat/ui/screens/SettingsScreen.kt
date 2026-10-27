@@ -234,8 +234,8 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                 Text("Notificaciones", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Con la app abierta los mensajes llegan SIEMPRE al instante " +
-                        "(sin notificación permanente). Con la app cerrada puedes elegir:",
+                    "Con la app abierta los mensajes llegan SIEMPRE al instante. " +
+                        "Con la app cerrada puedes elegir (recomendado: activado):",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(10.dp))
@@ -253,10 +253,11 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                         Text("Avisos instantáneos con la app cerrada", fontWeight = FontWeight.SemiBold)
                         Text(
                             if (app.prefs.instantBg)
-                                "Mantiene la conexión activa para avisar en el momento. " +
-                                    "Android exige una notificación permanente mientras esté activo."
+                                "Tiempo real también con la app cerrada. Android exige una " +
+                                    "notificación permanente mientras esté activo (sin sonido ni " +
+                                    "icono; en Android 13+ puedes deslizarla y el aviso sigue)."
                             else
-                                "Desactivado: sin notificación permanente. Los mensajes se buscan " +
+                                "Sin notificación permanente. Los mensajes se buscan " +
                                     "cada ~15 minutos (o al abrir la app) y avisan igual.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,

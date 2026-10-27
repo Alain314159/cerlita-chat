@@ -131,6 +131,28 @@ class NotifierTest {
         assertTrue(!hasId(rid.hashCode()), "cancelRoom debe borrar el aviso")
     }
 
+    /** D79: la notificación trae «Responder» (con RemoteInput) y «Marcar leído». */
+    @Test
+    fun `acciones responder y marcar leído presentes`() = runBlocking {
+        val now = System.currentTimeMillis()
+        Notifier.notifyNewMessages(
+            ctx, db, myUid = "yo", inForeground = false, suppressRoom = null,
+            msgs = listOf(NewMsg(rid, peerUid, "amelia", "contestame", now, mine = false)),
+        )
+        val sbn = shadowNm.getNotification(rid.hashCode())
+        assertNotNull(sbn, "debe existir la notificación")
+        val actions = sbn.actions
+        assertNotNull(actions, "debe tener acciones")
+        assertEquals(2, actions!!.size)
+        assertEquals("Responder", actions[0].title)
+        assertEquals("Marcar leído", actions[1].title)
+        // el RemoteInput del action responde a la clave del ReplyReceiver
+        val ri = actions[0].remoteInputs
+        assertTrue(ri != null && ri.isNotEmpty(), "Responder debe llevar RemoteInput")
+        assertEquals(cu.alain.chat.notify.ReplyReceiver.KEY_REPLY_TEXT, ri[0].resultKey)
+        Unit
+    }
+
     @Test
     fun `canal del servicio es MIN`() {
         Notifier.ensureServiceChannel(ctx)
