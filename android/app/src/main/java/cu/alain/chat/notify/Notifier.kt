@@ -323,12 +323,11 @@ object Notifier {
             d.setBounds(inset, inset, size - inset, size - inset)
             d.draw(canvas)
         }
-        // D83: decoración (DETRÁS) → ropa (DETRÁS) → base → accesorios (ENCIMA).
-        // La base es raster (WebP) y las capas vectoriales comparten el
-        // artboard 1024×1024 -> componen exactas a cualquier tamaño.
+        // D92: decoración (DETRÁS) → base → ropa (ENCIMA del torso) →
+        // accesorios (ENCIMA). Con cuerpo completo la camiseta tapa el pecho.
         AvatarCatalog.decorRes(cfg.decor, family)?.let(::drawLayer)
-        AvatarCatalog.clothesRes(cfg.clothes, family)?.let(::drawLayer)
         drawLayer(base.res)
+        AvatarCatalog.clothesRes(cfg.clothes, family)?.let(::drawLayer)
         listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
             .forEach { slot -> AvatarCatalog.accRes(cfg.acc?.get(slot), family)?.let(::drawLayer) }
         return bmp

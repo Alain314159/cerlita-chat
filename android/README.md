@@ -337,3 +337,29 @@ merge trae además `docs/AUDITORIA-2026-10-28.md`, el análisis que motivó D84-
   versionCode 11, MISMA firma (37b6d4…) → actualiza encima. 98/98 tests
   (la compilación de la rama se verificó AQUÍ por primera vez: la nota del
   commit D83 advertía que nunca se había podido compilar).
+
+## v0.10.0 — «Muévanse» (CI + pantalla completa + avatares 3D cuerpo entero)
+
+Todo nació del uso real de v0.9.0 (los screenshots del usuario mandaron):
+
+- **GitHub Action que compila la app (D90)**: cada push a main → tests + APK
+  release FIRMADO como artefacto; cada tag v* → Release descargable. Firma en
+  secrets del repo (nunca en código), misma firma 37b6d4… → actualiza encima.
+- **Pantalla completa como el mockup (D91)**: la barra inferior ya no flota
+  (padding doble eliminado), los botones del teléfono se OCULTAN (deslizar
+  desde el borde los trae un momento) y los avatares ya no se cortan en los
+  círculos (margen interno del 7% en app y notificaciones).
+- **Avatares CUERPO COMPLETO en 3D (D92)**: las 8 bases son renders 3D estilo
+  Pixar generados con la ilustración original de guía + pipeline v3 (chroma
+  por dominancia, colorways que conservan el sombreado, margen 10%). Las 22
+  capas (ropa/accesorios/decoración) re-ancladas al arte nuevo con medidas
+  automáticas — la ropa ahora es una camiseta DE VERDAD sobre el torso
+  (antes 'hombros' detrás). QA visual iterado hasta todo PASS (también a
+  64px). La pareja 3D abrazada queda en av_pair.webp para el futuro.
+- **Sesión con contador (D93)**: Ajustes muestra cuántos días le quedan a la
+  sesión (rojo + aviso a ≤7 días). Los 90 días son de NUESTRO backend
+  (seguridad: token robado muere solo; al expirar NO se borra nada local —
+  D85). ¿Molesta? Es un número de una migración SQL, se cambia.
+- **Avatar propio en los mensajes enviados (D94)**: como en el mockup, ambos
+  lados del chat llevan avatar.
+- APK ~19,6 MB, versionCode 12, MISMA firma → actualiza encima. 98/98 tests.

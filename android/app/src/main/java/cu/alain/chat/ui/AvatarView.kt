@@ -236,16 +236,11 @@ fun AvatarView(
                         val pad = size * 0.07f
                         val layer = Modifier.size(size - pad * 2)
                         Box(modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant).padding(pad)) {
-                            // D83: orden de capas -> decoración (DETRÁS) → ropa (DETRÁS)
-                            // → base → accesorios (ENCIMA). Todo comparte el
-                            // artboard 1024×1024, así que compone exacto.
+                            // D92: orden -> decoración (DETRÁS) → base → ropa
+                            // (ENCIMA del torso) → accesorios (ENCIMA). Con cuerpo
+                            // completo la camiseta tiene que TAPAR el pecho (antes,
+                            // con arte de sola cabeza, iba detrás como 'hombros').
                             AvatarCatalog.decorRes(cfg?.decor, family)?.let { res ->
-                                Image(
-                                    painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = layer,
-                                )
-                            }
-                            AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
                                 Image(
                                     painter = painterResource(res), contentDescription = null,
                                     contentScale = ContentScale.Fit, modifier = layer,
@@ -257,6 +252,12 @@ fun AvatarView(
                                 contentScale = ContentScale.Fit,
                                 modifier = layer,
                             )
+                            AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
+                                Image(
+                                    painter = painterResource(res), contentDescription = null,
+                                    contentScale = ContentScale.Fit, modifier = layer,
+                                )
+                            }
                             // orden estable: head → eyes → chest (los slots no se solapan)
                             listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
                                 .forEach { slot ->
