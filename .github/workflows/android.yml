@@ -68,10 +68,13 @@ jobs:
           EOF
 
       - name: Tests (JVM + Robolectric)
-        run: cd android && ./gradlew :app:testDebugUnitTest --stacktrace
+        run: cd android && ./gradlew :app:testDebugUnitTest --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m"
 
+      # Heap subido para CI: el -Xmx2048m de gradle.properties (pensado para
+      # el sandbox de 3,9 GB) hace que lintVital muera de OOM en el runner
+      # (hallazgo del primer run: FirPartialBodyExpressionResolveTransformer).
       - name: APK release (R8 + firma)
-        run: cd android && ./gradlew :app:assembleRelease --stacktrace
+        run: cd android && ./gradlew :app:assembleRelease --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m"
 
       - name: Verificar firma del APK
         run: |
