@@ -69,11 +69,18 @@ object ProfileMsg {
     )
 }
 
-/** Configuración del avatar por capas (base + ropa + accesorios por slot). */
+/**
+ * Configuración del avatar por capas (base + ropa + accesorios por slot).
+ *
+ * D83: se añade el slot [decor] (la burbuja con corazones). Es OPCIONAL y
+ * se serializa solo si hay valor → los perfiles antiguos (v1) siguen siendo
+ * válidos y los clientes que no lo conocen lo ignoran sin romperse.
+ */
 data class AvatarConfig(
-    val base: String?,                       // id de la base ("pig", "koala", …)
+    val base: String?,                       // id de la base ("pig", "koala", "pig_menta"…)
     val clothes: String? = null,             // id de ropa (null = sin ropa)
     val acc: Map<String, String> = emptyMap(), // slot ("head","eyes","chest") → id
+    val decor: String? = null,               // decoración detrás de la base ("bubbles")
 ) {
     fun encode(): String {
         val j = JSONObject().put("v", 1)
@@ -84,6 +91,7 @@ data class AvatarConfig(
             acc.forEach { (slot, id) -> a.put(slot, id) }
             j.put("acc", a)
         }
+        if (!decor.isNullOrBlank()) j.put("decor", decor)
         return j.toString()
     }
 
@@ -108,6 +116,7 @@ data class AvatarConfig(
                     base = j.optString("base", "").ifBlank { null },
                     clothes = j.optString("clothes", "").ifBlank { null },
                     acc = acc,
+                    decor = j.optString("decor", "").ifBlank { null },
                 )
             } catch (_: Exception) {
                 null

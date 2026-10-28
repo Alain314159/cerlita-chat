@@ -181,6 +181,57 @@ Síntoma: el otro contestaba, le salía «en la llamada», pero el que llamaba s
 - **H20 (credenciales)**: tras reinicio del sandbox ~/.git-credentials desaparece; el nombre de usuario del store debe ser el de GitHub (Alain314159), NO el email — la @ del email rompe el parseo de la URL del store y git intenta preguntar interactivo (sin TTY).
 - **H21 (notificaciones)**: NotificationCompat con MessagingStyle en API 28+ NO puebla notification.largeIcon (el avatar vive en el Person del estilo) — aserciones de test sobre largeIcon fallan en Robolectric; se verifica el RemoteInput y las acciones.
 
+## D83 — Sistema de avatares: arte real (híbrido raster + vector)
+
+**Decisión (28-oct-2026).** El arte de los avatares deja de ser placeholder: las BASES
+son raster (WebP con alfa) generados con un pipeline reproducible, y las CAPAS son
+VectorDrawable parametrizados. Documentación completa y comandos: `docs/AVATARES.md`.
+
+**Por qué híbrido y no todo-uno:**
+
+- La base es donde vive el arte → un modelo de imagen la clona bien; vectorizar a mano
+  no escala. Base = WebP (8 piezas: Cerdita y Koalita × 4 colorways).
+- Las capas (ropa, accesorios, decoración) son formas simples → el vector las hace
+  **exactas, escalables y recoloreables**. 22 VectorDrawable en artboard 1024×1024.
+- **El renderizador actual ya soportaba raster** (`painterResource` y
+  `ContextCompat.getDrawable`): cambiar las bases no costó ni una línea de render.
+
+**Style Bible medido** sobre la ilustración original (k-means + muestreo por rejilla):
+tinta `#503433` (nunca negro), cuerpo `#FFC1CC` / `#BCB2BA`, oreja `#FB96A5` / `#F9E2DC`,
+hocico `#FFA2AD`, blush `#F999A5`, corazón `#F0758D`, blanco `#FEE8EB`, violeta `#BC8FB5`.
+Trazo de **11 px sobre 1080 = 1,0 % del ancho**. Hallazgo: blush↔oreja están a **ΔE 2,4**
+— en la referencia los rosas son casi indistinguibles y se separan por POSICIÓN y contorno,
+no por tono. Por eso el pipeline **no tokeniza la referencia** sino que fuerza cada región
+a su token por *unmatte* (descomposición `pixel = α·relleno + (1−α)·fondo`), no por
+proximidad de color (que colapsaría el blush dentro de la oreja).
+
+**Sistema de capas.** Orden: `decor` (DETRÁS) → `clothes` (DETRÁS) → `base` → `acc`
+(ENCIMA). El "detrás" es lo que hace que la burbuja asome por encima de la cabeza como en
+la ilustración y que la camiseta se lea como hombros. Cada familia (pig/koala) tiene su
+**tabla de anclas** medida sobre rejilla de 64 px (orejas, ojos, mentón, pecho) y las
+capas se generan paramétricas contra ella → añadir personaje = medir anclas + regenerar.
+
+**Contrato de wire: el arte cambia, el contrato no.** Se **mantienen** todos los ids
+existentes (`pig`, `koala`, `tee_pink`, `tee_violet`, `tee_teal`, `dots`, `stripes`, `bow`,
+`flower`, `party`, `glasses`, `heart`) → los perfiles ya guardados en la BD siguen
+renderizando. Se **añade** `decor` (opcional, se serializa solo si hay valor) y los ids de
+base con colorway (`pig_melocoton`, `koala_azul`…). Un cliente que no conoce un id lo
+ignora: degradación limpia, igual que D61.
+
+**Selector.** Los chips de texto se sustituyen por **vista previa real**: cada opción se
+compone sobre el personaje elegido antes de mostrarse.
+
+**Peso**: +496 KB (408 raster + 88 vector) sobre una APK de 2,8 MB (+18 %).
+
+**Arte de la pareja**: se usa la **ilustración original recortada** (flood-fill desde los
+bordes, porque el fondo `#FCC2D0` y el cuerpo de Cerdita `#FFC1CC` son casi idénticos y
+un key por color se comería el cerdo) → `av_pair.webp`.
+
+**Aprendizaje de D62 aplicado**: el QA visual (componer + mirar) es **obligatorio**. En la
+primera iteración los 6 accesorios salieron mal colocados por deducir anclas de
+heurísticas de color; se corrigió midiendo sobre rejilla. La regla queda escrita en el
+doc: *medir antes de posicionar*.
+
 ## D84 — Notificaciones que nunca callen + timbre que revive tras actualizar (v0.8.0)
 Auditoría §3.2/N1/N2. La ventana de 30 min hacía que un mensaje importante llegara EN SILENCIO (teléfono 2 h sin red → mensaje de hace 45 min: nada). Regla nueva: SIEMPRE se avisa del último mensaje de cada sala — 1 notificación por sala con contador, cero spam; la única tanda descartada es la re-sincronización evidente (>12 y todo con >24 h: historial de un teléfono nuevo, no noticia). N2: MY_PACKAGE_REPLACED en BootReceiver — el timbre revive tras ACTUALIZAR la app sin abrirla (antes moría silenciosamente hasta la próxima apertura). LOCKED_BOOT_COMPLETED queda fuera A PROPÓSITO: exige directBootAware y migrar DB/vault/prefs a storage device-encrypted — un timbre bajo direct boot no puede leer nada de lo que necesita; mejor honesto que un crash.
 

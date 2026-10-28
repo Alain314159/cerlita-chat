@@ -27,7 +27,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -219,22 +218,24 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(12.dp))
 
-        // ── ropa ──
+        // ── ropa (se dibuja detrás de la base) ──
         SectionTitle("Ropa")
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            FilterChip(
+            AvatarPreviewTile(
+                label = "Ninguna",
                 selected = cfg.clothes == null,
+                avatarJson = cfg.copy(clothes = null).encode(),
                 onClick = { cfg = cfg.copy(clothes = null) },
-                label = { Text("Ninguna") },
             )
             AvatarCatalog.clothes.forEach { c ->
-                FilterChip(
+                AvatarPreviewTile(
+                    label = c.label,
                     selected = cfg.clothes == c.id,
+                    avatarJson = cfg.copy(clothes = c.id).encode(),
                     onClick = { cfg = cfg.copy(clothes = c.id) },
-                    label = { Text(c.label) },
                 )
             }
         }
@@ -245,18 +246,47 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
         SectionTitle("Accesorios")
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             AvatarCatalog.accessories.forEach { a ->
                 val selected = cfg.acc[a.slot] == a.id
-                FilterChip(
+                AvatarPreviewTile(
+                    label = a.label,
                     selected = selected,
+                    avatarJson = if (selected) cfg.encode() else {
+                        val acc = cfg.acc.toMutableMap()
+                        acc[a.slot] = a.id
+                        cfg.copy(acc = acc).encode()
+                    },
                     onClick = {
                         val acc = cfg.acc.toMutableMap()
                         if (selected) acc.remove(a.slot) else acc[a.slot] = a.id
                         cfg = cfg.copy(acc = acc)
                     },
-                    label = { Text(a.label) },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // ── decoración (detrás de la base: la burbuja de Cerlita) ──
+        SectionTitle("Decoración")
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            AvatarPreviewTile(
+                label = "Ninguna",
+                selected = cfg.decor == null,
+                avatarJson = cfg.copy(decor = null).encode(),
+                onClick = { cfg = cfg.copy(decor = null) },
+            )
+            AvatarCatalog.decors.forEach { d ->
+                AvatarPreviewTile(
+                    label = d.label,
+                    selected = cfg.decor == d.id,
+                    avatarJson = cfg.copy(decor = d.id).encode(),
+                    onClick = { cfg = cfg.copy(decor = d.id) },
                 )
             }
         }
@@ -314,11 +344,61 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(16.dp))
         Text(
-            "Los avatares son provisionales: pronto podrás crear el tuyo.\n" +
+            "Elige un personaje y compónlo a tu gusto.\n" +
                 "Tu perfil viaja cifrado igual que los mensajes.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
+        )
+    }
+}
+
+/**
+ * (D83) Ficha del selector de avatar con VISTA PREVIA real: se compone la
+ * configuración completa (base + ropa + accesorios + decoración) sobre el
+ * personaje elegido. Antes eran chips de texto y había que imaginarse el
+ * resultado; ahora se ve exactamente lo que va a salir.
+ */
+@Composable
+private fun AvatarPreviewTile(
+    label: String,
+    selected: Boolean,
+    avatarJson: String,
+    onClick: () -> Unit,
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(4.dp),
+    ) {
+        Box(
+            Modifier
+                .size(76.dp)
+                .clip(CircleShape)
+                .border(
+                    width = if (selected) 3.dp else 1.dp,
+                    color = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.outline,
+                    shape = CircleShape,
+                )
+                .padding(3.dp),
+        ) {
+            AvatarView(
+                photoUid = null, photo = false,
+                avatarJson = avatarJson,
+                fallbackInitial = label, size = 68.dp,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
         )
     }
 }
