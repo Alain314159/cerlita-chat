@@ -295,9 +295,10 @@ object Notifier {
         return letterTile(name)
     }
 
-    /** Rasteriza el avatar por capas (vector drawables) a un bitmap 128×128. */
+    /** Rasteriza el avatar por capas (vector) a un bitmap 128×128. */
     private fun layeredAvatar(ctx: Context, cfg: AvatarConfig): Bitmap? {
         val base = AvatarCatalog.base(cfg.base) ?: return null
+        val family = base.family
         val size = 128
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
@@ -306,10 +307,14 @@ object Notifier {
             d.setBounds(0, 0, size, size)
             d.draw(canvas)
         }
+        // D83: decoración (DETRÁS) → ropa (DETRÁS) → base → accesorios (ENCIMA).
+        // La base es raster (WebP) y las capas vectoriales comparten el
+        // artboard 1024×1024 -> componen exactas a cualquier tamaño.
+        AvatarCatalog.decorRes(cfg.decor, family)?.let(::drawLayer)
+        AvatarCatalog.clothesRes(cfg.clothes, family)?.let(::drawLayer)
         drawLayer(base.res)
-        AvatarCatalog.clothesRes(cfg.clothes)?.let(::drawLayer)
         listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
-            .forEach { slot -> AvatarCatalog.accRes(cfg.acc?.get(slot))?.let(::drawLayer) }
+            .forEach { slot -> AvatarCatalog.accRes(cfg.acc?.get(slot), family)?.let(::drawLayer) }
         return bmp
     }
 

@@ -25,40 +25,109 @@ import cu.alain.chat.R
 import cu.alain.chat.profile.AvatarConfig
 import java.io.File
 
-// ───────────────────────── catálogo (D61: placeholders) ─────────────────────────
-
-data class AvatarBase(val id: String, val label: String, val res: Int)
-data class ClothesItem(val id: String, val label: String, val res: Int)
-data class AccItem(val id: String, val label: String, val slot: String, val res: Int)
+// ───────────────────────── catálogo (D83: arte real) ─────────────────────────
 
 /**
- * Catálogo de avatares. HOY: 2 bases dibujadas (Cerdita y Koalita) + ropa y
- * accesorios placeholder. MAÑANA (avatares creados por el usuario): los ids
- * nuevos simplemente se añaden aquí o se sirven por red; [AvatarConfig] y el
- * renderizador ya son agnósticos al origen del arte.
+ * Base del avatar. [res] es un raster (WebP con alfa) generado con el
+ * pipeline de `docs/AVATARES.md`; [family] agrupa las variantes de color de
+ * un mismo personaje, porque las CAPAS (ropa/accesorios) se dibujan con las
+ * anclas geométricas de esa familia (Cerdita y Koalita no comparten rig).
+ */
+data class AvatarBase(val id: String, val label: String, val res: Int, val family: String)
+
+/** Ropa: se dibuja DETRÁS de la base (el cuerpo tapa el cuello). */
+data class ClothesItem(val id: String, val label: String, val res: Map<String, Int>)
+
+/** Accesorio: se dibuja ENCIMA de la base. Un accesorio por slot. */
+data class AccItem(val id: String, val label: String, val slot: String, val res: Map<String, Int>)
+
+/** Decoración: se dibuja DETRÁS de la base (asoma por encima). */
+data class DecorItem(val id: String, val label: String, val res: Map<String, Int>)
+
+/**
+ * Catálogo de avatares.
+ *
+ * D83: el arte deja de ser placeholder. Las bases son raster (WebP) salidos
+ * del pipeline medido sobre la ilustración original; ropa, accesorios y
+ * decoración son VectorDrawable en un artboard 1024×1024, con el MISMO
+ * grosor de trazo y la MISMA paleta, para que compongan encima de la base.
+ *
+ * COMPATIBILIDAD (D61): los ids "pig", "koala", "tee_pink", "tee_violet",
+ * "tee_teal", "dots", "stripes", "bow", "flower", "party", "glasses" y "heart"
+ * se MANTIENEN → los perfiles ya guardados en la BD siguen renderizando.
+ * Los ids nuevos ("pig_melocoton", "decor"…) solo los entiende un cliente
+ * nuevo, que es exactamente el comportamiento degrade-limpio del diseño.
  */
 object AvatarCatalog {
+    /** Familia de un id de base (para elegir el juego de capas). */
+    const val FAM_PIG = "pig"
+    const val FAM_KOALA = "koala"
+
     val bases = listOf(
-        AvatarBase("pig", "Cerdita", R.drawable.av_pig),
-        AvatarBase("koala", "Koalito", R.drawable.av_koala),
+        AvatarBase("pig", "Cerdita", R.drawable.av_pig, FAM_PIG),
+        AvatarBase("pig_melocoton", "Cerdita melocotón", R.drawable.av_pig_melocoton, FAM_PIG),
+        AvatarBase("pig_lavanda", "Cerdita lavanda", R.drawable.av_pig_lavanda, FAM_PIG),
+        AvatarBase("pig_menta", "Cerdita menta", R.drawable.av_pig_menta, FAM_PIG),
+        AvatarBase("koala", "Koalita", R.drawable.av_koala, FAM_KOALA),
+        AvatarBase("koala_azul", "Koalita azul", R.drawable.av_koala_azul, FAM_KOALA),
+        AvatarBase("koala_cacao", "Koalita cacao", R.drawable.av_koala_cacao, FAM_KOALA),
+        AvatarBase("koala_cielo", "Koalita cielo", R.drawable.av_koala_cielo, FAM_KOALA),
     )
 
     /** null = "sin ropa" (opción explícita del picker). */
     val clothes = listOf(
-        ClothesItem("tee_violet", "Camiseta violeta", R.drawable.av_c_tee_violet),
-        ClothesItem("tee_pink", "Camiseta rosa", R.drawable.av_c_tee_pink),
-        ClothesItem("tee_teal", "Camiseta turquesa", R.drawable.av_c_tee_teal),
-        ClothesItem("dots", "Lunares", R.drawable.av_c_dots),
-        ClothesItem("stripes", "Rayas", R.drawable.av_c_stripes),
+        ClothesItem(
+            "tee_pink", "Camiseta rosa",
+            mapOf(FAM_PIG to R.drawable.av_c_tee_pink_pig, FAM_KOALA to R.drawable.av_c_tee_pink_koala),
+        ),
+        ClothesItem(
+            "tee_violet", "Camiseta violeta",
+            mapOf(FAM_PIG to R.drawable.av_c_tee_violet_pig, FAM_KOALA to R.drawable.av_c_tee_violet_koala),
+        ),
+        ClothesItem(
+            "tee_teal", "Camiseta turquesa",
+            mapOf(FAM_PIG to R.drawable.av_c_tee_teal_pig, FAM_KOALA to R.drawable.av_c_tee_teal_koala),
+        ),
+        ClothesItem(
+            "dots", "Lunares",
+            mapOf(FAM_PIG to R.drawable.av_c_dots_pig, FAM_KOALA to R.drawable.av_c_dots_koala),
+        ),
+        ClothesItem(
+            "stripes", "Rayas",
+            mapOf(FAM_PIG to R.drawable.av_c_stripes_pig, FAM_KOALA to R.drawable.av_c_stripes_koala),
+        ),
     )
 
     /** Los accesorios de un mismo slot son excluyentes (p. ej. moño O gorro). */
     val accessories = listOf(
-        AccItem("glasses", "Gafas", SLOT_EYES, R.drawable.av_a_glasses),
-        AccItem("bow", "Moño", SLOT_HEAD, R.drawable.av_a_bow),
-        AccItem("party", "Gorro de fiesta", SLOT_HEAD, R.drawable.av_a_party),
-        AccItem("flower", "Flor", SLOT_HEAD, R.drawable.av_a_flower),
-        AccItem("heart", "Corazón", SLOT_CHEST, R.drawable.av_a_heart),
+        AccItem(
+            "bow", "Moño", SLOT_HEAD,
+            mapOf(FAM_PIG to R.drawable.av_a_bow_pig, FAM_KOALA to R.drawable.av_a_bow_koala),
+        ),
+        AccItem(
+            "flower", "Flor", SLOT_HEAD,
+            mapOf(FAM_PIG to R.drawable.av_a_flower_pig, FAM_KOALA to R.drawable.av_a_flower_koala),
+        ),
+        AccItem(
+            "party", "Gorro de fiesta", SLOT_HEAD,
+            mapOf(FAM_PIG to R.drawable.av_a_party_pig, FAM_KOALA to R.drawable.av_a_party_koala),
+        ),
+        AccItem(
+            "glasses", "Gafas de sol", SLOT_EYES,
+            mapOf(FAM_PIG to R.drawable.av_a_glasses_pig, FAM_KOALA to R.drawable.av_a_glasses_koala),
+        ),
+        AccItem(
+            "heart", "Corazón", SLOT_CHEST,
+            mapOf(FAM_PIG to R.drawable.av_a_heart_pig, FAM_KOALA to R.drawable.av_a_heart_koala),
+        ),
+    )
+
+    /** Decoración (D83): la burbuja con corazones, la firma de Cerlita. */
+    val decors = listOf(
+        DecorItem(
+            "bubbles", "Burbuja con corazones",
+            mapOf(FAM_PIG to R.drawable.av_decor_bubbles_pig, FAM_KOALA to R.drawable.av_decor_bubbles_koala),
+        ),
     )
 
     const val SLOT_HEAD = "head"
@@ -66,8 +135,18 @@ object AvatarCatalog {
     const val SLOT_CHEST = "chest"
 
     fun base(id: String?) = bases.firstOrNull { it.id == id }
-    fun clothesRes(id: String?) = clothes.firstOrNull { it.id == id }?.res
-    fun accRes(id: String?) = accessories.firstOrNull { it.id == id }?.res
+
+    /** Familia (pig/koala) de un id de base; si no se reconoce, la de Cerdita. */
+    fun familyOf(baseId: String?): String = base(baseId)?.family ?: FAM_PIG
+
+    fun clothesRes(id: String?, family: String): Int? =
+        clothes.firstOrNull { it.id == id }?.res?.get(family)
+
+    fun accRes(id: String?, family: String): Int? =
+        accessories.firstOrNull { it.id == id }?.res?.get(family)
+
+    fun decorRes(id: String?, family: String): Int? =
+        decors.firstOrNull { it.id == id }?.res?.get(family)
 }
 
 // ───────────────────────── fotos (caché ligera) ─────────────────────────
@@ -149,24 +228,33 @@ fun AvatarView(
                     val cfg = remember(avatarJson) { AvatarConfig.parse(avatarJson) }
                     val base = AvatarCatalog.base(cfg?.base)
                     if (base != null) {
+                        val family = base.family
                         Box(modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant)) {
-                            // capas en orden: base → ropa → accesorios
+                            // D83: orden de capas -> decoración (DETRÁS) → ropa (DETRÁS)
+                            // → base → accesorios (ENCIMA). Todo comparte el
+                            // artboard 1024×1024, así que compone exacto.
+                            AvatarCatalog.decorRes(cfg?.decor, family)?.let { res ->
+                                Image(
+                                    painter = painterResource(res), contentDescription = null,
+                                    contentScale = ContentScale.Fit, modifier = Modifier.size(size),
+                                )
+                            }
+                            AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
+                                Image(
+                                    painter = painterResource(res), contentDescription = null,
+                                    contentScale = ContentScale.Fit, modifier = Modifier.size(size),
+                                )
+                            }
                             Image(
                                 painter = painterResource(base.res),
                                 contentDescription = null,
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier.size(size),
                             )
-                            AvatarCatalog.clothesRes(cfg?.clothes)?.let { res ->
-                                Image(
-                                    painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = Modifier.size(size),
-                                )
-                            }
                             // orden estable: head → eyes → chest (los slots no se solapan)
                             listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
                                 .forEach { slot ->
-                                    AvatarCatalog.accRes(cfg?.acc?.get(slot))?.let { res ->
+                                    AvatarCatalog.accRes(cfg?.acc?.get(slot), family)?.let { res ->
                                         Image(
                                             painter = painterResource(res), contentDescription = null,
                                             contentScale = ContentScale.Fit, modifier = Modifier.size(size),
