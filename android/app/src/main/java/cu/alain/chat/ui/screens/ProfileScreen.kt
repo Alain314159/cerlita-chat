@@ -68,6 +68,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -80,8 +81,10 @@ import cu.alain.chat.profile.AvatarConfig
 import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
 import cu.alain.chat.ui.AvatarCatalog
+import cu.alain.chat.ui.Avatar3DPreview
 import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.ui.LayeredAvatar
+import cu.alain.chat.ui.capture3DAvatar
 import cu.alain.chat.work.WorkSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,6 +105,7 @@ import kotlin.math.roundToInt
 @Composable
 fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
     val ctx = LocalContext.current
+    val rootView = LocalView.current          // (D101) para el snapshot PixelCopy del 3D
     val scope = rememberCoroutineScope()
     val session = app.engine.session
 
@@ -164,30 +168,37 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(10.dp))
 
-        // ── vista previa: foto si hay; si no, avatar VIVO (D98) ──
-        if (hasPhoto) {
-            AvatarView(
-                photoUid = session?.uid,
-                photo = true,
-                avatarJson = cfg.encode(),
-                fallbackInitial = name,
-                size = 128.dp,
-                pendingPhotoBytes = newPhotoBytes,
-                photoVersion = saved?.updatedAt ?: 0L,
+        // ── (D101) vista previa: SIEMPRE el editor 3D vivo — geometría real,
+        //    ropa con volumen, órbita con el dedo. La foto de perfil (si la hay,
+        //    o el snapshot 3D al guardar) es lo que ven los chats ──
+        var saludo by remember { mutableStateOf(false) }
+        LaunchedEffect(saludo) {
+            if (saludo) {
+                delay(1250)
+                saludo = false
+            }
+        }
+        Box(Modifier.size(230.dp)) {
+            Avatar3DPreview(
+                cfg = cfg,
+                modifier = Modifier.fillMaxSize(),
+                onWave = { saludo = true },
             )
+            HolaBubble(saludo, Modifier.align(Alignment.TopEnd))
+        }
+        Text(
+            "Tócalo para saludar · arrástralo para girarlo de verdad",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        if (hasPhoto) {
             TextButton(onClick = { hasPhoto = false; newPhotoBytes = null }) {
                 Icon(Icons.Default.Close, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Quitar foto y usar avatar")
             }
         } else {
-            InteractiveAvatar(cfg, Modifier.size(196.dp))
-            Text(
-                "Tócalo para saludar · arrástralo para girarlo",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
             OutlinedButton(onClick = { pickPhoto.launch("image/*") }) {
                 Icon(Icons.Default.AddAPhoto, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
@@ -349,9 +360,15 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
             enabled = !saving && name.isNotBlank(),
             onClick = {
                 saving = true; error = null
+                // (D101) sin foto elegida esta sesión → snapshot del 3D como foto:
+                // el otro teléfono y las notificaciones ven el muñeco REAL que
+                // vestiste (la foto viaja cifrada como siempre)
+                if (newPhotoBytes == null) {
+                    newPhotoBytes = snapshot3D(rootView)
+                }
+                val keepExisting = hasPhoto && newPhotoBytes == null
                 scope.launch {
-                    // foto: nueva si se eligió · mantener si no se tocó · borrar si la quitó
-                    val keepExisting = hasPhoto && newPhotoBytes == null
+                    // foto: nueva si se eligió (o snapshot 3D) · mantener si no se tocó
                     val r = app.engine.saveProfile(
                         displayName = name,
                         avatarJson = cfg.encode(),
@@ -405,174 +422,44 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
     }
 }
 
-/**
- * (D98) El avatar VIVO de la vista previa:
- *  - RESPIRA en reposo (balanceo sutil infinito)
- *  - SABE que lo vistes: rebote feliz + meneo en cada cambio de ropa/accesorio
- *  - cambia de personaje → vuelta completa de 360°
- *  - TOCARLO → saluda (brinquitos + meneo + burbuja "¡Hola!")
- *  - ARRASTRARLO → gira en 3D (rotación Y con perspectiva; X inclina) y al
- *    soltar vuelve con muelle al frente más cercano
- */
+/** Burbuja "¡Hola!" del saludo (D98) — composable aparte para no heredar el
+ *  ColumnScope de la pantalla (conflicto de AnimatedVisibility). */
 @Composable
-private fun InteractiveAvatar(cfg: AvatarConfig, modifier: Modifier = Modifier) {
-    val base = AvatarCatalog.base(cfg.base) ?: return
-    val scope = rememberCoroutineScope()
-    val scale = remember { Animatable(0.55f) }
-    val rotZ = remember { Animatable(0f) }
-    val rotY = remember { Animatable(0f) }
-    val rotX = remember { Animatable(0f) }
-    val ty = remember { Animatable(0f) }
-    var saludo by remember { mutableStateOf(false) }
-    // px reales según densidad: los saltos se ven iguales en cualquier móvil
-    val hop = with(LocalDensity.current) { 26.dp.toPx() }
-    val bob = with(LocalDensity.current) { 7.dp.toPx() }
-
-    // respiración idle: sube/baja 8 px y cabecea 1.4°
-    val vivo = rememberInfiniteTransition(label = "vivo")
-    val fase by vivo.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Reverse),
-        label = "respira",
-    )
-
-    // entrada con rebote
-    LaunchedEffect(Unit) {
-        scale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 380f))
-    }
-
-    // reacción al vestirlo (salta la entrada inicial)
-    LaunchedEffect(cfg.clothes, cfg.acc) {
-        if (scale.isRunning && scale.value < 0.95f) return@LaunchedEffect
-        if (scale.value >= 0.9f) {
-            launch {
-                scale.animateTo(1f, keyframes {
-                    durationMillis = 560
-                    1.10f at 90 using FastOutSlowInEasing
-                    0.94f at 220
-                    1.04f at 360
-                    1f at 560
-                })
-            }
-            launch {
-                rotZ.animateTo(0f, keyframes {
-                    durationMillis = 560
-                    -5f at 110
-                    4.5f at 260
-                    -2f at 400
-                    0f at 560
-                })
-            }
-        }
-    }
-
-    // cambio de personaje → vuelta completa
-    LaunchedEffect(cfg.base) {
-        val objetivo = (rotY.value / 360f).toInt() * 360f + 360f
-        rotY.animateTo(objetivo, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow))
-    }
-
-    // la burbuja de saludo se despide sola
-    LaunchedEffect(saludo) {
-        if (saludo) {
-            delay(1250)
-            saludo = false
-        }
-    }
-
-    Box(
-        modifier
-            .graphicsLayer {
-                scaleX = scale.value
-                scaleY = scale.value
-                rotationZ = rotZ.value + (fase - 0.5f) * 1.4f
-                rotationY = rotY.value
-                rotationX = rotX.value
-                translationY = ty.value + (0.5f - fase) * bob
-                cameraDistance = size.maxDimension * 6f
-            }
-            .drawBehind {
-                // sombra de suelo que ancla el personaje
-                val w = size.width * 0.52f
-                val cxS = size.width / 2
-                val cyS = size.height * 0.955f
-                drawOval(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color(0x2E3A2E38), Color.Transparent),
-                        center = Offset(cxS, cyS),
-                        radius = w / 2,
-                    ),
-                    topLeft = Offset(cxS - w / 2, cyS - w * 0.085f),
-                    size = Size(w, w * 0.17f),
-                )
-            }
-            .pointerInput(Unit) {
-                detectTapGestures {
-                    saludo = true
-                    scope.launch {
-                        ty.animateTo(0f, keyframes {
-                            durationMillis = 950
-                            -hop at 130 using FastOutSlowInEasing
-                            0f at 250
-                            -hop * 0.66f at 400
-                            0f at 540
-                            -hop * 0.33f at 660
-                            0f at 950
-                        })
-                        rotZ.animateTo(0f, keyframes {
-                            durationMillis = 950
-                            -9f at 130
-                            7f at 300
-                            -5f at 470
-                            3f at 640
-                            0f at 950
-                        })
-                    }
-                }
-            }
-            .pointerInput(Unit) {
-                detectDragGestures(
-                    onDrag = { change, amt ->
-                        change.consume()
-                        scope.launch {
-                            rotY.snapTo(rotY.value + amt.x * 0.55f)
-                            rotX.snapTo((rotX.value - amt.y * 0.22f).coerceIn(-14f, 14f))
-                        }
-                    },
-                    onDragEnd = {
-                        scope.launch {
-                            val frente = (rotY.value / 360f).roundToInt() * 360f
-                            rotY.animateTo(frente.toFloat(), spring(dampingRatio = 0.62f))
-                            rotX.animateTo(0f, spring(dampingRatio = 0.7f))
-                        }
-                    },
-                )
-            },
+private fun HolaBubble(visible: Boolean, modifier: Modifier = Modifier) {
+    androidx.compose.animation.AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn() + slideInVertically { -it / 2 } + scaleIn(initialScale = 0.6f),
+        exit = fadeOut() + scaleOut(targetScale = 0.8f),
+        modifier = modifier.graphicsLayer { rotationZ = 8f },
     ) {
-        LayeredAvatar(base, cfg, Modifier.fillMaxSize())
-        // burbuja "¡Hola!" del saludo (D98) — nada de corazones (D96)
-        AnimatedVisibility(
-            visible = saludo,
-            enter = fadeIn() + slideInVertically { -it / 2 } + scaleIn(initialScale = 0.6f),
-            exit = fadeOut() + scaleOut(targetScale = 0.8f),
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .graphicsLayer { rotationZ = 8f },
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.primary,
+            shadowElevation = 3.dp,
+            modifier = Modifier.padding(end = 2.dp, top = 30.dp),
         ) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.primary,
-                shadowElevation = 3.dp,
-                modifier = Modifier.padding(end = 2.dp, top = 30.dp),
-            ) {
-                Text(
-                    "  ¡Hola!  ",
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.labelLarge,
-                )
-            }
+            Text(
+                "  ¡Hola!  ",
+                color = MaterialTheme.colorScheme.onPrimary,
+                style = MaterialTheme.typography.labelLarge,
+            )
         }
     }
+}
+
+/**
+ * (D101) Snapshot del editor 3D → bytes JPEG (el pipeline de fotos existente
+ * lo sube cifrado). Si PixelCopy no está disponible (API <26) o falla,
+ * devuelve null y los chats caen al render 2D de siempre.
+ */
+private fun snapshot3D(root: android.view.View): ByteArray? = try {
+    val bmp = capture3DAvatar(root) ?: return null
+    val bos = java.io.ByteArrayOutputStream()
+    bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, bos)
+    bmp.recycle()
+    bos.toByteArray()
+} catch (_: Exception) {
+    null
 }
 
 /**

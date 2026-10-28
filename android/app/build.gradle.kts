@@ -22,8 +22,8 @@ android {
         applicationId = "cu.alain.chat"
         minSdk = 24          // D/P1: máximo alcance; requiere desugaring
         targetSdk = 36       // D/P2: un nivel por detrás del último — comportamiento probado
-        versionCode = 13
-        versionName = "0.11.0"
+        versionCode = 14
+        versionName = "0.12.0"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -100,6 +100,7 @@ dependencies {
     implementation(libs.argon2kt)
     implementation(libs.androidx.exifinterface) // rotación EXIF al comprimir fotos (D76)
     implementation(libs.stream.webrtc)         // llamadas audio/vídeo (D75): libwebrtc
+    implementation(libs.sceneview)              // vista previa del avatar 3D (D101): Filament
 
     testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
     testImplementation("junit:junit:4.13.2")
