@@ -1,9 +1,11 @@
 package cu.alain.chat
 
 import cu.alain.chat.calls.CallSignals
+import cu.alain.chat.crypto.Crypto
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -66,5 +68,78 @@ class CallSignalsTest {
         // offer sin sdp
         assertNull(CallSignals.parse(
             JSONObject().put("t", "offer").put("c", "x").put("f", "y").put("r", "r").toString(), "uid-b"))
+    }
+
+    // ───────── B6 (v0.8.0): sobre cifrado de la señalización ─────────
+
+    /** Deriva la clave igual que Crypto.sigKey (madre roomKey → convKey → sigKey). */
+    private fun sigKey(roomKey: ByteArray, roomId: String, callId: String): ByteArray =
+        Crypto.sigKey(roomKey, roomId, callId)
+
+    @Test
+    fun `sobre cifrado roundtrip completo`() {
+        val roomKey = cu.alain.chat.crypto.Crypto.newRoomKey()
+        val k = sigKey(roomKey, "room-9", "call-9")
+        // 1) offer cifrado → fuera solo se ve t/c/r/n/d
+        val outer = CallSignals.wrapEncrypted(k, "call-9", "room-9",
+            CallSignals.encodeOffer("call-9", "room-9", "uid-a", "Alain", true, sdp))
+        assertTrue(CallSignals.isEncrypted(outer))
+        assertEquals("enc", outer.optString("t"))
+        assertEquals("room-9", outer.optString("r"))
+        // el nombre y el SDP JAMÁS aparecen en claro fuera del sobre
+        val wire = outer.toString()
+        assertFalse(wire.contains("Alain"))
+        assertFalse(wire.contains("127.0.0.1"))
+        // 2) abrir → parse → offer intacto
+        val inner = CallSignals.unwrapEncrypted(k, "call-9", "room-9", outer)
+        assertNotNull(inner)
+        val sig = CallSignals.parse(inner!!, "uid-b")
+        assertTrue(sig is CallSignals.Signal.Offer)
+        sig as CallSignals.Signal.Offer
+        assertEquals("Alain", sig.fromName)
+        assertEquals(sdp, sig.sdp)
+        assertTrue(sig.video)
+    }
+
+    @Test
+    fun `ice y bye tambien viajan cifrados`() {
+        val roomKey = cu.alain.chat.crypto.Crypto.newRoomKey()
+        val k = sigKey(roomKey, "r", "c5")
+        val iceOut = CallSignals.wrapEncrypted(k, "c5", "r",
+            CallSignals.encodeIce("c5", "uid-a", "0", 1, "candidate:1 udp"))
+        val iceIn = CallSignals.parse(CallSignals.unwrapEncrypted(k, "c5", "r", iceOut)!!, "uid-b")
+        assertEquals(1, (iceIn as CallSignals.Signal.Ice).lineIndex)
+
+        val byeOut = CallSignals.wrapEncrypted(k, "c5", "r",
+            CallSignals.encodeBye("c5", "uid-a", "declined"))
+        val byeIn = CallSignals.parse(CallSignals.unwrapEncrypted(k, "c5", "r", byeOut)!!, "uid-b")
+        assertEquals("declined", (byeIn as CallSignals.Signal.Bye).reason)
+    }
+
+    @Test
+    fun `clave de otra sala o llamada no abre el sobre`() {
+        val roomKey = cu.alain.chat.crypto.Crypto.newRoomKey()
+        val k = sigKey(roomKey, "r", "c6")
+        val outer = CallSignals.wrapEncrypted(k, "c6", "r",
+            CallSignals.encodeBye("c6", "uid-a", "hangup"))
+        // misma clave pero callId distinto → AAD distinto → null
+        assertNull(CallSignals.unwrapEncrypted(k, "OTRA", "r", outer))
+        // roomId distinto → null
+        assertNull(CallSignals.unwrapEncrypted(k, "c6", "OTRA", outer))
+        // clave de otra sala → null
+        val otra = sigKey(cu.alain.chat.crypto.Crypto.newRoomKey(), "r", "c6")
+        assertNull(CallSignals.unwrapEncrypted(otra, "c6", "r", outer))
+        // b64 corrupto → null sin excepción
+        assertNull(CallSignals.unwrapEncrypted(k, "c6", "r",
+            JSONObject().put("t", "enc").put("n", "!!!no-b64!!!").put("d", "xx")))
+    }
+
+    @Test
+    fun `parse legacy en claro sigue funcionando (compat con v0_7)`() {
+        // un v0.7.x emite sin sobre; un v0.8.0 lo sigue parseando
+        val j = CallSignals.encodeAnswer("c7", "uid-a", sdp)
+        assertFalse(CallSignals.isEncrypted(j))
+        val sig = CallSignals.parse(j.toString(), "uid-b")
+        assertTrue(sig is CallSignals.Signal.Answer)
     }
 }

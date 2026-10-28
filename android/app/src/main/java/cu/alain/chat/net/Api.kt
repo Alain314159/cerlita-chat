@@ -41,6 +41,13 @@ data class DmPickup(
     val wrappedB64: String,
 )
 
+/** Servidor ICE de /turn (B6/R3 auditoría): url + credenciales opcionales. */
+data class IceServerCfg(
+    val url: String,
+    val username: String? = null,
+    val password: String? = null,
+)
+
 /** Usuario encontrado por búsqueda (D74). */
 data class FoundUser(val uid: String, val uname: String, val pubB64: String?)
 
@@ -265,6 +272,37 @@ class Api(private val baseUrl: () -> String) {
                 client.newCall(req).execute().use { it.code in 200..299 }
             } catch (_: Exception) {
                 false
+            }
+        }
+
+    // ---------- turn (B6/R3: ICE servers para llamadas) ----------
+
+    /**
+     * GET /turn → STUN + TURN (si el servidor tiene credenciales). Las
+     * credenciales NUNCA van en el APK: las sirve el backend con sesión
+     * válida y se pueden rotar sin tocar la app.
+     */
+    suspend fun fetchTurn(token: String): List<IceServerCfg> =
+        withContext(Dispatchers.IO) {
+            try {
+                val (code, raw) = get("/turn", token)
+                if (code != 200) return@withContext emptyList()
+                val arr = JSONObject(raw).optJSONArray("s") ?: return@withContext emptyList()
+                val list = buildList {
+                    for (i in 0 until arr.length()) {
+                        val o = arr.getJSONObject(i)
+                        add(
+                            IceServerCfg(
+                                url = o.optString("u", ""),
+                                username = if (o.has("un")) o.optString("un") else null,
+                                password = if (o.has("pw")) o.optString("pw") else null,
+                            )
+                        )
+                    }
+                }
+                list.filter { it.url.isNotBlank() }
+            } catch (_: Exception) {
+                emptyList()
             }
         }
 

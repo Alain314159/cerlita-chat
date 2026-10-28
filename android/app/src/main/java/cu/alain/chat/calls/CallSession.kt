@@ -37,8 +37,8 @@ import kotlin.coroutines.resumeWithException
  *
  * - Audio SIEMPRE (micrófono → pista remota); vídeo si la llamada es de vídeo.
  * - Cámara frontal por defecto (cambiar con switchCamera).
- * - ICE: STUN de Google + Cloudflare SIN TURN — en redes muy cerradas (NAT
- *   simétrico) puede no conectar; la llamada avisa «no se pudo conectar».
+ * - ICE (v0.8.0, B6/R3): STUN + TURN servido por /turn — en NAT simétrico el
+ *   relé es la única ruta; el media sigue E2EE (DTLS-SRTP).
  * - La señalización la hace [CallDispatcher]; esta clase solo negocia.
  *
  * La factory se inicializa UNA vez por proceso (el JNI pesa decenas de MB).
@@ -48,6 +48,8 @@ class CallSession(
     roomId: String,
     private val withVideo: Boolean,
     private val listener: Listener,
+    /** ICE servers (STUN+TURN) — el dispatcher los trae de TurnConfig. */
+    iceServers: List<PeerConnection.IceServer>? = null,
 ) {
 
     interface Listener {
@@ -165,14 +167,21 @@ class CallSession(
 
     init {
         val f = ensureFactory(app)
-        val rtcConfig = PeerConnection.RTCConfiguration(STUN.map {
-            PeerConnection.IceServer.builder(it).createIceServer()
-        }).apply {
+        val servers = iceServers ?: STUN.map { PeerConnection.IceServer.builder(it).createIceServer() }
+        val rtcConfig = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
         }
         pc = f.createPeerConnection(rtcConfig, pcObserver)
             ?: throw IllegalStateException("no se pudo crear la conexión")
-        audioSource = f.createAudioSource(MediaConstraints())
+        // Audio con procesamiento DSP (B6 auditoría): sin AEC, en una llamada
+        // con altavoz el otro oye TU propia voz con retardo — el defecto de
+        // audio #1. AGC y NS son gratis del mismo tirón.
+        val audio = MediaConstraints().apply {
+            mandatory.add(MediaConstraints.KeyValuePair("echoCancellation", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("autoGainControl", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("noiseSuppression", "true"))
+        }
+        audioSource = f.createAudioSource(audio)
         audioTrack = f.createAudioTrack("audio0", audioSource).also {
             pc.addTrack(it, listOf("stream0"))
         }

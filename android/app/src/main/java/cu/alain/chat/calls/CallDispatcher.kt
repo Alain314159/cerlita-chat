@@ -72,11 +72,17 @@ object CallDispatcher {
 
     var enabled: Boolean = true // la UI del overlay lo apaga cuando nadie la observa
 
-    /** Broadcast de señalización con reintentos (la llamada muere si se pierde). */
-    private suspend fun broadcastSig(app: ChatApp, roomId: String, payload: org.json.JSONObject): Boolean {
+    /** Broadcast de señalización CIFRADA (B6) con reintentos (la llamada muere si se pierde). */
+    private suspend fun broadcastSig(app: ChatApp, roomId: String, callId: String, payload: org.json.JSONObject): Boolean {
         val topic = CallSignals.topicOf(roomId)
+        // B6: el SDP (con las IPs), los ICE y el nombre viajan bajo sobre
+        // cifrado con la clave de señalización de la sala; el servidor solo
+        // ve topic (roomId, que ya sabe) y un callId aleatorio.
+        val wire = app.engine.sigKeyFor(roomId, callId)?.let { k ->
+            CallSignals.wrapEncrypted(k, callId, roomId, payload)
+        } ?: payload // sin clave (no debería ocurrir en un DM): legacy en claro
         repeat(3) {
-            if (app.api.broadcast(topic, CallSignals.EV, payload)) return true
+            if (app.api.broadcast(topic, CallSignals.EV, wire)) return true
             kotlinx.coroutines.delay(1_500)
         }
         return false
@@ -108,16 +114,23 @@ object CallDispatcher {
             )
         }
         audioMode(app, inCall = true, speakerOn = video) // D81: ruta de audio desde ya
-        val s = CallSession(app, room.roomId, video, listener)
-        session = s
-        s.start { sdp -> // offer listo → señalizar; los ICE esperan su turno (D81)
-            scope.launch {
-                broadcastSig(app, room.roomId, CallSignals.encodeOffer(callId, room.roomId, me.uid, me.uname, video, sdp))
-                sdpSent = true
-                iceHold.forEach { (m, l, c) ->
-                    broadcastSig(app, room.roomId, CallSignals.encodeIce(callId, me.uid, m, l, c))
+        // B6/R3: los ICE servers (STUN+TURN) se resuelven ANTES de crear la
+        // sesión — la caché del login lo hace instantáneo casi siempre; si
+        // hay que ir al servidor, 4 s tope y luego STUN (nunca se cancela
+        // una llamada por esto).
+        scope.launch {
+            val ice = TurnConfig.ensure(app)
+            val s = CallSession(app, room.roomId, video, listener, ice)
+            session = s
+            s.start { sdp -> // offer listo → señalizar; los ICE esperan su turno (D81)
+                scope.launch {
+                    broadcastSig(app, room.roomId, callId, CallSignals.encodeOffer(callId, room.roomId, me.uid, me.uname, video, sdp))
+                    sdpSent = true
+                    iceHold.forEach { (m, l, c) ->
+                        broadcastSig(app, room.roomId, callId, CallSignals.encodeIce(callId, me.uid, m, l, c))
+                    }
+                    iceHold.clear()
                 }
-                iceHold.clear()
             }
         }
         armTimeout(45_000) { bye(app, "cancelled") }
@@ -127,14 +140,29 @@ object CallDispatcher {
     fun onSignal(app: ChatApp, payload: String) {
         if (!enabled) return
         val myUid = app.engine.session?.uid ?: return
-        val sig = CallSignals.parse(payload, myUid) ?: return
+        // B6: abrir el sobre cifrado v0.8.0 antes de parsear. roomId/callId van
+        // fuera (el servidor ya conoce el roomId por el topic; callId es
+        // aleatorio) — TODO lo demás viaja cifrado. Los payloads legacy en
+        // claro de v0.7.x siguen entrando (un v0.7 llamando a un v0.8 suena).
+        val inner: String = try {
+            val j = org.json.JSONObject(payload)
+            if (CallSignals.isEncrypted(j)) {
+                val encCallId = j.optString("c", "")
+                val encRoomId = j.optString("r", "")
+                val k = app.engine.sigKeyFor(encRoomId, encCallId) ?: return
+                CallSignals.unwrapEncrypted(k, encCallId, encRoomId, j) ?: return
+            } else payload
+        } catch (_: Exception) {
+            return
+        }
+        val sig = CallSignals.parse(inner, myUid) ?: return
         val cur = _state.value
         when (sig) {
             is CallSignals.Signal.Offer -> {
                 val now = System.currentTimeMillis()
                 if (cur != null) { // ocupado: rechazo automático
                     scope.launch {
-                        app.api.broadcast(CallSignals.topicOf(sig.roomId), CallSignals.EV,
+                        broadcastSig(app, sig.roomId, sig.callId,
                             CallSignals.encodeBye(sig.callId, myUid, "busy"))
                     }
                     return
@@ -157,9 +185,13 @@ object CallDispatcher {
                     )
                 }
                 ring(app)
-                val pending = CallSession(app, sig.roomId, sig.video, listener)
-                pending.prepareAsCallee(sig.sdp)
-                session = pending
+                // B6/R3: resolver ICE (STUN+TURN) antes de crear la sesión
+                scope.launch {
+                    val ice = TurnConfig.ensure(app)
+                    val pending = CallSession(app, sig.roomId, sig.video, listener, ice)
+                    pending.prepareAsCallee(sig.sdp)
+                    session = pending
+                }
                 armTimeout(40_000) { bye(app, "missed") } // no contesté → perdida
             }
 
@@ -209,10 +241,10 @@ object CallDispatcher {
         session?.answer { sdp ->
             scope.launch {
                 // el answer sale PRIMERO; los ICE propios esperan su turno
-                broadcastSig(app, roomId, CallSignals.encodeAnswer(callId, myUid, sdp))
+                broadcastSig(app, roomId, callId, CallSignals.encodeAnswer(callId, myUid, sdp))
                 sdpSent = true
                 iceHold.forEach { (m, l, c) ->
-                    broadcastSig(app, roomId, CallSignals.encodeIce(callId, myUid, m, l, c))
+                    broadcastSig(app, roomId, callId, CallSignals.encodeIce(callId, myUid, m, l, c))
                 }
                 iceHold.clear()
             }
@@ -228,7 +260,7 @@ object CallDispatcher {
         val myUid = app.engine.session?.uid ?: return
         suppressUntil = System.currentTimeMillis() + 5_000
         scope.launch {
-            app.api.broadcast(CallSignals.topicOf(cur.roomId), CallSignals.EV,
+            broadcastSig(app, cur.roomId, cur.callId,
                 CallSignals.encodeBye(cur.callId, myUid, "declined"))
         }
         finish(app, C.CALL_DECLINED, notify = false)
@@ -240,7 +272,7 @@ object CallDispatcher {
         val a = app ?: return
         val myUid = a.engine.session?.uid ?: return
         scope.launch {
-            a.api.broadcast(CallSignals.topicOf(cur.roomId), CallSignals.EV,
+            broadcastSig(a, cur.roomId, cur.callId,
                 CallSignals.encodeBye(cur.callId, myUid, "hangup"))
         }
         val status = if (cur.phase == Phase.ACTIVE) C.CALL_COMPLETED else C.CALL_CANCELLED
@@ -297,7 +329,7 @@ object CallDispatcher {
                 // D81: sin offer/answer en vuelo, los ICE salen directos; si aún
                 // no salió el SDP, esperan (el POST del SDP va primero)
                 if (sdpSent) {
-                    broadcastSig(a, cur.roomId, CallSignals.encodeIce(cur.callId, myUid, sdpMid, lineIndex, candidate))
+                    broadcastSig(a, cur.roomId, cur.callId, CallSignals.encodeIce(cur.callId, myUid, sdpMid, lineIndex, candidate))
                 } else {
                     iceHold.add(Triple(sdpMid, lineIndex, candidate))
                 }
@@ -314,7 +346,7 @@ object CallDispatcher {
         val cur = _state.value ?: return
         val myUid = app.engine.session?.uid ?: return
         scope.launch {
-            broadcastSig(app, cur.roomId, CallSignals.encodeBye(cur.callId, myUid, reason))
+            broadcastSig(app, cur.roomId, cur.callId, CallSignals.encodeBye(cur.callId, myUid, reason))
         }
         finish(app, when (reason) {
             "missed" -> C.CALL_MISSED

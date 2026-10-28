@@ -158,6 +158,17 @@ class ChatEngine(
 
     fun hasKey(roomId: String): Boolean = keys.containsKey(roomId.lowercase())
 
+    /**
+     * Clave de señalización de llamadas (B6 auditoría): derivada de la roomKey
+     * del vault con salt=callId. La usa el CallDispatcher para cifrar el
+     * SDP/ICE/nombre que viaja por el broadcast — mismo secreto raíz que los
+     * mensajes, dominio separado.
+     */
+    fun sigKeyFor(roomId: String, callId: String): ByteArray? {
+        val ks = keys[roomId.lowercase()] ?: return null
+        return Crypto.sigKey(ks.first, roomId, callId)
+    }
+
     /** Código de invitación reconstruido de la clave del vault (ajustes de sala):
      *  con él un miembro nuevo entra, o este teléfono recupera el acceso. */
     fun getInviteCode(roomId: String): String? {

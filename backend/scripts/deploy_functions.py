@@ -33,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import api  # noqa: E402
 
-FUNCTIONS = ["auth", "sync", "outbox", "heartbeat", "files"]
+FUNCTIONS = ["auth", "sync", "outbox", "heartbeat", "files", "turn"]
 BACKEND = Path(__file__).resolve().parents[1]
 BUILD = BACKEND / "build"
 
@@ -130,10 +130,27 @@ def set_secrets(debug: str) -> bool:
     # v0.7.0: el Storage SOLO acepta JWTs clásicos; el SUPABASE_SERVICE_ROLE_KEY
     # auto-inyectado en las funciones es el formato nuevo (sb_secret_) → 403
     # Invalid Compact JWS. Guardamos la JWT como secret propio.
+    #
+    # v0.8.0 (B6/R3 auditoría): TURN para llamadas tras NAT simétrico. Defaults:
+    # OpenRelay (Metered) free tier — 20 GB/mes, credenciales PÚBLICAS de prueba
+    # publicadas por el propio Metered (nada secreto que proteger). Cambiar por
+    # ExpressTURN/Cloudflare TURN (1000 GB/mes gratis) → exportar TURN_URLS/
+    # TURN_USER/TURN_PASS antes de re-desplegar. El APK nunca lleva credenciales:
+    # las sirve /turn con sesión válida.
+    turn_urls = os.environ.get("TURN_URLS") or (
+        "turn:openrelay.metered.ca:80,"
+        "turn:openrelay.metered.ca:443,"
+        "turn:openrelay.metered.ca:443?transport=tcp"
+    )
+    turn_user = os.environ.get("TURN_USER") or "openrelayproject"
+    turn_pass = os.environ.get("TURN_PASS") or "openrelayproject"
     secret_sets = [
         {"name": "REG_INVITE_CODE", "value": invite},
         {"name": "DEBUG", "value": debug},
         {"name": "SUPA_SVC_JWT", "value": svc_jwt},
+        {"name": "TURN_URLS", "value": turn_urls},
+        {"name": "TURN_USER", "value": turn_user},
+        {"name": "TURN_PASS", "value": turn_pass},
     ]
     for body in (secret_sets, {"secrets": secret_sets}):
         st, res = api.call("POST", f"/v1/projects/{api.ref()}/secrets", body)

@@ -206,6 +206,15 @@ object Crypto {
     fun msgKey(convKey: ByteArray, msgId: String): ByteArray =
         hkdf(convKey, msgId.lowercase().toByteArray(StandardCharsets.UTF_8), "msg-v1")
 
+    /**
+     * Clave de la SEÑALIZACIÓN de llamadas (B6 auditoría): misma madre que los
+     * mensajes (convKey de la sala) pero salt = callId, así cada llamada tiene
+     * clave propia y el SDP/ICE/nombre viaja cifrado por el broadcast — el
+     * servidor deja de ver IPs y nombres (promesa E2EE de D61 también aquí).
+     */
+    fun sigKey(roomKey: ByteArray, roomId: String, callId: String): ByteArray =
+        hkdf(convKey(roomKey, roomId), callId.lowercase().toByteArray(StandardCharsets.UTF_8), "sig-v1")
+
     /** AAD (D41): liga el ciphertext a mensaje, emisor y sala. */
     fun aad(msgId: String, senderId: String, roomId: String): ByteArray =
         "v1|$msgId|${senderId.lowercase()}|${roomId.lowercase()}"
