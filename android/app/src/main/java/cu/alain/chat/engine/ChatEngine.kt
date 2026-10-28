@@ -179,9 +179,10 @@ class ChatEngine(
     /** Id de archivo de la foto de sala: avatars/room-<roomId>.jpg (D69). */
     private fun roomPhotoId(roomId: String) = "room-${roomId.lowercase()}"
 
-    /** Login/registro correcto: guarda la sesión cifrada por Keystore y refresca salas. */
-    fun onAuthed(uid: String, uname: String, token: String, did: String) {
-        store.saveSession(cu.alain.chat.vault.Session(token, uid, uname, did))
+    /** Login/registro correcto: guarda la sesión cifrada por Keystore y refresca salas.
+     *  [expMs] (D93): expiración de la sesión en epoch ms (para el contador). */
+    fun onAuthed(uid: String, uname: String, token: String, did: String, expMs: Long? = null) {
+        store.saveSession(cu.alain.chat.vault.Session(token, uid, uname, did, expMs))
         loadKeys()
         refreshState()
         sessionExpiredHint.value = false // el aviso ya cumplió su misión
@@ -191,6 +192,25 @@ class ChatEngine(
             syncRoomsFromServer()
             drainPending() // mensajes que llegaron de salas ya conocidas
             backfillRoomCursors() // B1: historial de salas pre-v0.8.0 (una sola vez por sala)
+        }
+    }
+
+    /**
+     * D93: sesiones guardadas antes de v0.10.0 no traen fecha de expiración
+     * (ss.bin sin "exp") → se la preguntamos al servidor UNA vez y la
+     * guardamos. Best-effort: sin red no pasa nada, se reintenta al arrancar.
+     */
+    fun ensureSessionExpiry() {
+        val s = store.session ?: return
+        if (s.exp != null) return
+        scope.launch {
+            try {
+                val r = api.whoami(s.token) ?: return@launch
+                val expMs = cu.alain.chat.net.parseIsoMs(r.exp) ?: return@launch
+                val cur = store.session ?: return@launch
+                store.saveSession(cur.copy(exp = expMs))
+            } catch (_: Exception) {
+            }
         }
     }
 

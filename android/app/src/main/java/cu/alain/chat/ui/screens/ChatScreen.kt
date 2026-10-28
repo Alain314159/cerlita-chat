@@ -564,6 +564,7 @@ private fun MessageBubble(
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top,
     ) {
         if (!mine) {
             AvatarView(
@@ -690,6 +691,20 @@ private fun MessageBubble(
                     onClick = { menu = false; onRetry(m.msgId) },
                 )
             }
+        }
+        // D94: como en el mockup — el avatar propio acompaña a los mensajes
+        // ENVIADOS (a la derecha de la burbuja), igual que el del par a la
+        // izquierda en los recibidos.
+        if (mine) {
+            Spacer(Modifier.width(8.dp))
+            AvatarView(
+                photoUid = if (m.senderUid.isEmpty()) null else m.senderUid,
+                photo = profile?.photo == true,
+                avatarJson = profile?.avatarJson,
+                fallbackInitial = senderName,
+                size = 32.dp,
+                photoVersion = profile?.updatedAt ?: 0L,
+            )
         }
     }
 }

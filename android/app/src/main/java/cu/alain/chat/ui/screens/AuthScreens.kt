@@ -71,7 +71,7 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val pub = app.store.ensureDeviceKeyPair().first.pubB64 // D74: pública del teléfono
                 val r = app.api.login(u, p, app.prefs.deviceId, pub)
-                app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId)
+                app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId, cu.alain.chat.net.parseIsoMs(r.exp))
                 busy.value = null; onDone()
             } catch (e: Exception) {
                 busy.value = (e as? ApiException)?.userMsg ?: "Sin conexión o servidor caído"
@@ -85,7 +85,7 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val pub = app.store.ensureDeviceKeyPair().first.pubB64 // D74: pública del teléfono
                 val r = app.api.register(u, p, app.prefs.deviceId, invite, pub)
-                app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId)
+                app.engine.onAuthed(r.uid, r.uname, r.token, app.prefs.deviceId, cu.alain.chat.net.parseIsoMs(r.exp))
                 busy.value = null; onDone()
             } catch (e: Exception) {
                 busy.value = (e as? ApiException)?.userMsg ?: "Sin conexión o servidor caído"

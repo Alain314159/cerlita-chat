@@ -84,7 +84,7 @@ async function authUser(req: Request) {
   if (tok.length < 20 || tok.length > 200) return null;
   const hash = toHex(sha256(enc.encode(tok)));
   const rows = await sql`
-    select s.user_id as uid, s.device_id as did, u.username
+    select s.user_id as uid, s.device_id as did, u.username, s.expires_at as exp
     from sessions s join users u on u.id = s.user_id
     where s.token_hash = ${hash} and s.revoked_at is null and s.expires_at > now()
     limit 1`;
@@ -393,7 +393,8 @@ Deno.serve(async (req) => {
     if (req.method === "GET" || req.method === "HEAD") { // whoami
       const s = await authUser(req);
       if (!s) return json(401, { e: "unauthorized" });
-      return json(200, { uid: s.uid, u: s.username, did: s.did });
+      // D93: `exp` alimenta el contador de días restantes de la sesión
+      return json(200, { uid: s.uid, u: s.username, did: s.did, exp: s.exp });
     }
     if (req.method !== "POST") return json(405, { e: "method" });
     const ct = req.headers.get("content-type") ?? "";

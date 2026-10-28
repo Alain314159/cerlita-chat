@@ -315,9 +315,12 @@ object Notifier {
         val size = 128
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
+        // D92: mismo margen interno que AvatarView — el sistema recorta el
+        // icono a círculo; sin margen las orejas/pies quedaban cortados.
+        val inset = (size * 0.07f).toInt()
         fun drawLayer(res: Int) {
             val d = ContextCompat.getDrawable(ctx, res) ?: return
-            d.setBounds(0, 0, size, size)
+            d.setBounds(inset, inset, size - inset, size - inset)
             d.draw(canvas)
         }
         // D83: decoración (DETRÁS) → ropa (DETRÁS) → base → accesorios (ENCIMA).

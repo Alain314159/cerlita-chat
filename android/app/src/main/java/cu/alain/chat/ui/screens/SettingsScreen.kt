@@ -70,6 +70,12 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
     val scope = rememberCoroutineScope()
     val session = app.engine.session
 
+    // D93: días que le quedan a la sesión (null = aún sin dato del servidor)
+    val sessionDaysLeft = session?.exp?.let { exp ->
+        val ms = exp - System.currentTimeMillis()
+        if (ms <= 0) 0 else ((ms + 86_399_999L) / 86_400_000L).toInt()
+    }
+
     var showExport by remember { mutableStateOf(false) }
     var exportPass by remember { mutableStateOf("") }
     var exporting by remember { mutableStateOf(false) }
@@ -145,9 +151,16 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            "Sesión válida 90 días; luego pide entrar de nuevo.",
+                            when (sessionDaysLeft) {
+                                null -> "Sesión válida 90 días; luego pide entrar de nuevo."
+                                0 -> "Tu sesión expiró: entra de nuevo (todo lo tuyo queda guardado)."
+                                1 -> "Tu sesión expira mañana — entra de nuevo para renovarla."
+                                else -> "Sesión: quedan $sessionDaysLeft días (luego pide entrar de nuevo)."
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (sessionDaysLeft != null && sessionDaysLeft <= 7)
+                                MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }

@@ -86,6 +86,12 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
 /** Respuesta de login/registro. */
 data class AuthResp(val uid: String, val uname: String, val token: String, val exp: String)
 
+/** D93: ISO-8601 (con Z o +00:00, como lo devuelve Postgres) → epoch ms.
+ *  null si no se puede parsear (campo vacío de un servidor viejo). */
+fun parseIsoMs(iso: String): Long? = try {
+    java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli()
+} catch (_: Exception) { null }
+
 /** Sala listada por el servidor: [room_id, owner(0/1)]. */
 data class ServerRoom(val roomId: String, val owner: Boolean)
 
@@ -161,6 +167,17 @@ class Api(private val baseUrl: () -> String) {
 
     suspend fun logout(token: String) = withContext(Dispatchers.IO) {
         try { post("/auth", JSONObject().put("a", "out"), token) } catch (_: Exception) { }
+    }
+
+    /** D93: datos de la sesión actual (GET /auth) — alimenta el contador de
+     *  días restantes de Ajustes. Best-effort: null sin red o sesión inválida. */
+    suspend fun whoami(token: String): AuthResp? = withContext(Dispatchers.IO) {
+        try {
+            val (code, raw) = get("/auth", token)
+            if (code != 200 || raw.isBlank()) return@withContext null
+            val j = JSONObject(raw)
+            AuthResp(j.getString("uid"), j.getString("u"), "", j.optString("exp"))
+        } catch (_: Exception) { null }
     }
 
     // ---------- salas (D41-D43) ----------

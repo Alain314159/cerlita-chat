@@ -6,6 +6,7 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -229,27 +230,32 @@ fun AvatarView(
                     val base = AvatarCatalog.base(cfg?.base)
                     if (base != null) {
                         val family = base.family
-                        Box(modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant)) {
+                        // D92: margen interno para que el personaje NUNCA toque
+                        // el borde del círculo (orejas/pies cortados en v0.9.0).
+                        // El fondo del círculo sigue llenando todo el tamaño.
+                        val pad = size * 0.07f
+                        val layer = Modifier.size(size - pad * 2)
+                        Box(modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant).padding(pad)) {
                             // D83: orden de capas -> decoración (DETRÁS) → ropa (DETRÁS)
                             // → base → accesorios (ENCIMA). Todo comparte el
                             // artboard 1024×1024, así que compone exacto.
                             AvatarCatalog.decorRes(cfg?.decor, family)?.let { res ->
                                 Image(
                                     painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = Modifier.size(size),
+                                    contentScale = ContentScale.Fit, modifier = layer,
                                 )
                             }
                             AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
                                 Image(
                                     painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = Modifier.size(size),
+                                    contentScale = ContentScale.Fit, modifier = layer,
                                 )
                             }
                             Image(
                                 painter = painterResource(base.res),
                                 contentDescription = null,
                                 contentScale = ContentScale.Fit,
-                                modifier = Modifier.size(size),
+                                modifier = layer,
                             )
                             // orden estable: head → eyes → chest (los slots no se solapan)
                             listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
@@ -257,7 +263,7 @@ fun AvatarView(
                                     AvatarCatalog.accRes(cfg?.acc?.get(slot), family)?.let { res ->
                                         Image(
                                             painter = painterResource(res), contentDescription = null,
-                                            contentScale = ContentScale.Fit, modifier = Modifier.size(size),
+                                            contentScale = ContentScale.Fit, modifier = layer,
                                         )
                                     }
                                 }

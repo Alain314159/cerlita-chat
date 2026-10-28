@@ -116,6 +116,7 @@ class ChatApp : Application(), Configuration.Provider {
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
         engine.refreshState()
         engine.onProcessStart() // sesión viva tras reinicio: claves a RAM + salas del servidor
+        engine.ensureSessionExpiry() // D93: sesión vieja sin exp → preguntarla al servidor
         // B6/R3: calentar la caché de ICE servers (STUN+TURN) para que la
         // primera llamada no espere un fetch
         cu.alain.chat.calls.TurnConfig.prefetch(this)

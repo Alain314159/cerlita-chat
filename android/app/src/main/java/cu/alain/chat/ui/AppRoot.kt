@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -187,6 +188,11 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                 }
 
                 Scaffold(
+                    // D91: los insets los gestionan las barras ellas mismas
+                    // (TopAppBar con la de estado, NavigationBar con la de
+                    // navegación) — si el Scaffold TAMBIÉN aplica el suyo, la
+                    // barra inferior queda duplicada y "flotando" muy arriba.
+                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
                     // D77: en Cerlita el chat tiene su propio fondo (más rosado que
                     // las listas, como el mockup); la barra superior va a juego
                     containerColor = if (current is Screen.Chat)

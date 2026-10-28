@@ -6,12 +6,15 @@ import cu.alain.chat.crypto.KeyVault
 import org.json.JSONObject
 import java.io.File
 
-/** Sesión activa (tras login/registro). El token viaja cifrado por Keystore en ss.bin. */
+/** Sesión activa (tras login/registro). El token viaja cifrado por Keystore en ss.bin.
+ *  [exp] (D93): expiración en epoch ms — null en sesiones guardadas antes de
+ *  v0.10.0; se rellena con /auth GET (whoami) al arrancar. */
 data class Session(
     val token: String,
     val uid: String,
     val uname: String,
     val did: String,
+    val exp: Long? = null,
 )
 
 /** roomKey + roomSalt de una sala, leídos del código de invitación. */
@@ -53,6 +56,7 @@ class SessionStore(ctx: Context) {
                     uid = j.getString("uid"),
                     uname = j.getString("uname"),
                     did = j.getString("did"),
+                    exp = if (j.has("exp") && !j.isNull("exp")) j.getLong("exp") else null,
                 )
             } catch (_: Exception) {
                 null
@@ -65,6 +69,7 @@ class SessionStore(ctx: Context) {
             .put("uid", s.uid)
             .put("uname", s.uname)
             .put("did", s.did)
+        s.exp?.let { j.put("exp", it) } // D93
         writeSealed("ss.bin", "session-v1", j.toString().toByteArray(Charsets.UTF_8))
     }
 
