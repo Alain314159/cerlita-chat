@@ -390,3 +390,37 @@ Todo nació del uso real de v0.9.0 (los screenshots del usuario mandaron):
 - **Avatar propio en los mensajes enviados (D94)**: como en el mockup, ambos
   lados del chat llevan avatar.
 - APK ~19,6 MB, versionCode 12, MISMA firma → actualiza encima. 98/98 tests.
+
+## v0.12.0 — «3D de verdad» (geometría real + SceneView, D101)
+
+El plan D99/D100 ejecutado: pipeline Blender reproducible (tools/avatares3d)
+con Cerdita y Koalita chibi por primitivas, esqueleto propio, TODA la ropa como
+mallas al mismo rig y 3 animaciones (idle/wave/react); 7 GLB (uno por colorway,
+materiales pre-horneados); editor 3D con SceneView/Filament (órbita, saludo,
+reacción, respiración) y snapshot PixelCopy al guardar como foto E2EE. El wire
+no cambió ni un byte. APK 37,7 MB (Filament 2 ABIs), versionCode 14. Detalle
+completo en docs/AVATARES-3D.md y D101.
+
+## v0.13.0 — «Preséntate» (editor presentable + look 3D en todo el app, D102)
+
+Las capturas del usuario tras v0.12.0 destaparon dos cosas: el editor enseñaba
+el muñeco DE ESPALDAS sobre fondo NEGRO (el GLB miraba a -Z por una convención
+invertida en el pipeline que el fix de azimut del QA había enmascarado, y
+SceneView renderiza opaco sin skybox), y el perfil de Ajustes seguía con el
+composite 2D viejo.
+
+- **Frente canónica**: `turn_around()` en el pipeline gira todo 180° (Empty
+  padre keep-transform) → los 7 GLB re-exportados miran a +Z y la cámara por
+  defecto de SceneView ve la CARA. `qa_shot` az 0 = frente otra vez.
+- **Editor sin negro**: `isOpaque=false` (render transparente) + escenario
+  Compose detrás (degradado radial del tema + sombra elíptica de suelo,
+  esquinas 28dp) + `scaleToUnits=1.9` con `centerOrigin()` → muñeco centrado
+  llenando ~83% del encuadre, estilo Memoji.
+- **El look 3D en TODO el app**: `render_rasters.py` reemplaza el arte 2D
+  (bases IA + stickers) por renders del modelo 3D real — 7 bases de estudio +
+  sprites de prendas por DIFF (el sombreado real y la sombra que la prenda
+  pinta en el cuerpo viajan dentro del sprite). Mismos nombres `av_*.webp` →
+  cero cambios de código: perfil, chats, notificaciones y tiles del editor
+  muestran el look nuevo SIN re-guardar nada.
+- Verificación: facing GLB por script (ojos/nariz a +Z), determinismo del
+  render (Δ=0), composite(base+sprite) vs render directo <2% px, previews VLM.
