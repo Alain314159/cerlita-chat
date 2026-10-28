@@ -147,8 +147,7 @@ app/src/test/java/cu/alain/chat/
    cerrada» (esa opción sí muestra la notificación permanente — la exige
    Android); en Xiaomi: Autoinicio ON + batería «Sin restricciones»
 2. Medir TTFB desde la SIM real (ítem 5 de Fase 0 — D50)
-3. Avatares reales: sustituir los drawables placeholder (el catálogo y el
-   AvatarConfig por capas ya son agnósticos al arte — D61)
+3. ~~Avatares reales~~ **HECHO en v0.9.0 (D83)** — ver `docs/AVATARES.md`; siguiente paso: avatar de pareja (`av_pair.webp` ya está en el repo)
 4. Si Xiaomi mata el FGS instantáneo a pesar de todo → escalar a **Mi Push
    SDK** (D64; ntfy ya no es la ruta)
 
@@ -305,3 +304,36 @@ Arreglo completo de la auditoría del 28-oct-2026 (leída contra el código, lí
 - **Índices en messages (B3, D86)**: fin del jank con historial largo. Migración 5→6 REAL + test. Fuera el fallback destructivo (B7): jamás borrado silencioso.
 - **Notificaciones que nunca callen (D84)**: mensaje importante aunque sea viejo SIEMPRE avisa (1 por sala); el timbre revive tras actualizar la app (MY_PACKAGE_REPLACED).
 - versionCode 10, APK 19,2 MB, MISMA firma (37b6d4…) → actualiza encima. **Actualizar AMBOS teléfonos** (la señalización cifrada es entre iguales). 98/98 tests.
+
+## v0.9.0 — «Nuestra cara» (avatares de verdad, D83)
+
+Merge de `feature/avatares-real-d83` sobre v0.8.0 (la rama nació de v0.7.1; el
+merge trae además `docs/AUDITORIA-2026-10-28.md`, el análisis que motivó D84-D89):
+
+- **Arte real por capas (D83)**: las bases dejan de ser placeholder — 8 bases
+  raster (WebP con alfa, 384 px: Cerdita × rosa/melocotón/lavanda/menta y
+  Koalita × gris/azul/cacao/cielo) generadas image-to-image con la ilustración
+  original como guía, y 22 capas VectorDrawable (ropa, accesorios, decoración)
+  en artboard 1024×1024 con el MISMO trazo (1,0 % del ancho) y la MISMA paleta
+  medida por k-means (tinta #503433, nunca negro). Documentación y pipeline
+  reproducible: `docs/AVATARES.md` + `tools/avatares/`.
+- **Orden de capas**: decoración (DETRÁS) → ropa (DETRÁS) → base → accesorios
+  (ENCIMA) — la burbuja con corazones asoma por detrás de la cabeza como en la
+  ilustración y la camiseta se lee como hombros. Cada familia (pig/koala) tiene
+  su rig de anclas medido (orejas, ojos, mentón, pecho): las capas se generan
+  paramétricas contra él (`tools/avatares/make_layers.py`).
+- **Compatibilidad total del wire**: todos los ids existentes se mantienen
+  (`pig`, `koala`, `tee_*`, `dots`, `stripes`, `bow`, `flower`, `party`,
+  `glasses`, `heart`) → los perfiles guardados siguen renderizando sin migrar;
+  `decor` es opcional y solo se serializa si hay valor. Un cliente viejo que
+  recibe un id nuevo lo ignora (degradación limpia, D61).
+- **Selector con vista previa real**: los chips de texto se sustituyen por
+  fichas que componen cada opción sobre el personaje elegido — se ve exactamente
+  lo que va a salir antes de tocar.
+- **Notificaciones**: el avatar rasterizado (Notifier) usa el mismo orden de
+  capas nuevo, con las capas de la familia correcta.
+- APK 19,5 MB (+0,3 MB de arte; `av_pair.webp` queda en el repo para el futuro
+  avatar de pareja — el resource shrinker lo omite del APK al no usarse aún).
+  versionCode 11, MISMA firma (37b6d4…) → actualiza encima. 98/98 tests
+  (la compilación de la rama se verificó AQUÍ por primera vez: la nota del
+  commit D83 advertía que nunca se había podido compilar).
