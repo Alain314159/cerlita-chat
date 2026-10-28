@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -30,7 +31,17 @@ data class Room(
 )
 
 /** Mensaje descifrado (o marcado ilegible) para la UI. */
-@Entity(tableName = "messages")
+@Entity(
+    tableName = "messages",
+    // B3 (auditoría): sin índices TODAS las queries de la UI eran escaneo
+    // completo de tabla — y al ser Flow, cada INSERT las re-disparaba.
+    // Con ~500 mensajes empieza el jank; con 5 000 es insostenible.
+    indices = [
+        Index(value = ["roomId", "kind", "ts", "msgId"], name = "idx_msg_room_kind_ts"),
+        Index(value = ["roomId", "mine"], name = "idx_msg_room_mine"),
+        Index(value = ["state"], name = "idx_msg_state"),
+    ],
+)
 data class Message(
     @PrimaryKey val msgId: String,
     val roomId: String,         // sala a la que pertenece (emisor o receptor)
@@ -492,10 +503,25 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/**
+ * v5 → v6 (v0.8.0): índices en messages (B3 auditoría). Las 4 queries calientes
+ * de la UI (observeChat, observeChats, subconsultas de observeRoomList,
+ * failOrphanSending) pasan de escaneo completo a búsqueda por índice.
+ * Migración REAL: hay teléfonos reales con v0.7.1 y meses de historial.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Los nombres deben coincidir EXACTAMENTE con los de @Entity(indices=...)
+        db.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_room_kind_ts` ON `messages` (`roomId`, `kind`, `ts`, `msgId`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_room_mine` ON `messages` (`roomId`, `mine`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_state` ON `messages` (`state`)")
+    }
+}
+
 @Database(
     entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class,
         Profile::class, RoomPeer::class, CallLog::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -513,9 +539,11 @@ abstract class AppDatabase : RoomDatabase() {
         fun build(ctx: Context): AppDatabase =
             // androidx.room.Room (calificado: la entidad local se llama Room)
             androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                // Solo para rutas FUTURAS desconocidas; 2→3, 3→4 y 4→5 tienen migración real.
-                .fallbackToDestructiveMigration(dropAllTables = true)
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                // B7 (auditoría): SIN fallback destructivo. Antes, una migración
+                // olvidada borraba el historial EN SILENCIO. Ahora: crash visible
+                // en desarrollo (y en CI, MigrationTest obligatorio por salto) en
+                // vez de pérdida de datos invisible para el usuario.
                 .build()
     }
 }

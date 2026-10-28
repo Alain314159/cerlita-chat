@@ -196,4 +196,72 @@ class MigrationTest {
             db5.close()
         }
     }
+
+    /**
+     * v0.7.1 (DB v5) → v0.8.0 (DB v6): índices en messages (B3 auditoría).
+     * Crea un chat.db v5 EXACTO (historia completa aplicada a mano), lo abre
+     * con la AppDatabase actual → MIGRATION_5_6 + validación de Room (que
+     * verifica los índices uno a uno por nombre y columnas).
+     */
+    @Test
+    fun upgradeV5toV6Indexes() = runBlocking {
+        // del v2 del @Before, subir a v5 con TODA la cadena EXACTA de la historia
+        val raw = SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("chat.db"), null)
+        // v2→3 (perfiles, D61)
+        raw.execSQL("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE messages ADD COLUMN senderUid TEXT NOT NULL DEFAULT ''")
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `profiles` (`uid` TEXT NOT NULL PRIMARY KEY, " +
+                "`displayName` TEXT NOT NULL, `avatarJson` TEXT NOT NULL, `photo` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL)"
+        )
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `room_peer` (`roomId` TEXT NOT NULL, `uid` TEXT NOT NULL, " +
+                "PRIMARY KEY(`roomId`, `uid`))"
+        )
+        // v3→4 (unread + foto de sala, D69)
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN photo INTEGER NOT NULL DEFAULT 0")
+        // v4→5 (chats directos + registro de llamadas, D74)
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN peerUid TEXT")
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `calls` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`roomId` TEXT NOT NULL, `peerUid` TEXT NOT NULL, `peerName` TEXT NOT NULL, " +
+                "`kind` INTEGER NOT NULL, `dir` INTEGER NOT NULL, `status` INTEGER NOT NULL, " +
+                "`startedAt` INTEGER NOT NULL, `answeredAt` INTEGER NOT NULL, `duration` INTEGER NOT NULL)"
+        )
+        // más historial real: los índices se crean SOBRE filas existentes
+        for (i in 3..50) {
+            raw.execSQL(
+                "INSERT INTO messages VALUES('m$i', 'sala123', 'alain', 1, 'msg $i', " +
+                    "${1700000100000 + i}, 3, ${10 + i}, 0, 'uid-yo')"
+            )
+        }
+        raw.version = 5
+        raw.close()
+
+        val db6 = AppDatabase.build(ctx)
+        try {
+            // abrir ya validó los índices (si falta alguno: IllegalStateException)
+            // el historial completo sigue intacto tras crear los índices
+            val chat = db6.msgDao().chat("sala123")
+            assertEquals(50, chat.size) // m1, m2 + 48 insertados arriba
+
+            // las queries calientes siguen funcionando sobre datos migrados
+            val list = db6.roomListDao().observeRoomList("uid-yo").first()
+            assertEquals(1, list.size)
+            assertEquals("msg 50", list[0].lastBody)
+
+            // escribir sobre la tabla indexada funciona igual
+            db6.msgDao().insert(
+                cu.alain.chat.db.Message(
+                    "m51", "sala123", "alain", true, "post-migración", 1700000200000, 3, 100, 0, "uid-yo",
+                )
+            )
+            assertEquals(51, db6.msgDao().chat("sala123").size)
+        } finally {
+            db6.close()
+        }
+    }
 }
