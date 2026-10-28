@@ -78,9 +78,6 @@ import cu.alain.chat.net.ApiException
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.ui.NicknameDialog
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 // ───────────────────────────── ViewModel ─────────────────────────────
 
@@ -217,6 +214,8 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                     val room = Room(
                         roomId = item.roomId, name = item.name, owner = item.owner,
                         sas = item.sas, createdAt = item.createdAt,
+                        unread = item.unread, photo = item.roomPhoto,
+                        kind = item.kind, peerUid = item.peerUid,
                     )
                     RoomRow(
                         item = item, hasKey = hasKey,
@@ -756,7 +755,7 @@ private fun RoomRow(
             Column(horizontalAlignment = Alignment.End) {
                 item.lastTs?.let {
                     Text(
-                        SimpleDateFormat("d MMM HH:mm", Locale.getDefault()).format(Date(it)),
+                        cu.alain.chat.core.Fmt.list(it), // U4: formatter cacheado
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

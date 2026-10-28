@@ -97,6 +97,10 @@ class ChatEngine(
     /** Contador de mensajes nuevos para el badge/aviso (se consume en la UI). */
     val lastSyncResult = MutableStateFlow(0)
 
+    /** B4: true cuando la sesión murió por 401 — el login muestra un aviso
+     *  claro en vez de dejar al usuario mirando una app muerta. */
+    val sessionExpiredHint = MutableStateFlow(false)
+
     private var pollJob: Job? = null
     private var pollInterval = C.POLL_ACTIVE_MS
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -169,6 +173,7 @@ class ChatEngine(
         store.saveSession(cu.alain.chat.vault.Session(token, uid, uname, did))
         loadKeys()
         refreshState()
+        sessionExpiredHint.value = false // el aviso ya cumplió su misión
         onSessionChanged() // D72: enciende el timbre sin esperar al próximo onStart
         scope.launch {
             uploadDevicePub() // D74: pública del teléfono al día (login también la manda)
@@ -929,7 +934,7 @@ class ChatEngine(
                     }
                 } catch (e: ApiException) {
                     when {
-                        e.http == 401 -> { onAuthLost(); return acked }
+                        e.http == 401 -> { sessionExpired(); return acked }
                         e.http >= 400 && e.http < 500 && e.code != "too_many" -> {
                             // permanente: sala borrada, mensaje corrupto…
                             db.outboxDao().delete(chunk.map { it.msgId })
@@ -987,8 +992,23 @@ class ChatEngine(
             }
             fresh.size
         } catch (e: ApiException) {
-            if (e.http == 401) -2 else -1
+            if (e.http == 401) { sessionExpired(); -2 } else -1
         }
+    }
+
+    /**
+     * B4 (auditoría): un 401 en sync/outbox significa que el token ya no vale
+     * (expiró a 90 días o se revocó en otro dispositivo). Salimos de la sesión
+     * PERO sin borrar nada local: historial, claves del vault y adjuntos siguen
+     * ahí para cuando el usuario vuelva a entrar con la misma cuenta. Solo se
+     * pierde lo local si el login es con OTRA cuenta (logout completo).
+     */
+    private fun sessionExpired() {
+        stopPolling()
+        store.clearSession()
+        sessionExpiredHint.value = true
+        onSessionChanged() // D72: apaga el timbre (in-app y FGS) ya mismo
+        refreshState()     // la UI vuelve al login y el usuario ve QUÉ pasó
     }
 
     /**

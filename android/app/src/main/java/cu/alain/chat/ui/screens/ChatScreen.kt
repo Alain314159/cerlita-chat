@@ -21,7 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -87,9 +87,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Pantalla de conversación (v0.7.0): burbujas de texto + ADJUNTOS E2EE
@@ -275,24 +272,38 @@ fun ChatScreen(app: ChatApp, roomId: String) {
         onDispose { if (app.currentRoomId == roomId) app.currentRoomId = null }
     }
 
-    // auto-scroll al último mensaje + acusar lectura de lo recién llegado
+    // auto-scroll + acusar lectura + badge (B5/U2 auditoría):
+    //  · solo salta al final si YA estabas cerca del final — si estás leyendo
+    //    historia, la posición se respeta y aparece un chip «↓ N nuevos»
+    //  · el badge de no leídos baja AL INSTANTE con la sala abierta (antes
+    //    solo al entrar: el contador subía mientras leías)
+    var newBelow by remember(roomId) { mutableStateOf(0) }
+    var initialScroll by remember(roomId) { mutableStateOf(true) }
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isEmpty()) return@LaunchedEffect
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+        if (initialScroll || lastVisible >= messages.size - 3) {
+            initialScroll = false
+            newBelow = 0
+            listState.animateScrollToItem(messages.lastIndex)
+        } else {
+            newBelow = messages.size - 1 - lastVisible
+        }
+        app.db.roomDao().resetUnread(roomId) // B5: baja el badge ya, no al re-entrar
         app.engine.maybeSendReadReceipt(roomId)
     }
 
     Column(Modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
         LazyColumn(
             Modifier
-                .weight(1f)
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(horizontal = 12.dp),
             state = listState,
             verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.Bottom),
         ) {
-            items(messages, key = { it.msgId }) { m ->
-                val idx = messages.indexOfFirst { it.msgId == m.msgId }
-                val prev = messages.getOrNull(idx - 1)
+            itemsIndexed(messages, key = { _, m -> m.msgId }) { idx, m ->
+                val prev = messages.getOrNull(idx - 1) // U3: O(1), era O(n²) con indexOfFirst
                 MessageBubble(app, m, prev, profiles, uploadProgress, onRetry = { msgId ->
                     scope.launch {
                         app.engine.retryAttachment(msgId) { }
@@ -304,6 +315,28 @@ fun ChatScreen(app: ChatApp, roomId: String) {
             }
         }
 
+        // U2: chip discreto cuando llegan mensajes y NO estabas al final —
+        // un toque y bajas; la vista nunca se mueve sola por debajo de tus ojos
+        if (newBelow > 0) {
+            Surface(
+                onClick = {
+                    newBelow = 0
+                    scope.launch { listState.animateScrollToItem(messages.lastIndex) }
+                },
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                shadowElevation = 4.dp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+            ) {
+                Text(
+                    if (newBelow == 1) "↓ 1 mensaje nuevo" else "↓ $newBelow mensajes nuevos",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                )
+            }
+        }
+        }
         sendError?.let {
             Text(
                 it,
@@ -514,7 +547,7 @@ private fun MessageBubble(
     onOpenImage: (Bitmap) -> Unit,
     onSaveDoc: (AttachmentMsg.Parsed, java.io.File) -> Unit,
 ) {
-    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(m.ts))
+    val time = cu.alain.chat.core.Fmt.time(m.ts) // U4: formatter cacheado
     val mine = m.mine
     val haptic = LocalHapticFeedback.current
     val att = remember(m.msgId) { AttachmentMsg.parse(m.body) }

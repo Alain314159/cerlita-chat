@@ -379,6 +379,7 @@ data class RoomListItem(
     val sas: String,
     val unread: Int,
     val roomPhoto: Boolean,
+    val kind: Int,
     val peerUid: String?,
     val peerName: String?,
     val peerAvatarJson: String?,
@@ -408,7 +409,7 @@ interface RoomListDao {
      */
     @Query(
         """SELECT r.roomId AS roomId, r.name AS name, r.owner AS owner, r.createdAt AS createdAt,
-           r.sas AS sas, r.unread AS unread, r.photo AS roomPhoto,
+           r.sas AS sas, r.unread AS unread, r.photo AS roomPhoto, r.kind AS kind,
            (SELECT COUNT(*) FROM room_peer rp2 WHERE rp2.roomId = r.roomId) > 0 AS hasPeers,
            p.uid AS peerUid,
            p.displayName AS peerName, p.avatarJson AS peerAvatarJson, p.photo AS peerPhoto,

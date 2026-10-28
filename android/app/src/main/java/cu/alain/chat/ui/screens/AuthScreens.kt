@@ -29,6 +29,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -103,11 +104,11 @@ class AuthViewModel(app: Application) : AndroidViewModel(app) {
 @Composable
 fun AuthScreens(state: AppState, app: ChatApp) {
     val vm: AuthViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    if (state is AppState.Login) LoginScreen(vm)
+    if (state is AppState.Login) LoginScreen(vm, app)
 }
 
 @Composable
-private fun LoginScreen(vm: AuthViewModel) {
+private fun LoginScreen(vm: AuthViewModel, app: ChatApp) {
     var mode by rememberSaveable { mutableStateOf(0) } // 0=entrar 1=crear cuenta
     var user by rememberSaveable { mutableStateOf("") }
     var pass by rememberSaveable { mutableStateOf("") }
@@ -115,6 +116,7 @@ private fun LoginScreen(vm: AuthViewModel) {
     var showPass by rememberSaveable { mutableStateOf(false) } // ojo ver/ocultar
     var invite by rememberSaveable { mutableStateOf("") }
     var error by rememberSaveable { mutableStateOf<String?>(null) }
+    val expired by app.engine.sessionExpiredHint.collectAsState() // B4: el usuario sabe QUÉ pasó
 
     val busy = vm.busy.value
     val fieldModifier = Modifier.fillMaxWidth()
@@ -129,6 +131,15 @@ private fun LoginScreen(vm: AuthViewModel) {
         Spacer(Modifier.height(24.dp))
         Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(8.dp))
+        if (expired) {
+            Text(
+                "Tu sesión expiró — vuelve a entrar.\nTus chats siguen guardados en este teléfono.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         Text("Cerlita Chat", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Text(
             "Cifrado de extremo a extremo",

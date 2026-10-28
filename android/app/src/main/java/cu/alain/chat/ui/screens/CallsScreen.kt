@@ -58,9 +58,6 @@ import cu.alain.chat.net.FoundUser
 import cu.alain.chat.ui.AvatarView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Pestaña LLAMADAS (v0.7.0, D75): registro local + arrancar llamadas.
@@ -304,7 +301,7 @@ private fun CallRow(app: ChatApp, call: CallLog, nickname: String?, onCallAgain:
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                SimpleDateFormat("d MMM · HH:mm", Locale.getDefault()).format(Date(call.startedAt)),
+                cu.alain.chat.core.Fmt.call(call.startedAt), // U4: formatter cacheado
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
