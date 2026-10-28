@@ -40,3 +40,36 @@ imagen rotando (D99 lo documenta). Desde v0.12.0 el editor usa **geometría real
 El chat, las listas y las notificaciones: usan la FOTO (snapshot PixelCopy del
 editor al guardar, que viaja cifrada como foto de perfil) o el render 2D de
 siempre. Cero escenas 3D en filas de lista (caro e innecesario a 40dp).
+
+## Rasters D102: el look 3D en perfil, chats y notificaciones (v0.13.0)
+`tools/avatares3d/render_rasters.py` (dos fases: render en Blender, sprites en
+Python del sistema — el Python de Blender no trae PIL) reemplaza TODO el arte
+2D viejo (bases IA + stickers vectoriales de v0.9-0.11) por renders del modelo
+3D real, con los MISMOS nombres de archivo (`av_*.webp` en drawable-nodpi) así
+que la app no cambia ni una línea:
+
+- **Bases** (7, una por colorway): frente 3/4 (az 14°, elev 7°), estudio de 3
+  luces (clave cálida frente-izq, relleno frente-der, contra detrás para
+  recortar la silueta) + mundo pastel suave, 384×384 con alfa, Cycles 72
+  samples + denoise, semilla fija.
+- **Sprites de prendas** (ropa + accesorios por familia): DIFF entre el render
+  con prenda y el render base — alpha proporcional a |Δcolor| (umbral 10-32),
+  mediana 3×3 contra motas. La sombra que la prenda pinta en el cuerpo y el
+  sombreado real del tejido VIAJAN dentro del sprite: al componer capas el
+  resultado es el render 3D auténtico, no una pegatina. Alineación exacta por
+  construcción (misma cámara/pose/luz); los sprites de una familia se reutilizan
+  en todos sus colorways (la geometría del cuerpo no cambia entre colorways).
+- **Verificación**: determinismo del render (Δ=0 exigido), composite(base+
+  sprites) vs render directo de la misma combinación (<2% px distintos),
+  previews sobre tablero en qa/rasters/ y facing GLB por script (ojos/nariz a
+  +Z tras `turn_around()`).
+
+## Orientación canónica (D102, la lección del koala de espaldas)
+El cuerpo se construye mirando a +Y en Blender, que es la ESPALDA de la
+convención (frente = -Y; glTF exporta con +Z = frente). El bug del "azimut
+invertido" del QA de D101 compensó la cámara y escondió que el modelo estaba
+girado: la cámara por defecto de SceneView (en +Z) le veía la espalda.
+Arreglo: `turn_around()` en build_family gira TODO (rig + mallas + empties,
+keep-transform con un Empty padre) 180° en Z antes de exportar; `qa_shot`
+volvió a az 0 = frente (lado -Y). Regla: toda pieza nueva del pipeline mira a
+-Y en Blender, sin excepción.

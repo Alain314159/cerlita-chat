@@ -278,6 +278,26 @@ def armaturize(rig, objs):
         m.object = rig
 
 
+def turn_around():
+    """(D102) Gira TODO el personaje 180° en Z antes de exportar.
+
+    El cuerpo se construye mirando a +Y, pero la convención de Blender (y por
+    herencia la de glTF, que el exportador produce con +Z = frente) es mirar a
+    -Y: sin este giro el GLB sale mirando a -Z y la cámara por defecto de
+    SceneView (en +Z) ve la ESPALDA — el bug del editor 3D de v0.12.0.
+    Se hace con un Empty padre (keep-transform), así las rotaciones locales de
+    orejas/hocico y las animaciones NLA no se tocan.
+    """
+    turn = bpy.data.objects.new("Turn", None)
+    link(turn)
+    tops = [o for o in bpy.data.objects if o.parent is None and o != turn]
+    for o in tops:            # turn está en identidad: local == world → sin salto
+        o.parent = turn
+        o.matrix_local = o.matrix_world.copy()
+    turn.rotation_euler = Euler((0.0, 0.0, math.pi), "XYZ")
+    bpy.context.view_layer.update()
+
+
 def build_body(fam, mats):
     """Cuerpo chibi. Devuelve (lista de objetos, dict anclas de familia)."""
     objs = []
@@ -587,22 +607,27 @@ def build_glasses(fam, anc):
 
 def build_bow(fam, anc):
     m = make_mat("M_bow", CORAL)
-    p = anc["hat_pos"] + Vector((0.0, 0.03, -0.02))
-    if fam == "koala":
-        p = Vector((0.13, 0.05, 1.155))
-    objs = [cone("bowL", (p.x - 0.058, p.y, p.z), 0.048, 0.075, mat=m, bone="head",
-                 rot=(0, 0, math.radians(-90)), seg=18),
-            cone("bowR", (p.x + 0.058, p.y, p.z), 0.048, 0.075, mat=m, bone="head",
-                 rot=(0, 0, math.radians(90)), seg=18),
-            sphere("bowknot", p, 0.030, mat=m, bone="head", seg=16, ring=10)]
+    # (D102) moño VISIBLE: sobre la superficie superior-lateral de la cabeza con
+    # los conos inclinados ±42° hacia afuera. Antes estaba a z=1.12 bajo el
+    # eje… pero con la cabeza r=0.30 en z .86 los conos (x ±0.106) quedaban
+    # DENTRO de la esfera → invisible desde cualquier ángulo (nunca entró al QA).
+    p = Vector((0.155, 0.055, 1.12))
+    objs = [cone("bowL", (p.x - 0.052, p.y, p.z + 0.018), 0.046, 0.095, mat=m, bone="head",
+                 rot=(0, math.radians(-42), 0), seg=18),
+            cone("bowR", (p.x + 0.052, p.y, p.z + 0.018), 0.046, 0.095, mat=m, bone="head",
+                 rot=(0, math.radians(42), 0), seg=18),
+            sphere("bowknot", p, 0.032, mat=m, bone="head", seg=16, ring=10)]
     return wear("bow", objs)
 
 
 def build_flower(fam, anc):
     mp = make_mat("M_petal", (0xFB/255, 0x96/255, 0xA5/255))
     mc = make_mat("M_fcenter", GOLD)
-    pos = Vector(anc["ear_out"])
-    d = (pos - anc["hc"]).normalized()
+    # (D102) la flor MIRA AL FRENTE: antes el disco de pétalos quedaba
+    # perpendicular a la dirección cabeza→oreja (de canto para la cámara) y
+    # medio escondida detrás de la oreja caída. Ahora se adelanta y encara.
+    pos = Vector(anc["ear_out"]) + Vector((0.0, 0.085, -0.03))
+    d = Vector((0.25, 0.95, 0.18)).normalized()
     u = d.cross(Vector((0, 0, 1))).normalized()
     v = d.cross(u).normalized()
     objs = [sphere("fc", pos + d * 0.012, 0.027, mat=mc, bone="head", seg=14, ring=10)]
@@ -640,9 +665,12 @@ def build_cap(fam, anc):
 def build_earrings(fam, anc):
     m = make_mat("M_gold", GOLD, rough=0.3, metallic=0.35)
     objs = []
-    x = 0.262 if fam == "pig" else 0.298
+    # (D102) anillos FUERA de la cabeza: la superficie a z≈.89 llega a x≈0.30,
+    # los aros colgaban a x .262/.298 (mayormente dentro). Ahora cuelgan al
+    # costado, bajo la oreja, y de frente se ven de lleno (toro con eje Y).
+    x = 0.322 if fam == "pig" else 0.345
     for sx in (1, -1):
-        objs.append(torus("ring%d" % sx, (sx * x, 0.052, 0.915), 0.028, 0.009, mat=m,
+        objs.append(torus("ring%d" % sx, (sx * x, 0.05, 0.885), 0.030, 0.010, mat=m,
                           bone="head", rot=(math.radians(90), 0, 0)))
     return wear("earrings", objs)
 
@@ -832,9 +860,10 @@ def setup_render(dirpath, w=680, h=820):
 
 
 def qa_shot(co, name, outdir, azimuth_deg, elev_deg=8, dist=2.55, target=(0, 0.02, 0.62)):
-    # az 0 = FRENTE (la cara mira a +Y): cámara en el lado +Y
+    # az 0 = FRENTE. Tras turn_around() la cara mira a -Y (frente canónica de
+    # Blender): cámara en el lado -Y (D102; antes del giro era el lado +Y).
     az, el = math.radians(azimuth_deg), math.radians(elev_deg)
-    co.location = (dist * math.cos(el) * math.sin(az), dist * math.cos(el) * math.cos(az),
+    co.location = (dist * math.cos(el) * math.sin(az), -dist * math.cos(el) * math.cos(az),
                    target[2] + dist * math.sin(el))
     d = Vector(target) - co.location
     co.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
@@ -903,6 +932,7 @@ def build_family(fam, colorway_id, wave_axis="Z", wave_lift=1.95):
     armaturize(rig, [o for o in bpy.data.objects if o.type == "MESH"])
     actions = [act_idle(rig), act_wave(rig, axis=wave_axis, lift=wave_lift), act_react(rig)]
     stash_actions(rig, actions)
+    turn_around()   # (D102) frente canónico: -Y en Blender → +Z en glTF
     return rig, anc
 
 
@@ -973,11 +1003,15 @@ def qa_family(fam, rig, anc):
 def main():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     only = None
+    cws = None   # filtro por colorway (coma) para partir la ejecución en trozos
     do_export = "--no-export" not in argv
     do_qa = "--no-qa" not in argv
     for a in argv:
         if a.startswith("--only="):
             only = a.split("=", 1)[1]
+    for a in argv:
+        if a.startswith("--cw="):
+            cws = set(a.split("=", 1)[1].split(","))
     wave_axis = "Z"
     for a in argv:
         if a.startswith("--wave="):
@@ -989,12 +1023,14 @@ def main():
             continue
         first_cw = list(FAMS[fam]["colorways"])[0]
         for cw in FAMS[fam]["colorways"]:
+            if cws and cw not in cws:
+                continue
             print(f"[build] {fam} / {cw} ...", flush=True)
             rig, anc = build_family(fam, cw, wave_axis=wave_axis)
             if do_export:
                 fp = export_glb(cw, rig=rig)
                 print(f"  -> {fp} ({os.path.getsize(fp)//1024} KB)", flush=True)
-            if do_qa and cw == first_cw:
+            if do_qa and cw == first_cw and (not cws or first_cw in cws):
                 sub = qa_family(fam, rig, anc)
                 print(f"  QA -> {sub}", flush=True)
             built.append(cw)
