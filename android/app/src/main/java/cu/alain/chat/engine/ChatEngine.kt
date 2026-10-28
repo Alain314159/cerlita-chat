@@ -179,7 +179,23 @@ class ChatEngine(
             uploadDevicePub() // D74: pública del teléfono al día (login también la manda)
             syncRoomsFromServer()
             drainPending() // mensajes que llegaron de salas ya conocidas
+            backfillRoomCursors() // B1: historial de salas pre-v0.8.0 (una sola vez por sala)
         }
+    }
+
+    /**
+     * B1 (auditoría): salas conocidas ANTES de v0.8.0 pueden tener historia
+     * por debajo del cursor global que jamás se descargó (el caso clásico:
+     * unirse a una sala con mensajes previos). Una sola pasada por sala sin
+     * cursor rs_<roomId>; con el cursor puesto, esto no vuelve a costar nada.
+     */
+    private suspend fun backfillRoomCursors() {
+        try {
+            for (r in db.roomDao().all()) {
+                val k = "rs_${r.roomId.lowercase()}"
+                if (db.metaDao().getLong(k) == null) syncRoomHistory(r.roomId)
+            }
+        } catch (_: Exception) { /* best-effort: el próximo login lo reintenta */ }
     }
 
     /**
@@ -274,6 +290,7 @@ class ChatEngine(
             keys = keys + (roomId to (roomKey to roomSalt))
             _keysVersion.value += 1
             drainPendingForRoom(roomId) // mensajes que llegaron antes de la clave
+            syncRoomHistory(roomId)     // B1: la historia PREVIA al join — invisible para el cursor global
             // presentarme a los que ya están en la sala (D61)
             db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
             Result.success(RoomJoined(room, "", sas))
@@ -295,6 +312,7 @@ class ChatEngine(
         keys = keys + (roomId to (roomKey to roomSalt))
         _keysVersion.value += 1
         drainPendingForRoom(roomId)
+        syncRoomHistory(roomId) // B1: 2º dispositivo/recuperación — el historial completo de la sala
         // re-presentarme: los presentes no vieron nada de este teléfono (D61)
         store.session?.let { s ->
             db.profileDao().get(s.uid)?.let { announceProfileTo(roomId, it); poke() }
@@ -1009,6 +1027,43 @@ class ChatEngine(
         sessionExpiredHint.value = true
         onSessionChanged() // D72: apaga el timbre (in-app y FGS) ya mismo
         refreshState()     // la UI vuelve al login y el usuario ve QUÉ pasó
+    }
+
+    /**
+     * B1 (auditoría): recuperación del historial de UNA sala por páginas, con
+     * cursor propio rs_<roomId> en meta. El cursor GLOBAL last_seq siempre va
+     * por delante de los mensajes previos al join: sin esta vía, quien entra
+     * a una sala con historia NUNCA la ve — ni siquiera el nombre heredado del
+     * room_info (D69). Ingiera por el MISMO camino que el sync global (mismo
+     * descifrado, perfiles, room_info), pero sin notificar: es historial, no
+     * novedades. El badge queda a 0 (acabas de entrar).
+     * Devuelve nº de mensajes nuevos, o -1 si falló (el cursor no avanza y el
+     * próximo intento re-ataca desde donde quedó).
+     */
+    suspend fun syncRoomHistory(roomId: String, limit: Int = C.SYNC_LIMIT): Int {
+        val s = store.session ?: return -1
+        val rid = roomId.lowercase()
+        if (!hasKey(rid)) return -1
+        var since = db.metaDao().getLong("rs_$rid") ?: 0
+        var total = 0
+        val newPeers = mutableSetOf<String>()
+        try {
+            while (true) {
+                val resp = api.sync(s.token, since, limit, room = rid)
+                if (resp.rows.isEmpty()) break
+                for (row in resp.rows) ingest(row, s, newPeers)?.let { total++ }
+                since = resp.nextSeq
+                db.metaDao().setLong("rs_$rid", since)
+                if (resp.rows.size < limit) break
+            }
+            // pares descubiertos en la historia → presentarme (D61)
+            if (newPeers.isNotEmpty()) announceToRooms(newPeers)
+            // el historial recuperado no es «no leído»: acabas de entrar
+            try { db.roomDao().resetUnread(roomId) } catch (_: Exception) {}
+        } catch (e: Exception) {
+            return -1
+        }
+        return total
     }
 
     /**

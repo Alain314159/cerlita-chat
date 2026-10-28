@@ -66,6 +66,49 @@ Deno.serve(async (req) => {
     const since = Math.max(0, parseInt(url.searchParams.get("s") ?? "0", 10) || 0);
     const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get("l") ?? "100", 10) || 100));
 
+    // ── Modo SALA (B1 auditoría): recuperación del historial de UNA sala ──
+    // GET /sync?room=<roomId>&s=<seq_sala> → SOLO esa sala, seq > s, mismo
+    // formato {n, m}. El cursor GLOBAL deja fuera los mensajes previos al
+    // join: sin este modo, quien se une a una sala con historia jamás la ve
+    // (ni el nombre heredado del room_info, D69). Membresía verificada igual.
+    const roomParam = url.searchParams.get("room");
+    if (roomParam) {
+      if (!/^[0-9a-f-]{36}$/i.test(roomParam)) return json(400, { e: "bad_room" });
+      const member = await sql`select 1 from room_members
+        where room_id = ${roomParam}::uuid and user_id = ${me.uid}::uuid limit 1`;
+      if (member.length === 0) return json(403, { e: "not_member" });
+      const rrows = await sql`
+        select m.msg_id, m.room_id, m.sender_id, m.nonce, m.ciphertext, m.seq,
+               su.username as suname, coalesce(m.client_ts, m.created_at) as ts
+        from messages m
+        join users su on su.id = m.sender_id
+        where m.room_id = ${roomParam}::uuid and m.seq > ${since}
+        order by m.seq asc
+        limit ${limit}`;
+      if (rrows.length === 0) return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+      const rids = rrows.map((r) => r.msg_id);
+      await sql`
+        update room_members rm set delivered_seq = s.mx
+        from (
+          select room_id, max(seq) as mx from messages
+          where msg_id = any(${rids}::uuid[])
+          group by room_id
+        ) s
+        where rm.room_id = s.room_id and rm.user_id = ${me.uid}::uuid
+          and rm.delivered_seq < s.mx`;
+      const rmsgs = rrows.map((r) => [
+        r.msg_id, r.room_id, r.sender_id, Number(r.seq),
+        b64(new Uint8Array(r.nonce)), b64(new Uint8Array(r.ciphertext)),
+        r.suname, new Date(r.ts).getTime(),
+      ]);
+      const rnext = Number(rrows[rrows.length - 1].seq);
+      const rbody = enc.encode(JSON.stringify({ n: rnext, m: rmsgs }));
+      return new Response(rbody as BodyInit, {
+        status: 200,
+        headers: { "content-type": "application/json", "cache-control": "no-store", "x-next-seq": String(rnext) },
+      });
+    }
+
     const rows = await sql`
       select m.msg_id, m.room_id, m.sender_id, m.nonce, m.ciphertext, m.seq,
              su.username as suname, coalesce(m.client_ts, m.created_at) as ts

@@ -270,9 +270,22 @@ class Api(private val baseUrl: () -> String) {
 
     // ---------- sync ----------
 
-    suspend fun sync(token: String, sinceSeq: Long, limit: Int = C.SYNC_LIMIT): SyncResp =
+    /**
+     * Sin `room`: sync incremental global (cursor last_seq).
+     * Con `room` (B1): recuperación del historial de ESA sala desde su propio
+     * cursor — los mensajes previos al join quedan por debajo del cursor
+     * global y jamás se servirían por la vía normal.
+     */
+    suspend fun sync(
+        token: String,
+        sinceSeq: Long,
+        limit: Int = C.SYNC_LIMIT,
+        room: String? = null,
+    ): SyncResp =
         withContext(Dispatchers.IO) {
-            val (code, raw) = get("/sync?s=$sinceSeq&l=$limit", token)
+            val qs = if (room != null) "/sync?s=$sinceSeq&l=$limit&room=$room"
+                     else "/sync?s=$sinceSeq&l=$limit"
+            val (code, raw) = get(qs, token)
             when {
                 code == 204 -> SyncResp(sinceSeq, emptyList())
                 code == 200 -> {
