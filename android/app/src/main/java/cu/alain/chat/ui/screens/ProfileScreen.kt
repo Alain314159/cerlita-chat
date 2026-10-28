@@ -3,8 +3,26 @@ package cu.alain.chat.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,10 +45,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,7 +63,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -53,18 +81,23 @@ import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
 import cu.alain.chat.ui.AvatarCatalog
 import cu.alain.chat.ui.AvatarView
+import cu.alain.chat.ui.LayeredAvatar
 import cu.alain.chat.work.WorkSync
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.gestures.detectTapGestures
+import kotlin.math.roundToInt
 
 /**
  * Editor de perfil (D61): nombre + FOTO o AVATAR por capas (base, ropa,
- * accesorios). firstRun=true → onboarding tras crear cuenta/entrar sin perfil.
+ * calzado, accesorios). firstRun=true → onboarding tras crear cuenta.
  *
- * Todo lo que se ve aquí son PLACEHOLDERS (2 bases: Cerdita y Koalita; ropa y
- * accesorios dibujados): la estructura (AvatarConfig JSON por capas) ya está
- * lista para los avatares personalizables del futuro.
+ * v0.11 (D95-D98): ropa/accesorios raster 3D, pestañas Cerdita | Koala
+ * (para no pasar por todas las cerditas buscando un koala), calzado propio
+ * y vista previa VIVA: reacciona al vestirla, saluda al tocarla y gira
+ * al arrastrarla.
  */
 @Composable
 fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
@@ -73,8 +106,6 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
     val session = app.engine.session
 
     // estado editado en pantalla (arranca del perfil guardado o de defaults).
-    // D62: carga ASÍNCRONA — el runBlocking en composición anterior podía congelar
-    // el primer frame en móviles lentos (Room abre la DB en el hilo de UI).
     var saved by remember { mutableStateOf<cu.alain.chat.db.Profile?>(null) }
     var loaded by remember { mutableStateOf(false) }
     LaunchedEffect(session?.uid) {
@@ -133,23 +164,30 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(10.dp))
 
-        // ── vista previa grande: foto (nueva o guardada) si hay, si no avatar por capas ──
-        AvatarView(
-            photoUid = session?.uid,
-            photo = hasPhoto,
-            avatarJson = cfg.encode(),
-            fallbackInitial = name,
-            size = 128.dp,
-            pendingPhotoBytes = newPhotoBytes,
-            photoVersion = saved?.updatedAt ?: 0L,
-        )
+        // ── vista previa: foto si hay; si no, avatar VIVO (D98) ──
         if (hasPhoto) {
+            AvatarView(
+                photoUid = session?.uid,
+                photo = true,
+                avatarJson = cfg.encode(),
+                fallbackInitial = name,
+                size = 128.dp,
+                pendingPhotoBytes = newPhotoBytes,
+                photoVersion = saved?.updatedAt ?: 0L,
+            )
             TextButton(onClick = { hasPhoto = false; newPhotoBytes = null }) {
                 Icon(Icons.Default.Close, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
                 Text("Quitar foto y usar avatar")
             }
         } else {
+            InteractiveAvatar(cfg, Modifier.size(196.dp))
+            Text(
+                "Tócalo para saludar · arrástralo para girarlo",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
             OutlinedButton(onClick = { pickPhoto.launch("image/*") }) {
                 Icon(Icons.Default.AddAPhoto, null, Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
@@ -173,13 +211,28 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(16.dp))
 
-        // ── avatar: base (solo aplica si no hay foto) ──
-        SectionTitle("Avatar${if (hasPhoto) " (ahora tienes foto, el avatar no se ve)" else ""}")
+        // ── avatar: pestañas Cerdita | Koala (D96: buscar un koala ya no
+        //    requiere pasar por todas las cerditas) ──
+        SectionTitle("Avatar")
+        var famTab by remember { mutableStateOf(AvatarCatalog.familyOf(cfg.base)) }
+        LaunchedEffect(cfg.base) { famTab = AvatarCatalog.familyOf(cfg.base) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = famTab == AvatarCatalog.FAM_PIG,
+                onClick = { famTab = AvatarCatalog.FAM_PIG },
+                label = { Text("Cerdita") },
+            )
+            FilterChip(
+                selected = famTab == AvatarCatalog.FAM_KOALA,
+                onClick = { famTab = AvatarCatalog.FAM_KOALA },
+                label = { Text("Koala") },
+            )
+        }
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            AvatarCatalog.bases.forEach { b ->
+            AvatarCatalog.bases.filter { it.family == famTab }.forEach { b ->
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
@@ -218,7 +271,7 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(12.dp))
 
-        // ── ropa (se dibuja detrás de la base) ──
+        // ── ropa (D95: vestido solo cerdita, traje solo koala) ──
         SectionTitle("Ropa")
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
@@ -230,7 +283,7 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
                 avatarJson = cfg.copy(clothes = null).encode(),
                 onClick = { cfg = cfg.copy(clothes = null) },
             )
-            AvatarCatalog.clothes.forEach { c ->
+            AvatarCatalog.clothesFor(famTab).forEach { c ->
                 AvatarPreviewTile(
                     label = c.label,
                     selected = cfg.clothes == c.id,
@@ -242,51 +295,50 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 
         Spacer(Modifier.height(12.dp))
 
-        // ── accesorios (por slot: moño O gorro O flor; gafas y corazón aparte) ──
-        SectionTitle("Accesorios")
+        // ── calzado (D95: slot propio, se excluyen entre sí) ──
+        SectionTitle("Calzado")
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            AvatarCatalog.accessories.forEach { a ->
+            AvatarPreviewTile(
+                label = "Descalzo",
+                selected = cfg.acc[AvatarCatalog.SLOT_FEET] == null,
+                avatarJson = cfg.copy(acc = cfg.acc - AvatarCatalog.SLOT_FEET).encode(),
+                onClick = { cfg = cfg.copy(acc = cfg.acc - AvatarCatalog.SLOT_FEET) },
+            )
+            AvatarCatalog.accessoriesFor(famTab).filter { it.slot == AvatarCatalog.SLOT_FEET }.forEach { a ->
                 val selected = cfg.acc[a.slot] == a.id
                 AvatarPreviewTile(
                     label = a.label,
                     selected = selected,
-                    avatarJson = if (selected) cfg.encode() else {
-                        val acc = cfg.acc.toMutableMap()
-                        acc[a.slot] = a.id
-                        cfg.copy(acc = acc).encode()
-                    },
-                    onClick = {
-                        val acc = cfg.acc.toMutableMap()
-                        if (selected) acc.remove(a.slot) else acc[a.slot] = a.id
-                        cfg = cfg.copy(acc = acc)
-                    },
+                    avatarJson = if (selected) cfg.encode()
+                    else cfg.copy(acc = cfg.acc + (a.slot to a.id)).encode(),
+                    onClick = { cfg = cfg.copy(acc = cfg.acc + (a.slot to a.id)) },
                 )
             }
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // ── decoración (detrás de la base: la burbuja de Cerlita) ──
-        SectionTitle("Decoración")
+        // ── accesorios (cada tile alterna; los del mismo slot se excluyen) ──
+        SectionTitle("Accesorios")
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            AvatarPreviewTile(
-                label = "Ninguna",
-                selected = cfg.decor == null,
-                avatarJson = cfg.copy(decor = null).encode(),
-                onClick = { cfg = cfg.copy(decor = null) },
-            )
-            AvatarCatalog.decors.forEach { d ->
+            AvatarCatalog.accessoriesFor(famTab).filter { it.slot != AvatarCatalog.SLOT_FEET }.forEach { a ->
+                val selected = cfg.acc[a.slot] == a.id
                 AvatarPreviewTile(
-                    label = d.label,
-                    selected = cfg.decor == d.id,
-                    avatarJson = cfg.copy(decor = d.id).encode(),
-                    onClick = { cfg = cfg.copy(decor = d.id) },
+                    label = a.label,
+                    selected = selected,
+                    avatarJson = if (selected) cfg.encode() else {
+                        cfg.copy(acc = cfg.acc + (a.slot to a.id)).encode()
+                    },
+                    onClick = {
+                        val acc = if (selected) cfg.acc - a.slot else cfg.acc + (a.slot to a.id)
+                        cfg = cfg.copy(acc = acc)
+                    },
                 )
             }
         }
@@ -354,10 +406,179 @@ fun ProfileScreen(app: ChatApp, firstRun: Boolean, onDone: () -> Unit) {
 }
 
 /**
+ * (D98) El avatar VIVO de la vista previa:
+ *  - RESPIRA en reposo (balanceo sutil infinito)
+ *  - SABE que lo vistes: rebote feliz + meneo en cada cambio de ropa/accesorio
+ *  - cambia de personaje → vuelta completa de 360°
+ *  - TOCARLO → saluda (brinquitos + meneo + burbuja "¡Hola!")
+ *  - ARRASTRARLO → gira en 3D (rotación Y con perspectiva; X inclina) y al
+ *    soltar vuelve con muelle al frente más cercano
+ */
+@Composable
+private fun InteractiveAvatar(cfg: AvatarConfig, modifier: Modifier = Modifier) {
+    val base = AvatarCatalog.base(cfg.base) ?: return
+    val scope = rememberCoroutineScope()
+    val scale = remember { Animatable(0.55f) }
+    val rotZ = remember { Animatable(0f) }
+    val rotY = remember { Animatable(0f) }
+    val rotX = remember { Animatable(0f) }
+    val ty = remember { Animatable(0f) }
+    var saludo by remember { mutableStateOf(false) }
+    // px reales según densidad: los saltos se ven iguales en cualquier móvil
+    val hop = with(LocalDensity.current) { 26.dp.toPx() }
+    val bob = with(LocalDensity.current) { 7.dp.toPx() }
+
+    // respiración idle: sube/baja 8 px y cabecea 1.4°
+    val vivo = rememberInfiniteTransition(label = "vivo")
+    val fase by vivo.animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Reverse),
+        label = "respira",
+    )
+
+    // entrada con rebote
+    LaunchedEffect(Unit) {
+        scale.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 380f))
+    }
+
+    // reacción al vestirlo (salta la entrada inicial)
+    LaunchedEffect(cfg.clothes, cfg.acc) {
+        if (scale.isRunning && scale.value < 0.95f) return@LaunchedEffect
+        if (scale.value >= 0.9f) {
+            launch {
+                scale.animateTo(1f, keyframes {
+                    durationMillis = 560
+                    1.10f at 90 using FastOutSlowInEasing
+                    0.94f at 220
+                    1.04f at 360
+                    1f at 560
+                })
+            }
+            launch {
+                rotZ.animateTo(0f, keyframes {
+                    durationMillis = 560
+                    -5f at 110
+                    4.5f at 260
+                    -2f at 400
+                    0f at 560
+                })
+            }
+        }
+    }
+
+    // cambio de personaje → vuelta completa
+    LaunchedEffect(cfg.base) {
+        val objetivo = (rotY.value / 360f).toInt() * 360f + 360f
+        rotY.animateTo(objetivo, spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessMediumLow))
+    }
+
+    // la burbuja de saludo se despide sola
+    LaunchedEffect(saludo) {
+        if (saludo) {
+            delay(1250)
+            saludo = false
+        }
+    }
+
+    Box(
+        modifier
+            .graphicsLayer {
+                scaleX = scale.value
+                scaleY = scale.value
+                rotationZ = rotZ.value + (fase - 0.5f) * 1.4f
+                rotationY = rotY.value
+                rotationX = rotX.value
+                translationY = ty.value + (0.5f - fase) * bob
+                cameraDistance = size.maxDimension * 6f
+            }
+            .drawBehind {
+                // sombra de suelo que ancla el personaje
+                val w = size.width * 0.52f
+                val cxS = size.width / 2
+                val cyS = size.height * 0.955f
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0x2E3A2E38), Color.Transparent),
+                        center = Offset(cxS, cyS),
+                        radius = w / 2,
+                    ),
+                    topLeft = Offset(cxS - w / 2, cyS - w * 0.085f),
+                    size = Size(w, w * 0.17f),
+                )
+            }
+            .pointerInput(Unit) {
+                detectTapGestures {
+                    saludo = true
+                    scope.launch {
+                        ty.animateTo(0f, keyframes {
+                            durationMillis = 950
+                            -hop at 130 using FastOutSlowInEasing
+                            0f at 250
+                            -hop * 0.66f at 400
+                            0f at 540
+                            -hop * 0.33f at 660
+                            0f at 950
+                        })
+                        rotZ.animateTo(0f, keyframes {
+                            durationMillis = 950
+                            -9f at 130
+                            7f at 300
+                            -5f at 470
+                            3f at 640
+                            0f at 950
+                        })
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDrag = { change, amt ->
+                        change.consume()
+                        scope.launch {
+                            rotY.snapTo(rotY.value + amt.x * 0.55f)
+                            rotX.snapTo((rotX.value - amt.y * 0.22f).coerceIn(-14f, 14f))
+                        }
+                    },
+                    onDragEnd = {
+                        scope.launch {
+                            val frente = (rotY.value / 360f).roundToInt() * 360f
+                            rotY.animateTo(frente.toFloat(), spring(dampingRatio = 0.62f))
+                            rotX.animateTo(0f, spring(dampingRatio = 0.7f))
+                        }
+                    },
+                )
+            },
+    ) {
+        LayeredAvatar(base, cfg, Modifier.fillMaxSize())
+        // burbuja "¡Hola!" del saludo (D98) — nada de corazones (D96)
+        AnimatedVisibility(
+            visible = saludo,
+            enter = fadeIn() + slideInVertically { -it / 2 } + scaleIn(initialScale = 0.6f),
+            exit = fadeOut() + scaleOut(targetScale = 0.8f),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .graphicsLayer { rotationZ = 8f },
+        ) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primary,
+                shadowElevation = 3.dp,
+                modifier = Modifier.padding(end = 2.dp, top = 30.dp),
+            ) {
+                Text(
+                    "  ¡Hola!  ",
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    style = MaterialTheme.typography.labelLarge,
+                )
+            }
+        }
+    }
+}
+
+/**
  * (D83) Ficha del selector de avatar con VISTA PREVIA real: se compone la
- * configuración completa (base + ropa + accesorios + decoración) sobre el
- * personaje elegido. Antes eran chips de texto y había que imaginarse el
- * resultado; ahora se ve exactamente lo que va a salir.
+ * configuración completa (base + ropa + accesorios) sobre el personaje
+ * elegido. Antes eran chips de texto y había que imaginarse el resultado.
  */
 @Composable
 private fun AvatarPreviewTile(

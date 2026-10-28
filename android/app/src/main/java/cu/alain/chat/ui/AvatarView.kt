@@ -6,6 +6,7 @@ import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -36,28 +37,26 @@ import java.io.File
  */
 data class AvatarBase(val id: String, val label: String, val res: Int, val family: String)
 
-/** Ropa: se dibuja DETRÁS de la base (el cuerpo tapa el cuello). */
+/** Ropa: se dibuja ENCIMA de la base (cubre el torso). Por familia. */
 data class ClothesItem(val id: String, val label: String, val res: Map<String, Int>)
 
-/** Accesorio: se dibuja ENCIMA de la base. Un accesorio por slot. */
+/** Accesorio: se dibuja ENCIMA. Un accesorio por slot (los de un mismo slot
+ *  son excluyentes: moño O gorro O flor…). */
 data class AccItem(val id: String, val label: String, val slot: String, val res: Map<String, Int>)
 
-/** Decoración: se dibuja DETRÁS de la base (asoma por encima). */
-data class DecorItem(val id: String, val label: String, val res: Map<String, Int>)
-
 /**
- * Catálogo de avatares.
+ * Catálogo de avatares (D95: capas raster estilo 3D integrado).
  *
- * D83: el arte deja de ser placeholder. Las bases son raster (WebP) salidos
- * del pipeline medido sobre la ilustración original; ropa, accesorios y
- * decoración son VectorDrawable en un artboard 1024×1024, con el MISMO
- * grosor de trazo y la MISMA paleta, para que compongan encima de la base.
+ * Las bases son renders 3D suaves (vinilo, sin contorno) y desde v0.11 la
+ * ropa y los accesorios también son RASTER (WebP con sombreado suave, sombra
+ * de contacto y sin trazo de tinta) generados por tools/avatares/make_layers_3d.py
+ * → integran con el estilo de las bases en vez de parecer stickers.
  *
- * COMPATIBILIDAD (D61): los ids "pig", "koala", "tee_pink", "tee_violet",
- * "tee_teal", "dots", "stripes", "bow", "flower", "party", "glasses" y "heart"
- * se MANTIENEN → los perfiles ya guardados en la BD siguen renderizando.
- * Los ids nuevos ("pig_melocoton", "decor"…) solo los entiende un cliente
- * nuevo, que es exactamente el comportamiento degrade-limpio del diseño.
+ * COMPATIBILIDAD (D61/D96): los ids "pig", "koala", "tee_*", "dots",
+ * "stripes", "bow", "flower", "party", "glasses" y "heart" se MANTIENEN.
+ * ELIMINADOS: base "pig_menta" (feíta) y decor "bubbles" — los perfiles
+ * guardados con esos ids degradan limpio: [base] resuelve al default de la
+ * misma familia y el decor que ya no existe simplemente no se dibuja.
  */
 object AvatarCatalog {
     /** Familia de un id de base (para elegir el juego de capas). */
@@ -68,14 +67,14 @@ object AvatarCatalog {
         AvatarBase("pig", "Cerdita", R.drawable.av_pig, FAM_PIG),
         AvatarBase("pig_melocoton", "Cerdita melocotón", R.drawable.av_pig_melocoton, FAM_PIG),
         AvatarBase("pig_lavanda", "Cerdita lavanda", R.drawable.av_pig_lavanda, FAM_PIG),
-        AvatarBase("pig_menta", "Cerdita menta", R.drawable.av_pig_menta, FAM_PIG),
         AvatarBase("koala", "Koalita", R.drawable.av_koala, FAM_KOALA),
         AvatarBase("koala_azul", "Koalita azul", R.drawable.av_koala_azul, FAM_KOALA),
         AvatarBase("koala_cacao", "Koalita cacao", R.drawable.av_koala_cacao, FAM_KOALA),
         AvatarBase("koala_cielo", "Koalita cielo", R.drawable.av_koala_cielo, FAM_KOALA),
     )
 
-    /** null = "sin ropa" (opción explícita del picker). */
+    /** null = "sin ropa" (opción explícita del picker).
+     *  D95: vestido solo Cerdita, traje solo Koalita (filter por familia en UI). */
     val clothes = listOf(
         ClothesItem(
             "tee_pink", "Camiseta rosa",
@@ -97,6 +96,8 @@ object AvatarCatalog {
             "stripes", "Rayas",
             mapOf(FAM_PIG to R.drawable.av_c_stripes_pig, FAM_KOALA to R.drawable.av_c_stripes_koala),
         ),
+        ClothesItem("dress", "Vestido", mapOf(FAM_PIG to R.drawable.av_c_dress_pig)),
+        ClothesItem("suit", "Traje", mapOf(FAM_KOALA to R.drawable.av_c_suit_koala)),
     )
 
     /** Los accesorios de un mismo slot son excluyentes (p. ej. moño O gorro). */
@@ -114,6 +115,14 @@ object AvatarCatalog {
             mapOf(FAM_PIG to R.drawable.av_a_party_pig, FAM_KOALA to R.drawable.av_a_party_koala),
         ),
         AccItem(
+            "cap", "Gorra", SLOT_HEAD,
+            mapOf(FAM_PIG to R.drawable.av_a_cap_pig, FAM_KOALA to R.drawable.av_a_cap_koala),
+        ),
+        AccItem(
+            "earrings", "Aretes", SLOT_HEAD,
+            mapOf(FAM_PIG to R.drawable.av_a_earrings_pig, FAM_KOALA to R.drawable.av_a_earrings_koala),
+        ),
+        AccItem(
             "glasses", "Gafas de sol", SLOT_EYES,
             mapOf(FAM_PIG to R.drawable.av_a_glasses_pig, FAM_KOALA to R.drawable.av_a_glasses_koala),
         ),
@@ -121,21 +130,39 @@ object AvatarCatalog {
             "heart", "Corazón", SLOT_CHEST,
             mapOf(FAM_PIG to R.drawable.av_a_heart_pig, FAM_KOALA to R.drawable.av_a_heart_koala),
         ),
-    )
-
-    /** Decoración (D83): la burbuja con corazones, la firma de Cerlita. */
-    val decors = listOf(
-        DecorItem(
-            "bubbles", "Burbuja con corazones",
-            mapOf(FAM_PIG to R.drawable.av_decor_bubbles_pig, FAM_KOALA to R.drawable.av_decor_bubbles_koala),
+        AccItem(
+            "scarf", "Bufanda", SLOT_NECK,
+            mapOf(FAM_PIG to R.drawable.av_a_scarf_pig, FAM_KOALA to R.drawable.av_a_scarf_koala),
+        ),
+        AccItem(
+            "shoes_red", "Zapatos rojos", SLOT_FEET,
+            mapOf(FAM_PIG to R.drawable.av_a_shoes_red_pig, FAM_KOALA to R.drawable.av_a_shoes_red_koala),
+        ),
+        AccItem(
+            "shoes_blue", "Zapatos azules", SLOT_FEET,
+            mapOf(FAM_PIG to R.drawable.av_a_shoes_blue_pig, FAM_KOALA to R.drawable.av_a_shoes_blue_koala),
         ),
     )
 
     const val SLOT_HEAD = "head"
     const val SLOT_EYES = "eyes"
     const val SLOT_CHEST = "chest"
+    const val SLOT_NECK = "neck"
+    const val SLOT_FEET = "feet"
 
-    fun base(id: String?) = bases.firstOrNull { it.id == id }
+    /** Orden de dibujado (los slots no se solapan entre sí). */
+    val slotOrder = listOf(SLOT_NECK, SLOT_HEAD, SLOT_EYES, SLOT_CHEST, SLOT_FEET)
+
+    fun base(id: String?): AvatarBase? {
+        bases.firstOrNull { it.id == id }?.let { return it }
+        // D96: id de base desconocido/eliminado (p.ej. "pig_menta" guardado
+        // en un perfil viejo) → default de la MISMA familia, nunca inicial seca.
+        if (id != null) {
+            val fam = if (id.startsWith("koala")) FAM_KOALA else FAM_PIG
+            return bases.firstOrNull { it.family == fam }
+        }
+        return null
+    }
 
     /** Familia (pig/koala) de un id de base; si no se reconoce, la de Cerdita. */
     fun familyOf(baseId: String?): String = base(baseId)?.family ?: FAM_PIG
@@ -146,8 +173,11 @@ object AvatarCatalog {
     fun accRes(id: String?, family: String): Int? =
         accessories.firstOrNull { it.id == id }?.res?.get(family)
 
-    fun decorRes(id: String?, family: String): Int? =
-        decors.firstOrNull { it.id == id }?.res?.get(family)
+    /** Ropa disponible para una familia (vestido solo cerdita, traje solo koala). */
+    fun clothesFor(family: String): List<ClothesItem> = clothes.filter { family in it.res }
+
+    /** Accesorios disponibles para una familia. */
+    fun accessoriesFor(family: String): List<AccItem> = accessories.filter { family in it.res }
 }
 
 // ───────────────────────── fotos (caché ligera) ─────────────────────────
@@ -175,6 +205,45 @@ fun decodeProfilePhoto(path: String, maxPx: Int = 256, version: Long = 0L): Bitm
 }
 
 // ───────────────────────── renderizador ─────────────────────────
+
+/**
+ * Avatar compuesto por capas, SIN recorte circular: base → ropa → accesorios
+ * (orden [AvatarCatalog.slotOrder]). D95: la ropa/accesorios son raster WebP
+ * con sombreado suave — mismo estilo vinilo que las bases.
+ *
+ * [AvatarView] lo usa dentro de su círculo; la vista previa interactiva del
+ * editor de perfil (D98) lo usa a tamaño grande con gestos y animaciones.
+ */
+@Composable
+fun LayeredAvatar(
+    base: AvatarBase,
+    cfg: AvatarConfig?,
+    modifier: Modifier = Modifier,
+) {
+    val family = base.family
+    Box(modifier) {
+        Image(
+            painter = painterResource(base.res),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
+            Image(
+                painter = painterResource(res), contentDescription = null,
+                contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize(),
+            )
+        }
+        AvatarCatalog.slotOrder.forEach { slot ->
+            AvatarCatalog.accRes(cfg?.acc?.get(slot), family)?.let { res ->
+                Image(
+                    painter = painterResource(res), contentDescription = null,
+                    contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
 
 /**
  * Avatar unificado con prioridad: foto pendiente (preview sin guardar) >
@@ -229,45 +298,15 @@ fun AvatarView(
                     val cfg = remember(avatarJson) { AvatarConfig.parse(avatarJson) }
                     val base = AvatarCatalog.base(cfg?.base)
                     if (base != null) {
-                        val family = base.family
                         // D92: margen interno para que el personaje NUNCA toque
                         // el borde del círculo (orejas/pies cortados en v0.9.0).
                         // El fondo del círculo sigue llenando todo el tamaño.
                         val pad = size * 0.07f
-                        val layer = Modifier.size(size - pad * 2)
                         Box(modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant).padding(pad)) {
-                            // D92: orden -> decoración (DETRÁS) → base → ropa
-                            // (ENCIMA del torso) → accesorios (ENCIMA). Con cuerpo
-                            // completo la camiseta tiene que TAPAR el pecho (antes,
-                            // con arte de sola cabeza, iba detrás como 'hombros').
-                            AvatarCatalog.decorRes(cfg?.decor, family)?.let { res ->
-                                Image(
-                                    painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = layer,
-                                )
-                            }
-                            Image(
-                                painter = painterResource(base.res),
-                                contentDescription = null,
-                                contentScale = ContentScale.Fit,
-                                modifier = layer,
-                            )
-                            AvatarCatalog.clothesRes(cfg?.clothes, family)?.let { res ->
-                                Image(
-                                    painter = painterResource(res), contentDescription = null,
-                                    contentScale = ContentScale.Fit, modifier = layer,
-                                )
-                            }
-                            // orden estable: head → eyes → chest (los slots no se solapan)
-                            listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
-                                .forEach { slot ->
-                                    AvatarCatalog.accRes(cfg?.acc?.get(slot), family)?.let { res ->
-                                        Image(
-                                            painter = painterResource(res), contentDescription = null,
-                                            contentScale = ContentScale.Fit, modifier = layer,
-                                        )
-                                    }
-                                }
+                            // D92/D95: base → ropa (ENCIMA del torso) →
+                            // accesorios por slot (ENCIMA). La decoración fue
+                            // retirada en v0.11 (D96) a petición.
+                            LayeredAvatar(base, cfg, Modifier.size(size - pad * 2))
                         }
                     } else {
                         Text(

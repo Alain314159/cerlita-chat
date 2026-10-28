@@ -317,3 +317,70 @@ android/app/src/main/java/cu/alain/chat/
 ---
 
 *Implementado el 28-oct-2026. El pipeline es reproducible; regenera los avatares desde la referencia en cualquier momento.*
+
+---
+
+# v0.11 — Las capas se vuelven 3D de verdad (D95-D98)
+
+**28 de octubre de 2026** · pipeline v4 en `tools/avatares/make_layers_3d.py`
+
+Las bases pasaron a renders 3D en v0.10 (D92), pero las capas seguían siendo
+vectores planos con trazo de tinta → "stickers pegados" (el usuario: "súper
+mal y horrible"). Esta versión rehace TODA la ropa y los accesorios como
+**raster con sombreado suave** en el mismo lenguaje vinilo de las bases.
+
+## Qué cambió
+
+| Pieza | v0.10 (vector con tinta) | v0.11 (raster vinilo) |
+|--------|--------------------------|------------------------|
+| Contorno | trazo #503433 de 14-16px | **NINGUNO** — silueta por sombreado |
+| Volumen | plano | degradado de luz diagonal + rim oscurecido + especular difuso |
+| Anclaje | nada | **sombra de contacto** difuminada bajo cada pieza |
+| Ajuste ropa | constantes (más estrecha que la panza) | **silueta medida fila a fila** (`medidas/silhouette.json`) |
+| Catálogo | 5 ropa + 5 acc | 7 ropa (vestido/traje) + 10 acc (gorra, aretes, bufanda, 2 zapatos) |
+| Bases | 8 | **7** (cerdita menta eliminada a petición) |
+| Decoración | burbuja con corazones | **ELIMINADA** a petición |
+
+## Motor de sombreado (soft_shape)
+
+1. Máscara L supersampleada ×2 (dibujo a 2048, exporta 384).
+2. Degradado: `f = 1.06 − dark·t` con `t = 0.38·x + 0.62·y` (luz arriba-izquierda).
+3. Rim: erosión 9px → banda de borde oscurecida (define la silueta SIN tinta).
+4. Especular: blob blanco difuso en el cuarto superior-izquierdo del bbox.
+5. Sombra de contacto: máscara difuminada desplazada (+7,+13), color cálido
+   `(62,40,55)` alpha ~30 % — NUNCA negro puro.
+
+## Geometría medida (lección D77 otra vez)
+
+- **Panza de la cerdita = half 292 px** (fila 654): la camiseta v0.10 tenía
+  half 273 → por eso parecía una caja. Ahora la ropa sigue `body_profile(y)`
+  interpolado de la silueta real con ease de 5-8 px.
+- **Brazos del koala separados del torso desde y≈710** (blobs por fila):
+  las mangas del traje son tubos independientes sobre los lóbulos reales
+  (c≈305/716) con puño; el traje-corpo va SOLO sobre el torso (350-670).
+- **Pies**: cerdita cascos pequeños (cx 425/599, w 83), koala patas grandes
+  (w 95) → botita bulbosa vs sneaker de puntera ancha, estilo por familia.
+- **Ojos del koala en línea inclinada** (izq y=361, der y=335): las gafas
+  compensan con min/max en el puente.
+
+## QA
+
+Bucle de hojas de contactos + VLM (regla D83). Punto clave: la 3.ª ronda el
+VLM entró en nitpicking imposible ("cloth simulation") — el veredicto útil
+fue el COMPARATIVO antes/después: **5/5 "gana la nueva por amplio margen"**.
+Verificación numérica de la geometría sobre los webp exportados (blobs por
+fila: vestido en A real 208→178, scallops confirmados, traje 3 blobs abajo).
+
+## Ficheros nuevos
+
+```
+tools/avatares/
+  make_layers_3d.py           motor soft_shape + 17 items × familia → 32 WebP
+  work3d/medidas/silhouette.json   silueta fila a fila de ambos cuerpos
+
+android/app/src/main/res/drawable-nodpi/
+  av_c_*.webp, av_a_*.webp    32 capas raster (antes 22 XML en drawable/)
+```
+
+Peso: **+300 KB** de capas (368 KB lossless en disco, 39 WebP dentro del APK).
+Tests: AvatarCatalogTest (6) — fallback por familia, filtrado, ids legacy.

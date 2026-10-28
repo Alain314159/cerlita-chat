@@ -338,6 +338,33 @@ merge trae además `docs/AUDITORIA-2026-10-28.md`, el análisis que motivó D84-
   (la compilación de la rama se verificó AQUÍ por primera vez: la nota del
   commit D83 advertía que nunca se había podido compilar).
 
+## v0.11.0 — «Se vive» (accesorios 3D + avatar interactivo)
+
+El usuario probó v0.10.0: las bases perfectas, los accesorios "súper mal y
+horrible" — diagnóstico exacto: choque 2D-plano-con-tinta contra bases 3D
+suaves, y ropa más estrecha que la panza medida.
+
+- **Accesorios y ropa RASTER estilo 3D (D95)**: 32 WebP con sombreado suave,
+  luz diagonal, especular vinilo, sombra de contacto y SIN trazo de tinta —
+  el mismo lenguaje visual que las bases. Veredicto comparativo 5/5.
+- **Ropa de verdad para abajo (D97)**: VESTIDO de la cerdita (escote, mangas
+  globo, cinturón, bajo ondulado en A sobre la panza medida) y TRAJE del
+  koala (chaqueta con solapas, camisa en V, pajarita, mangas con puño que
+  siguen los brazos reales). CALZADO nuevo: botitas / sneakers por familia.
+- **Más accesorios**: gorra, aretes de aro, bufanda (slot cuello), zapatos
+  rojos y azules (slot pies) — 10 accesorios en 5 slots.
+- **Pestañas Cerdita | Koala (D96)**: buscar un koala ya no requiere pasar
+  por todas las cerditas; la ropa se filtra por familia (vestido solo
+  cerdita, traje solo koala). Cerdita menta ELIMINADA y burbuja con
+  corazones ELIMINADA a petición; los perfiles guardados con esos ids
+  degradan limpio (menta → cerdita rosa de la misma familia).
+- **El avatar está VIVO (D98)**: la vista previa respira, REACCIONA cuando
+  le pones ropa (brinca feliz), SALUDA al tocarlo (brinquitos + burbuja
+  "¡Hola!"), GIRA en 3D al arrastrarlo (vuelve con muelle) y da una vuelta
+  completa al cambiar de personaje.
+- 104/104 tests (+6 del catálogo), APK 19,0 MB versionCode 13, misma firma
+  37b6d4… → actualiza encima.
+
 ## v0.10.0 — «Muévanse» (CI + pantalla completa + avatares 3D cuerpo entero)
 
 Todo nació del uso real de v0.9.0 (los screenshots del usuario mandaron):

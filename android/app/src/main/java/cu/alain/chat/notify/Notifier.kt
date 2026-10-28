@@ -323,12 +323,11 @@ object Notifier {
             d.setBounds(inset, inset, size - inset, size - inset)
             d.draw(canvas)
         }
-        // D92: decoración (DETRÁS) → base → ropa (ENCIMA del torso) →
-        // accesorios (ENCIMA). Con cuerpo completo la camiseta tapa el pecho.
-        AvatarCatalog.decorRes(cfg.decor, family)?.let(::drawLayer)
+        // D95/D96: base → ropa (ENCIMA del torso) → accesorios por slot
+        // (orden del catálogo; la decoración fue retirada en v0.11).
         drawLayer(base.res)
         AvatarCatalog.clothesRes(cfg.clothes, family)?.let(::drawLayer)
-        listOf(AvatarCatalog.SLOT_HEAD, AvatarCatalog.SLOT_EYES, AvatarCatalog.SLOT_CHEST)
+        AvatarCatalog.slotOrder
             .forEach { slot -> AvatarCatalog.accRes(cfg.acc?.get(slot), family)?.let(::drawLayer) }
         return bmp
     }
