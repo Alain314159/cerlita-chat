@@ -196,3 +196,81 @@ en vez de arte a mano no repetible.
 - **Lo que el usuario ganaría**: girar de verdad con el dedo (cualquier ángulo), ropa
   que se ve prenda (volumen, mangas, misma luz), saludo con el brazo, reacciones al
   vestirlo, y colorways infinitos gratis.
+
+---
+
+## 9. Investigación ampliada: verificación de la lista externa + hallazgos nuevos (29-oct-2026)
+
+El usuario aportó una lista de opciones recolectada fuera (proyectos web de avatares +
+recomendaciones para Kotlin). Se verificó CADA UNA contra las fuentes primarias y se
+buscó qué más existe. Conclusión anticipada: **nada reemplaza el plan D99, pero sí lo
+refuerza, añade 2 motores de respaldo, 1 acelerador opcional y 2 repos de referencia.**
+
+### 9.1 Verificación de la lista aportada
+
+| Opción (según la lista) | Verificado contra fuente primaria | Veredicto para NOSOTROS |
+|---|---|---|
+| **ruslanmv/3D-Avatar-Chatbot** | ✅ Real, Apache-2.0, activo (commit oct-2026). Es una app WEB (Vanilla JS + Three.js r147 + WebXR) de chatbot con LLM; el vestuario se genera con IA vía HuggingFace | ❌ No integrable (web, no Android nativo). ✅ SÍ es útil como REFERENCIA de UX de vestuario/try-on y de "Behavior Director" (decidir reacciones) — ideas para F2/F3 |
+| **@three-ws/avatar (three.ws)** | ✅ Real, Apache-2.0. Componentes web (`<agent-3d>`) y React; creador de avatar en iframe modal que exporta GLB; emotion morphs + lipsync | ❌ Es WEB puro, no hay binding Android nativo. Nuestro caso no necesita lipsync (los avatares son identidad decorativa, no compañeros que hablan). El patrón "el creador exporta GLB" sí confirma el formato |
+| **dlp3d.ai (Digital Life Project 2)** | ✅ Real, código y assets abiertos (SIGGRAPH Asia 2025). Framework de "humanos digitales autónomos" en navegador (Babylon.js) impulsados por LLM | ❌ Web + orientado a LLM + humanos. Producto distinto (compañero conversacional), no un sistema de avatar de perfil |
+| **react-ai-voice-avatar** | (web, React, lipsync) | ❌ Web + hablante. Mismo desajuste de producto |
+| **Ready Player Me + TalkingHead** | ⛔ **OBSOLETO**: Netflix compró Ready Player Me (dic-2025) y **sus servicios CERRARON el 31-ene-2026** | ❌ La recomendación llegó 9 meses tarde: ya no existe el servicio. Además era humanoide y requería su infraestructura — jamás encajó con cerdita/koala chibi |
+| **DiceBear / Avataaars** | Correcto en la lista: 2D | ❌ (ya descartado: no giran, no visten) |
+| **SceneView** | ✅ Confirmado de nuevo: Apache-2.0, el 3D/AR SDK para Compose sobre Filament; carga GLB, animaciones esqueléticas y morph targets; API declarativa ("una escena es un composable, un modelo es un nodo") | ✅ **Sigue siendo nuestra elección (D99)**. La lista externa llega a la misma conclusión |
+| **Materia** | ✅ Real pero su propio README dice: "Alpha Software — Not recommended for production use yet" (WebGPU/Vulkan, Three.js-style) | ⚠️ Vigilar (podría ser el futuro), NO para hoy. Registrado como Plan D |
+| **VRM + VRoid Studio** | ⚠️ VRM es un formato glTF con extensiones para avatar HUMANOIDE: esqueleto estandarizado humano, expresiones normalizadas (blink/aa/ih/ou/ee, joy/angry/...), mirada. VRoid Studio solo crea humanos anime (app de escritorio, no programable) | ❌ **Desajuste de dominio**: nuestros personajes son animales chibi con brazos cortos, cabeza enorme y sin cara humana — el rig humanoide estándar y las expresiones VRM pelean contra ese diseño en vez de ayudarlo. glTF + rig propio (D99) es más simple y con menos fricción. VRM aportaría valor solo si quisiéramos compatibilidad con el ecosistema VTuber, que no queremos |
+| **VtuberCamera_KMP (jtakumi)** | ✅ Real: app Kotlin Multiplatform (Android+iOS) con Compose que muestra avatares VRM/GLB sobre Filament con face tracking | ✅ **Referencia de código valiosa**: demuestra que cargar modelos rigueados y manipular huesos desde Kotlin/Filament es un problema resuelto. Para F0/F1: mirar su carga de GLB y mapeo de huesos |
+| **avataryug-sdk-for-kotlin/java** | ✅ Existe el SDK en GitHub, pero el SERVICIO AvatarYuG es comercial (pago por uso/créditos; se compara con AvatarSDK de $800/mes) | ❌ Paga. Fuera de presupuesto (regla del proyecto: todo gratis) |
+| **Ancla accesorios a huesos / morphs por eventos** | Técnica estándar | ✅ Ya estaba en D99 (F1: prendas como hijos del esqueleto; F3: reacciones). La lista externa lo confirma como el camino correcto |
+
+### 9.2 Hallazgos NUEVOS (no estaban en la lista)
+
+1. **Ready Player Me está MUERTO** (Netflix, cierre 31-ene-2026). Cualquier material que
+   lo recomiende como opción actual está desactualizado — incluye la mitad del ecosistema
+   "avatar web" de 2023-2025. Al buscar referencias hay que filtrar por fecha.
+2. **korender** (zakgof, Apache-2.0, activo oct-2026, v0.7.0): motor 3D **Kotlin
+   Multiplatform** que se EMPIOTRA en Compose, carga glTF/GLB **con animaciones**, backend
+   OpenGL ES 3 en Android. 151 estrellas (comunidad pequeña). → **Plan C real** si
+   SceneView/Filament diera guerra en algún dispositivo: misma arquitectura de assets
+   (GLB), otro motor. Se une a "Filament directo" como respaldo.
+3. **TRELLIS / TRELLIS.2** (Microsoft Research, **MIT**): modelo de generación
+   imagen/texto → malla 3D con textura, exporta **GLB**. "TRELLIS.2-4B genera un asset en
+   <7 min con 6 GB de VRAM". → **Acelerador OPCIONAL** para la escultura inicial de las
+   bases (nuestro arte 2D existente → malla de arranque), pero la topología generada
+   necesita retopología manual para animar, y no hay GPU NVIDIA en el sandbox (habría que
+   usar espacios de HuggingFace con cola). Se evalúa en F0 SOLO si la escultura 100 %
+   programática no convence. No es bloqueante ni necesario.
+4. **Quaternius "Ultimate Animated Animals"**: 12 animales rigueados y animados (12 clips
+   c/u) en FBX/OBJ/BLEND/**glTF**, **CC0** (uso comercial libre). Cuadrúpedos low-poly
+   realistas, NO chibi bipedos — no sirven como base directa. → **Referencia de
+   estructura**: cómo organiza un rig animal, cómo nombran/exportan los clips en glTF,
+   qué pesa cada modelo. Mismo papel que ya jugaban los packs de Quaternius en D99.
+5. **bitHuman** (essence2/expression2-android en Maven propio): SDK Android de avatares
+   "que hablan", comercial por créditos con API secret. → Descartado (paga + producto
+   conversacional), pero documenta que HAY SDKs nativos Android si algún día se quiere
+   pagar por un compañero parlante.
+6. **AvatarYuG / AvatarSDK (itSeez3D)**: ambos comerciales SaaS (humanoide fotorreal de
+   selfie). → Descartados; confirman que el mundo "SDK de avatar nativo llave en mano"
+   gratis está VACÍO — no existe la librería todo-en-uno para Kotlin (la propia lista
+   externa lo admite al final).
+
+### 9.3 Qué cambia y qué NO cambia en el plan D99
+
+**No cambia nada del plan**: la verificación confirma que no hay atajo — ni librería
+todo-en-uno gratis, ni SDK nativo libre, ni servicio vivo que nos dé chibi animal con
+ropa. La ruta GLB propio + rig propio + SceneView sigue siendo la correcta, ahora con
+validación independiente (la lista externa concluye igual: "empieza con SceneView").
+
+**Sí se añade al plan**:
+- **Plan C motor**: korender (Apache-2.0, glTF+animaciones, Compose) además de "Filament
+  directo" si SceneView falla en algún dispositivo concreto.
+- **Repos de referencia para F0-F1**: VtuberCamera_KMP (carga GLB/VRM + huesos en
+  Kotlin/Filament) y ruslanmv/3D-Avatar-Chatbot (UX de vestuario/try-on, behavior
+  director para reacciones).
+- **Acelerador opcional de escultura (solo F0, solo si hace falta)**: TRELLIS.2 MIT vía
+  HuggingFace para bootstrap de la malla base; la topología se reharía igualmente.
+- **Refuerzo anti-desvío**: VRM/VRoid queda explícitamente descartado por desajuste de
+  dominio (humanoides anime vs animales chibi) y Ready Player Me por estar muerto —
+  documentado aquí para no volver a evaluarlos.
+- **Criterio de búsqueda futuro**: ante cualquier recomendación de avatar, verificar
+  fecha (¿pre-netflix-RPM?) y plataforma (¿web o nativo?) antes de invertir tiempo.
