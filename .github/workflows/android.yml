@@ -1,0 +1,95 @@
+name: Android CI
+
+# D90: compila la app en GitHub Actions — gratis en repos públicos.
+# Cada push a main: tests + APK release FIRMADO como artefacto descargable.
+# Cada tag v*: además lo publica como Release con el APK.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # publicar Releases con el APK en los tags
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+
+      # H19: el sdkmanager moderno publica "platforms;android-37.0" pero AGP
+      # con compileSdk=37 busca el dir "android-37" → cp -r (sin symlink).
+      - name: Instalar plataforma 37 (receta H19)
+        run: |
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" >/dev/null
+          if [ -d "$ANDROID_HOME/platforms/android-37.0" ] && [ ! -d "$ANDROID_HOME/platforms/android-37" ]; then
+            cp -r "$ANDROID_HOME/platforms/android-37.0" "$ANDROID_HOME/platforms/android-37"
+          fi
+          ls "$ANDROID_HOME/platforms/"
+
+      - name: Gradle (caché)
+        uses: gradle/actions/setup-gradle@v4
+
+      # La firma release lee android/keystore.properties (gitignored) que apunta
+      # a ../../secrets/chat-release.keystore — fuera del repo a propósito.
+      # En PRs de forks los secrets no existen → se omite la firma (aviso).
+      - name: Keystore de firma (desde secrets)
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_KEYPASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::warning::Sin secrets de firma: el APK release saldrá SIN firma válida"
+            exit 0
+          fi
+          mkdir -p ../secrets
+          printf '%s' "$KS_B64" | base64 -d > ../secrets/chat-release.keystore
+          cat > android/keystore.properties <<EOF
+          storeFile=../../secrets/chat-release.keystore
+          storePassword=$KS_PASS
+          keyAlias=$KS_ALIAS
+          keyPassword=$KS_KEYPASS
+          EOF
+
+      - name: Tests (JVM + Robolectric)
+        run: cd android && ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: APK release (R8 + firma)
+        run: cd android && ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Verificar firma del APK
+        run: |
+          BT="$ANDROID_HOME/build-tools/37.0.0"
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          "$BT/apksigner" verify --print-certs "$APK" | head -4 || true
+          "$BT/aapt2" dump badging "$APK" | head -2
+
+      - name: Subir APK como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: cerlita-chat-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
+
+      - name: Publicar Release (solo tags v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android/app/build/outputs/apk/release/app-release.apk
+          generate_release_notes: true
