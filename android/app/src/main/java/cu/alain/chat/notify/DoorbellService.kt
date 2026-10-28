@@ -153,16 +153,23 @@ object Doorbell {
 }
 
 /**
- * Revive el timbre tras reiniciar el teléfono — SOLO si el usuario activó
+ * Revive el timbre tras reiniciar el teléfono o ACTUALIZAR la app sin
+ * abrirla (MY_PACKAGE_REPLACED, N2 auditoría) — SOLO si el usuario activó
  * «Avisos instantáneos con la app cerrada» (D72): el modo por defecto no
  * tiene servicio permanente y por tanto nada que revivir; el WorkManager
  * periódico ya se reagenda solo. remoteMessaging está en la allowlist de
  * FGS_BOOT_COMPLETED (Android 14/15): puede arrancar desde el broadcast
  * sin violar las restricciones de arranque en background.
+ *
+ * LOCKED_BOOT_COMPLETED queda fuera a propósito: exige directBootAware y
+ * migrar DB/vault/prefs a storage device-encrypted (D84) — un timbre que
+ * arranque con la pantalla bloqueada no puede leer NADA de lo que necesita.
  */
 class BootReceiver : android.content.BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (intent.action != Intent.ACTION_BOOT_COMPLETED &&
+            intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
+        ) return
         val app = ctx.applicationContext as? ChatApp ?: return
         if (app.store.session != null && app.prefs.instantBg) Doorbell.ensureStarted(ctx)
     }

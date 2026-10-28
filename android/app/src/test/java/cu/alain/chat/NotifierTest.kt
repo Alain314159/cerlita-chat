@@ -89,22 +89,51 @@ class NotifierTest {
     }
 
     @Test
-    fun `ecos propios, mensajes viejos y sala abierta NO notifican`() = runBlocking {
+    fun `ecos propios y sala abierta NO notifican`() = runBlocking {
         val now = System.currentTimeMillis()
         Notifier.notifyNewMessages(
             ctx, db, myUid = "yo", inForeground = false, suppressRoom = null,
             msgs = listOf(
                 NewMsg(rid, "yo", "yo", "eco multi-dispositivo", now, mine = true),
-                NewMsg(rid, peerUid, "amelia", "historial antiguo", now - 3L * 60 * 60 * 1000, mine = false),
             ),
         )
-        assertTrue(posted().isEmpty(), "nada debe publicarse (eco propio + historial antiguo)")
+        assertTrue(posted().isEmpty(), "el eco propio no avisa")
 
         Notifier.notifyNewMessages(
             ctx, db, myUid = "yo", inForeground = true, suppressRoom = rid,
             msgs = listOf(NewMsg(rid, peerUid, "amelia", "viendo este chat", now, mine = false)),
         )
         assertTrue(posted().isEmpty(), "la sala abierta en foreground no avisa")
+    }
+
+    /**
+     * §3.2 (auditoría, v0.8.0): un mensaje importante aunque sea VIEJO ahora
+     * SÍ avisa (antes: ventana de 30 min → el teléfono 2 h sin red y el
+     * mensaje de hace 45 min llegaba en SILENCIO). Una notificación por sala.
+     */
+    @Test
+    fun `un mensaje viejo suelto SI avisa (nunca mas mensajes mudos)`() = runBlocking {
+        val now = System.currentTimeMillis()
+        Notifier.notifyNewMessages(
+            ctx, db, myUid = "yo", inForeground = false, suppressRoom = null,
+            msgs = listOf(
+                NewMsg(rid, peerUid, "amelia", "mensaje importante de hace 3 h", now - 3L * 60 * 60 * 1000, mine = false),
+            ),
+        )
+        assertTrue(hasId(rid.hashCode()), "el mensaje viejo suelto debe avisar (1 por sala)")
+    }
+
+    /** Y la tanda ENORME y toda antigua (re-sync de un teléfono nuevo) no spam. */
+    @Test
+    fun `re-sync enorme y antiguo NO avisa`() = runBlocking {
+        val now = System.currentTimeMillis()
+        val viejos = (1..20).map { i ->
+            NewMsg(rid, peerUid, "amelia", "historial $i", now - 48L * 60 * 60 * 1000 - i, mine = false)
+        }
+        Notifier.notifyNewMessages(
+            ctx, db, myUid = "yo", inForeground = false, suppressRoom = null, msgs = viejos,
+        )
+        assertTrue(posted().isEmpty(), "20 mensajes de hace 2 días = historial, no noticia")
     }
 
     @Test

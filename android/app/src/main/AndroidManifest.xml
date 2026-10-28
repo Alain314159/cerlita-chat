@@ -53,6 +53,11 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- N2 (auditoría): revivir el timbre también tras ACTUALIZAR
+                     la app sin abrirla. LOCKED_BOOT_COMPLETED queda fuera a
+                     propósito: exige directBootAware y todo el stack (DB,
+                     vault, prefs) en storage DE — ver D84 en DECISIONES.md -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

@@ -59,8 +59,10 @@ object Notifier {
     /** Acento del tema Cerlita (coral del mockup, D77). */
     private const val ACCENT = 0xFFD87884.toInt()
 
-    /** Antigüedad máxima para avisar (el resto es historial, no noticia). */
-    private const val RECENT_MS = 30L * 60 * 1000
+    /** Umbral anti-re-sync (§3.2 auditoría): una tanda ENORME y toda antigua
+     *  es historial de un teléfono nuevo, no noticia — no se notifica. */
+    private const val RESYNC_COUNT = 12
+    private const val RESYNC_MS = 24L * 60 * 60 * 1000
 
     private fun channelId(roomId: String) = "room_${roomId.take(8)}"
     private fun notifId(roomId: String) = roomId.hashCode()
@@ -112,9 +114,20 @@ object Notifier {
     ) {
         if (msgs.isEmpty() || !canNotify(ctx)) return
         val now = System.currentTimeMillis()
-        val fresh = msgs.filter { !it.mine && it.ts >= now - RECENT_MS }
+        // §3.2 (auditoría): antes, todo lo de hace >30 min llegaba EN SILENCIO
+        // — el teléfono 2 h sin red y el mensaje importante de hace 45 min no
+        // avisaba NADA. Regla nueva: SIEMPRE se avisa del último de cada sala
+        // (una notificación por sala con contador — nada de spam), y la única
+        // tanda que se descarta es la re-sincronización evidente: enorme y
+        // toda con más de 24 h (historial de un teléfono nuevo, no noticia).
+        val fresh = msgs.filter { !it.mine }
         // la sala abierta en foreground se ve en vivo; el resto sí avisa
         val toNotify = fresh.filterNot { inForeground && it.roomId.equals(suppressRoom, ignoreCase = true) }
+            .groupBy { it.roomId }
+            .filterNot { (_, rms) ->
+                rms.size > RESYNC_COUNT && rms.all { it.ts < now - RESYNC_MS }
+            }
+            .flatMap { it.value }
         if (toNotify.isEmpty()) return
 
         val appCtx = ctx.applicationContext as? cu.alain.chat.ChatApp
