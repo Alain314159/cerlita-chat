@@ -291,3 +291,17 @@ SmokeTest (24/28/31/33/35).
 - **Descargas (D80)**: fotos con botón «Guardar» en el visor; notas de voz y archivos a Descargas/Cerlita en UN toque (API 29+; API <29 selector SAF). Todo sin permisos nuevos.
 - **Instantáneo ON por defecto (D82)**: la notificación persistente (canal MIN: sin sonido ni icono) queda activada por defecto — es la única vía de tiempo real con la app cerrada sin FCM; migración única para quien venía de v0.7.0. Arreglado: AppRoot ya no arranca el FGS esquivando el D72.
 - Tests: **91/91** (4 apodos + 3 IceQueue + 1 acciones de notificación nuevos). APK 19,2 MB, misma firma (actualiza encima).
+
+## v0.8.0 — «Sin letra pequeña» (auditoría: 8 defectos reales, todos arreglados)
+
+Arreglo completo de la auditoría del 28-oct-2026 (leída contra el código, línea por línea):
+
+- **El historial al unirse a una sala (B1, D87)**: el cursor global dejaba ciega la sala nueva para siempre — ni mensajes ni nombre. Modo sala en `/sync` + cursores por sala + backfill al login. E2E 26/26 contra producción.
+- **Llamadas que conectan de verdad (D88)**: TURN gratis servido por `/turn` (creds en el servidor, nunca en el APK; OpenRelay free por defecto, ExpressTURN/Cloudflare al cambiar 3 env) + echoCancellation/AGC/NS. El NAT simétrico ya no mata la llamada.
+- **Señalización E2EE (B6, D89)**: offer/answer/ICE/nombre cifran con la clave de la sala — el servidor solo ve topic + callId aleatorio. Compat: un v0.7.x que llama a un v0.8.0 suena; para E2EE completo, actualizar ambos.
+- **Botones de llamada que desaparecían (B2)**: `kind`/`peerUid` ahora viajan en la lista de chats.
+- **401 sin app muerta (B4, D85)**: sale limpio sin borrar NADA local y el login explica qué pasó.
+- **Badge en vivo (B5)** + **scroll que no te arranca (U2, chip «↓ N nuevos»)** + **O(n²) → O(1) (U3)** + **fechas cacheadas (U4)**.
+- **Índices en messages (B3, D86)**: fin del jank con historial largo. Migración 5→6 REAL + test. Fuera el fallback destructivo (B7): jamás borrado silencioso.
+- **Notificaciones que nunca callen (D84)**: mensaje importante aunque sea viejo SIEMPRE avisa (1 por sala); el timbre revive tras actualizar la app (MY_PACKAGE_REPLACED).
+- versionCode 10, APK 19,2 MB, MISMA firma (37b6d4…) → actualiza encima. **Actualizar AMBOS teléfonos** (la señalización cifrada es entre iguales). 98/98 tests.
