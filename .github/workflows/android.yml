@@ -162,6 +162,17 @@ jobs:
       - name: Gradle (caché)
         uses: gradle/actions/setup-gradle@v4
 
+      # /dev/kvm existe en ubuntu-latest pero es root:kvm 0660 y el usuario
+      # del runner no está en el grupo → el emulador muere con «x86_64
+      # emulation currently requires hardware acceleration». Receta oficial
+      # de reactivecircus/android-emulator-runner: regla udev 0666.
+      - name: KVM accesible para el runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
       - name: Prueba instrumentada (emulador ATD gestionado)
         run: |
           # KVM del runner (virt anidada) — sanity check antes de quemar minutos
