@@ -77,6 +77,7 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
             "peer_no_key" -> "Esa persona aún no actualiza a la nueva versión (chats directos)"
             "bad_pk" -> "Clave del teléfono inválida"
             "too_many" -> "Lote demasiado grande; inténtalo de nuevo"
+            "rate_limited" -> "Demasiadas peticiones seguidas; espera un momento"
             "unauthorized" -> "Tu sesión expiró; inicia sesión de nuevo"
             "network" -> "Sin conexión o el servidor no responde"
             else -> if (http >= 500) "Error del servidor ($http)" else "Error $http: $code"
