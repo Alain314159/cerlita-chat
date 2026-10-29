@@ -2,6 +2,13 @@
 
 **Decisión D83** · 28 de octubre de 2026 · pipeline en `tools/avatares/`
 
+> **Nota D113 (v0.17.0)**: este documento describe el sistema D83 (bases raster +
+> capas vectoriales), que evolucionó: las capas son hoy sprites WebP y el 3D
+> (D92→D112) se ELIMINÓ por completo. El sistema vigente es **2D por capas o
+> foto** — ver D113 en `DECISIONES.md`. Este doc se conserva como referencia del
+> método (Style Bible, anclas, medir-antes-de-posicionar) para futuras tandas de
+> arte 2D.
+
 ---
 
 ## 0. Qué se logró

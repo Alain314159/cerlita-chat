@@ -442,3 +442,20 @@ cruzado Python↔Kotlin del tema, build/parse, límites); PushIngestTest Robolec
 7. **App**: `Avatar3DPreview` con estudio en vivo (fill cálido 30 klux + rim frío 20 klux vía `LightNode` DIRECTIONAL sobre la main por defecto, `fillLightNode = null`). GLB y rasters drop-in (mismos nombres de nodos y `av_*.webp`) → wire y E2EE intactos, perfiles guardados intactos.
 
 Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters determinismo Δ=0 y composites vs directo 0.04-0.09% px distintos; 91/91 tests. APK 39,8 MB (v0.14.0: 37,5), firma idéntica 37b6d4…, versionCode 18.
+
+## D113 — Fuera el 3D para siempre: el avatar es 2D (cerdita y koala con accesorios) o foto (v0.17.0)
+
+**Contexto.** Tras probar v0.16.0 (escultura v2) el usuario zanja doce versiones de idas y venidas (D92→D112): «elimina todos los avatares 3D — va a ser solo fotos, mejor los avatares pero en 2D: el koala y la cerdita a los que se les puedan poner accesorios». La lección de fondo: el 3D fue una escalada de coste (motor +20 MB de APK, pipeline Blender, QA VLM iterativo, bugs de convención de ejes) que NO compró identidad — la pareja ya TIENE personajes: la cerdita y el koala del dibujo original, que son el icono del launcher y el ADN visual de la app.
+
+**Decisión.** El sistema de avatares es y queda: **2D por capas** (bases raster + ropa/calzado/accesorios sprites, el `LayeredAvatar` de siempre) **o FOTO de perfil** (D76). Se ELIMINA todo el 3D:
+
+- Código: `ui/Avatar3D.kt`, `ui/Avatar3DPreview.kt`, `Avatar3DTest.kt`, el snapshot PixelCopy del editor.
+- Assets: los 7 GLB de `assets/models/` (16,7 MB) y la dependencia `io.github.sceneview` (Filament, 2 ABIs).
+- Herramientas: `tools/avatares3d/` (pipeline Blender completo) y los pipelines raster de renders IA de `tools/avatares/` (`build_avatar_3d.py`, `make_layers_3d.py`, `work3d/`) — el historial queda en el git (tag v0.16.0) si algún día se quiere excavar.
+- Docs: `AVATAR-3D-ANALISIS.md` y `AVATARES-3D.md` retirados (D99-D112 quedan como registro histórico aquí).
+
+**Lo que se CONSERVA intacto**: el catálogo (`AvatarCatalog`: 7 bases con colorways, 5 ropas + vestido/traje, calzado, 8 accesorios en slots excluyentes), los 41 rasters `av_*.webp` de drawable-nodpi (el arte D112 ya aprobado — en 2D se ven exactamente igual que en el chat de v0.16.0), el wire `{"v":1,"base","clothes","acc"}` SIN un byte de cambio (perfiles guardados siguen renderizando, degradación limpia de ids retirados), la foto E2EE, el editor con pestañas Cerdita|Koala (D96) y la vista previa VIVA 2D de D98 restaurada (`InteractiveAvatar`: respira, reacciona al vestirla, saluda al tocarla, gira con muelle) — el editor vuelve a ser barato, sin carga de GLB ni motor.
+
+**Resultado medible**: APK 39,8 → **19,5 MB** (−51 %), 122/122 tests (los 6 de mapeo GLB salen con su objeto), firma idéntica 37b6d4…, versionCode 19. Coste de mantenimiento del avatar: cero dependencias, cero pipeline externo.
+
+**Regla para el futuro**: no se vuelve al 3D. Si se quiere más variedad de avatar, el camino es ARTE 2D nuevo (bases/colorways/accesorios sobre las anclas existentes), que es barato, medible y no toca el binario.

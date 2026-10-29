@@ -1,9 +1,0 @@
-# Intermedios regenerables con build_avatar_3d.py + make_layers.py:
-# solo se versionan los renders fuente (raw_*.png), los prompts
-# (gen_avatar_3d.mjs) y las medidas (anchors/manifest json)
-out/
-out_koala/
-*.png
-!raw_*.png
-contact_*.png
-final_qa.png

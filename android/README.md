@@ -1,11 +1,11 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.16.0 «Bien
-hechos»**: avatares 3D de calidad — escultura v2 del generador Blender con
-puerta de calidad VLM en bucle (ojos grandes con brillo blanco, boca U
-alegre, materiales vinilo, ropa con grosor real, orejas caídas + interior,
-cola rizo), rasters regenerados y editor con estudio 3-luces en vivo (D112).
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.17.0 «Ligera»**:
+FUERA el 3D para siempre (D113) — el avatar es 2D (cerdita y koala por capas
+con ropa, calzado y accesorios) o foto de perfil. Mismos ids y wire: los
+perfiles guardados siguen igual. APK 39,8 → 19,5 MB (−51 %), sin SceneView,
+sin GLB, sin Filament. Vista previa viva 2D de D98 restaurada en el editor.
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
@@ -466,6 +466,34 @@ llamadas — el toolchain se reconstruye SIEMPRE en FOREGROUND
 `curl -C -`). El AndroidKeyStore no existe en Robolectric: KeyVault expone
 `sealFn/unsealFn` inyectables solo para tests (patrón H5), restauradas en
 @AfterClass.
+
+## v0.17.0 — «Ligera» (fuera el 3D para siempre, D113)
+
+El usuario probó v0.16.0 y cerró la cuestión: «elimina todos los avatares 3D —
+va a ser solo fotos, mejor los avatares pero en 2D: el koala y la cerdita a
+los que se les puedan poner accesorios». Doce versiones de escalada 3D
+(D92→D112) terminaron en simplificación radical — la pareja ya tiene
+personajes (la cerdita y el koala del dibujo original, el ADN visual de la
+app) y el 3D costaba 20 MB de APK + un pipeline Blender + QA VLM sin comprar
+identidad.
+
+- **Eliminado**: `Avatar3D.kt`/`Avatar3DPreview.kt`/`Avatar3DTest.kt`, los 7
+  GLB (16,7 MB), la dependencia `io.github.sceneview` (Filament), el snapshot
+  PixelCopy, `tools/avatares3d/` (pipeline Blender) y los pipelines raster de
+  renders IA (`build_avatar_3d.py`, `make_layers_3d.py`, `work3d/`), y los
+  docs `AVATAR-3D-ANALISIS.md`/`AVATARES-3D.md` (el historial vive en el tag
+  v0.16.0 y en D99-D112 de DECISIONES).
+- **Conservado INTACTO**: el catálogo (7 bases con colorways, 5 ropas +
+  vestido/traje, calzado, 8 accesorios en slots excluyentes), los 41 rasters
+  `av_*.webp` (arte D112 — en 2D idéntico a como se veía el chat), el wire
+  `{"v":1,"base","clothes","acc"}` sin un byte de cambio (perfiles guardados
+  siguen renderizando), la foto E2EE, pestañas Cerdita|Koala (D96).
+- **Restaurada** la vista previa VIVA 2D de D98 (`InteractiveAvatar`):
+  respira, reacciona al vestirla, saluda al tocarla (¡Hola!), gira con muelle
+  al arrastrarla, vuelta de 360° al cambiar de personaje.
+- **Resultado**: APK 39,8 → **19,5 MB (−51 %)**, 122/122 tests, firma
+  idéntica 37b6d4…, versionCode 19. Regla D113: no se vuelve al 3D; más
+  variedad = arte 2D nuevo sobre las anclas existentes.
 
 ## v0.16.0 — «Bien hechos» (escultura v2 + estudio en vivo, D112)
 

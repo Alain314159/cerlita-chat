@@ -45,12 +45,14 @@ data class ClothesItem(val id: String, val label: String, val res: Map<String, I
 data class AccItem(val id: String, val label: String, val slot: String, val res: Map<String, Int>)
 
 /**
- * Catálogo de avatares (D95: capas raster estilo 3D integrado).
+ * Catálogo de avatares — 2D por capas, definitivo (D113).
  *
- * Las bases son renders 3D suaves (vinilo, sin contorno) y desde v0.11 la
- * ropa y los accesorios también son RASTER (WebP con sombreado suave, sombra
- * de contacto y sin trazo de tinta) generados por tools/avatares/make_layers_3d.py
- * → integran con el estilo de las bases en vez de parecer stickers.
+ * Bases y capas son RASTER WebP (vinilo suave, sin contorno, sombra de
+ * contacto) comprometidos como arte en drawable-nodpi: el sistema 3D
+ * (SceneView/GLB/Blender) se ELIMINÓ en v0.17.0 y el pipeline histórico
+ * queda en el git (tag v0.16.0). El avatar de la app es ESTE: cerdita y
+ * koala en 2D con ropa, calzado y accesorios — y la foto de perfil real
+ * como alternativa de siempre (D76).
  *
  * COMPATIBILIDAD (D61/D96): los ids "pig", "koala", "tee_*", "dots",
  * "stripes", "bow", "flower", "party", "glasses" y "heart" se MANTIENEN.

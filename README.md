@@ -3,13 +3,13 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: app Android **v0.14.0 «Aviso de amor»** — chat E2EE completo (rooms + DM +
-adjuntos + llamadas + avatares 3D) con **3 capas de aviso**: timbre Realtime (D63),
-**canal ntfy con el sobre cifrado dentro del ping** (D104: el tema se deriva de la
-roomKey en el móvil, el servidor NUNCA lo conoce — el mensaje se VE sin round-trip
-y con Supabase caído; e2e 32/32 contra ntfy.sh REAL) y SyncWorker 15 min que drena
-la caché de 12 h. **Sin Firebase** (X-Firebase: no en todo publish). APK 37,5 MB
-firmado (misma firma 37b6d4…, actualiza encima). 121/121 tests.
+**Estado**: app Android **v0.17.0 «Ligera»** — chat E2EE completo (rooms + DM +
+adjuntos + llamadas + minijuego 2048 + **avatares 2D** — cerdita y koala por capas
+con accesorios, o foto: el 3D se eliminó en D113 y la APK bajó a la mitad) con
+**4 capas de aviso**: timbre Realtime (D63), **canal ntfy con el sobre cifrado
+dentro del ping** (D104), alarma exacta 4-6 min (D105) y SyncWorker 15 min.
+**Sin Firebase** (X-Firebase: no en todo publish). APK **19,5 MB** firmada
+(misma firma 37b6d4…, actualiza encima). 122/122 tests.
 
 ## Documentación
 
@@ -19,7 +19,7 @@ firmado (misma firma 37b6d4…, actualiza encima). 121/121 tests.
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.14.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares, cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.17.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares 2D (D113), cripto, build, tests |
 
 ## Estado (28-oct-2026)
 
