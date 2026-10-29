@@ -216,7 +216,7 @@ fun ChatScreen(app: ChatApp, roomId: String) {
         if (uri != null) {
             scope.launch {
                 val result = withContext(Dispatchers.IO) { readPickedFile(ctx, uri) }
-                if (result == null) { sendError = "No se pudo leer ese archivo (¿más de 20 MB?)"; return@launch }
+                if (result == null) { sendError = "No se pudo leer ese archivo (¿más de 8 MB?)"; return@launch }
                 val (name, mime, ext, bytes) = result
                 app.engine.sendAttachment(
                     roomId = roomId,
@@ -472,7 +472,7 @@ fun ChatScreen(app: ChatApp, roomId: String) {
             },
         )
         DropdownMenuItem(
-            text = { Text("Archivo (hasta 20 MB)") },
+            text = { Text("Archivo (hasta 8 MB)") },
             leadingIcon = { Icon(Icons.Default.AttachFile, null) },
             onClick = { showAttachMenu = false; pickFile.launch(arrayOf("*/*")) },
         )
@@ -529,13 +529,19 @@ fun ChatScreen(app: ChatApp, roomId: String) {
 /** Archivo escogido con SAF: nombre, mime, extensión y bytes claros. */
 private data class PickedFile(val name: String, val mime: String, val ext: String, val bytes: ByteArray)
 
-/** Lee el archivo escogido (SAF) con su nombre y mime; null si >20 MB o ilegible. */
+/**
+ * Lee el archivo escogido (SAF) con su nombre y mime. S0'/D109: comprueba el
+ * TAMAÑO por metadatos ANTES de leer un solo byte (antes un archivo enorme
+ * llenaba la RAM solo para descubrir que no cabía). null si >8 MB o ilegible.
+ */
 private suspend fun readPickedFile(
     ctx: android.content.Context,
     uri: android.net.Uri,
 ): PickedFile? {
     return withContext(Dispatchers.IO) {
         try {
+            val size = querySize(ctx, uri)
+            if (size > C.MAX_FILE) return@withContext null
             val name = queryName(ctx, uri)
             val mime = ctx.contentResolver.getType(uri) ?: "application/octet-stream"
             val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@withContext null
@@ -546,6 +552,14 @@ private suspend fun readPickedFile(
             null
         }
     }
+}
+
+private fun querySize(ctx: android.content.Context, uri: android.net.Uri): Long {
+    ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+        val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+        if (idx >= 0 && c.moveToFirst()) return c.getLong(idx)
+    }
+    return -1L
 }
 
 private fun queryName(ctx: android.content.Context, uri: android.net.Uri): String {

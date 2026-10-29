@@ -30,6 +30,7 @@ object WorkSync {
     private const val SYNC_PERIODIC = "sync_periodic"
     private const val OUTBOX = "outbox_once"
     private const val SYNC_ONCE = "sync_once"
+    private const val ATT_CLEAN = "attcache_clean"
 
     private fun net() = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -42,6 +43,14 @@ object WorkSync {
             PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(net())
                 .build(),
+        )
+        // S0'/D109 (B8/auditoría S4): los adjuntos descargados (dl-*) y los
+        // blobs de reintento (*.bin) crecen sin límite — limpieza diaria de
+        // lo que supera 30 días (lo que siga vivo se re-descarga al abrirlo).
+        WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(
+            ATT_CLEAN,
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<AttCacheCleanWorker>(1, TimeUnit.DAYS).build(),
         )
     }
 
@@ -99,5 +108,25 @@ class OutboxWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx
                 Result.retry()
             } else Result.failure() // se reintentará al próximo envío o apertura
         }
+    }
+}
+
+/**
+ * S0'/D109 (B8 + auditoría S4): attcache (descargas descifradas dl-* y blobs
+ * de reintento *.bin) crecía INDEFINIDAMENTE — en un teléfono compartiendo
+ * fotos/video durante meses, gigabytes. Diario: borra lo de +30 días.
+ */
+class AttCacheCleanWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        val app = applicationContext as ChatApp
+        try {
+            val dir = java.io.File(app.filesDir, "attcache")
+            val cutoff = System.currentTimeMillis() - 30L * 24 * 3600 * 1000
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.lastModified() < cutoff) f.delete()
+            }
+        } catch (_: Exception) {
+        }
+        return Result.success()
     }
 }

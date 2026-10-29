@@ -49,9 +49,13 @@ object C {
     const val CALL_DECLINED = 2
     const val CALL_CANCELLED = 3   // colgó antes de que contestaran
 
-    // ---- Adjuntos E2EE (v0.7.0, D76) ----
+    // ---- Adjuntos E2EE (v0.7.0, D76 · S0'/D109: 8 MB) ----
     const val ATTACH_BUCKET = "attachments"
-    const val MAX_FILE = 20 * 1024 * 1024  // 20 MB cifrado (bucket: 25)
+    /** Tope de adjunto. Bajo de 20 a 8 MB (D109): pico de RAM al cifrar queda
+     *  en ~24 MB transitorios (aceptable en gamas bajas de 2-3 GB) y las
+     *  subidas larguísimas por ETECSA dejan de ser la norma. El streaming
+     *  real de la SUBIDA (desde disco, sin RAM) sí está: storageUploadFile. */
+    const val MAX_FILE = 8 * 1024 * 1024  // 8 MB cifrado (bucket: 25)
     const val MAX_RECORD_MS = 5 * 60 * 1000L
 
     // ---- Canal ntfy (D104) ----

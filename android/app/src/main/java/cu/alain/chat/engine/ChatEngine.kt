@@ -850,7 +850,7 @@ class ChatEngine(
             ?: return Result.failure(IllegalStateException("esta sala no tiene clave en este teléfono"))
         if (bytes.isEmpty()) return Result.failure(IllegalArgumentException("archivo vacío"))
         if (bytes.size > C.MAX_FILE) {
-            return Result.failure(IllegalArgumentException("El archivo supera 20 MB"))
+            return Result.failure(IllegalArgumentException("El archivo supera 8 MB"))
         }
 
         val msgId = Crypto.uuid7()
@@ -871,10 +871,14 @@ class ChatEngine(
             Message(msgId, roomId, s.uname, mine = true, body = envelope, ts = ts,
                 state = C.ST_SENDING, senderUid = s.uid)
         )
+        // 3. S0'/D109 (B8): el blob cifrado va a DISCO ANTES de subir — si el
+        //    proceso muere a mitad de subida, recoverOrphanUploads marca la
+        //    burbuja FALLIDA y el botón reintentar tiene el material entero.
+        //    La subida sale del archivo EN STREAMING (nunca entera en RAM).
+        val cache = attCacheFile(msgId)
         try {
-            // 3. subir el blob cifrado directo a Storage (capability del roomId)
-            api.storageUpload(path, blob) { f -> onProgress(msgId, f) }
-            attCacheFile(msgId).writeBytes(blob) // para reintentos
+            cache.writeBytes(blob)
+            api.storageUploadFile(path, cache) { f -> onProgress(msgId, f) }
         } catch (e: Exception) {
             db.msgDao().setState(msgId, C.ST_FAILED)
             return Result.failure(e)
@@ -916,7 +920,7 @@ class ChatEngine(
             ?: return Result.failure(IllegalStateException("esta sala no tiene clave en este teléfono"))
         return try {
             db.msgDao().setState(msgId, C.ST_SENDING)
-            api.storageUpload(att.path, cache.readBytes(), onProgress)
+            api.storageUploadFile(att.path, cache, onProgress) // D109: streaming desde disco
             val ts = System.currentTimeMillis()
             val convKey = Crypto.convKey(key.first, att.path.substringBefore('/'))
             val mk = Crypto.msgKey(convKey, msgId)

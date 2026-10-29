@@ -435,27 +435,28 @@ class Api(private val baseUrl: () -> String) {
         .build()
 
     /**
-     * Sube bytes CIFRADOS directo a Storage con la anon key. La política RLS
-     * del bucket solo admite <roomId>/<uuid>.<ext>: conocer el roomId YA es la
-     * capability de la sala (D76). onProgress informa 0f..1f.
+     * S0'/D109 (B8): subida EN STREAMING desde archivo — el cuerpo sale del
+     * disco por bloques de 32 KB, nunca entero en RAM. La burbuja de progreso
+     * sigue viva con onProgress.
      */
-    suspend fun storageUpload(path: String, bytes: ByteArray, onProgress: (Float) -> Unit = {}) {
+    suspend fun storageUploadFile(path: String, file: java.io.File, onProgress: (Float) -> Unit = {}) {
         withContext(Dispatchers.IO) {
             val root = base.substringBefore("/functions/v1")
-            val total = bytes.size.coerceAtLeast(1)
+            val total = file.length().coerceAtLeast(1)
             val body = object : okhttp3.RequestBody() {
                 override fun contentType() = "application/octet-stream".toMediaType()
-                override fun contentLength() = bytes.size.toLong()
+                override fun contentLength() = file.length()
                 override fun writeTo(sink: BufferedSink) {
-                    val src = okio.Buffer().write(bytes)
-                    val buf = ByteArray(32 * 1024)
-                    var sent = 0L
-                    while (true) {
-                        val n = src.read(buf)
-                        if (n == -1) break
-                        sink.write(buf, 0, n)
-                        sent += n
-                        onProgress((sent.toFloat() / total).coerceIn(0f, 1f))
+                    java.io.FileInputStream(file).use { src ->
+                        val buf = ByteArray(32 * 1024)
+                        var sent = 0L
+                        while (true) {
+                            val n = src.read(buf)
+                            if (n == -1) break
+                            sink.write(buf, 0, n)
+                            sent += n
+                            onProgress((sent.toFloat() / total).coerceIn(0f, 1f))
+                        }
                     }
                 }
             }
