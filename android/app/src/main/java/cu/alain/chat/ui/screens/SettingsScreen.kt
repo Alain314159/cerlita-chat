@@ -60,6 +60,7 @@ import cu.alain.chat.export.HistoryImport
 import cu.alain.chat.notify.Doorbell
 import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
+import cu.alain.chat.notify.NtfyChannel
 import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.ui.theme.Themes
 import kotlinx.coroutines.launch
@@ -291,6 +292,62 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                         MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.error,
                 )
+
+                // ── canal de respaldo ntfy (D104) ──
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    when {
+                        NtfyChannel.lastOk -> {
+                            val s = NtfyChannel.secondsSinceOk()
+                            "● Canal de respaldo (ntfy): OK" +
+                                (if (s in 0..600) " hace ${s} s" else "") +
+                                " — lleva el mensaje cifrado y no pasa por el chat del servidor"
+                        }
+                        NtfyChannel.lastErr != null ->
+                            "● Canal de respaldo (ntfy): sin conexión ahora (los avisos siguen por el timbre)"
+                        else -> "● Canal de respaldo (ntfy): se verificará en el primer sondeo"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (NtfyChannel.lastOk) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                var ntfyUrl by remember { mutableStateOf(app.prefs.ntfyUrl) }
+                var ntfyTest by remember { mutableStateOf<String?>(null) }
+                OutlinedTextField(
+                    value = ntfyUrl,
+                    onValueChange = { ntfyUrl = it; ntfyTest = null },
+                    label = { Text("Servidor de avisos (avanzado)") },
+                    supportingText = {
+                        Text("ntfy.sh por defecto. Cámbialo solo si los avisos no llegan (otro servidor ntfy, sin barra final).")
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = {
+                        app.prefs.ntfyUrl = ntfyUrl
+                        scope.launch {
+                            ntfyTest = "Probando…"
+                            val t = "cerlita-prueba-" + java.util.UUID.randomUUID().toString().take(13)
+                            val t0 = System.currentTimeMillis()
+                            val pub = app.ntfy.publish(t, "{\"v\":1,\"r\":\"prueba\"}")
+                            val evs = if (pub) app.ntfy.poll(
+                                listOf(t), (System.currentTimeMillis() / 1000 - 60).toInt()
+                            ) else null
+                            ntfyTest = if (evs != null && evs.isNotEmpty())
+                                "OK (${(System.currentTimeMillis() - t0) / 1000.0}s)"
+                            else "No responde — ¿es un servidor ntfy?"
+                        }
+                    }) { Text("Guardar y probar") }
+                    if (ntfyTest != null) {
+                        Text(
+                            ntfyTest!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (ntfyTest!!.startsWith("OK")) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!notifOk) {

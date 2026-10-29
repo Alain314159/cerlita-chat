@@ -8,9 +8,11 @@ import cu.alain.chat.engine.AppState
 import cu.alain.chat.engine.ChatEngine
 import cu.alain.chat.engine.NewMsg
 import cu.alain.chat.net.Api
+import cu.alain.chat.net.Ntfy
 import cu.alain.chat.notify.Doorbell
 import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
+import cu.alain.chat.notify.NtfyChannel
 import cu.alain.chat.notify.RealtimeDoorbell
 import cu.alain.chat.vault.SessionStore
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +47,11 @@ class ChatApp : Application(), Configuration.Provider {
     lateinit var store: SessionStore
         private set
     lateinit var engine: ChatEngine
+        private set
+
+    /** D104: cliente del canal ntfy (publish del emisor + poll del receptor).
+     *  Base URL configurable (self-host/alterno si ETECSA bloquea ntfy.sh). */
+    lateinit var ntfy: Ntfy
         private set
 
     /** true entre onStart/onStop de la actividad: silencia notificaciones en foreground. */
@@ -97,6 +104,7 @@ class ChatApp : Application(), Configuration.Provider {
         prefs = Prefs(this)
         themeFlow.value = prefs.theme
         api = Api { prefs.baseUrl }
+        ntfy = Ntfy { prefs.ntfyUrl }
         db = AppDatabase.build(this)
         store = SessionStore(this)
 
@@ -107,6 +115,7 @@ class ChatApp : Application(), Configuration.Provider {
             avatarsDir = java.io.File(filesDir, "avatars"), // fotos de perfil (D61)
             onNewMessages = { msgs: List<NewMsg> -> announceIncoming(msgs) },
             onSessionChanged = { syncDoorbell() }, // D72: login/logout enciende/apaga el timbre
+            ntfy = ntfy, // D104: ping tras el ack del outbox
         )
 
         nicknames.value = prefs.allNicknames() // D78: apodos locales
@@ -160,6 +169,13 @@ class ChatApp : Application(), Configuration.Provider {
         } else {
             stopAppDoorbell()
         }
+        // D104: el poll ntfy vive mientras viva el timbre (FGS o in-app); con la
+        // app cerrada sin FGS no hay proceso que poll-e — lo cubre el SyncWorker.
+        if (hasSession && (prefs.instantBg || inForeground)) {
+            NtfyChannel.ensure(this)
+        } else {
+            NtfyChannel.stop()
+        }
     }
 
     private fun startAppDoorbell() {
@@ -204,10 +220,11 @@ class ChatApp : Application(), Configuration.Provider {
 
     /**
      * ÚNICA política de aviso (D63): la comparten timbre Realtime, polling
-     * de primer plano, worker de 15 min y drenaje de pendientes. Decide el
+     * de primer plano, worker de 15 min, drenaje de pendientes y el canal
+     * ntfy (D104: filas ingeridas por push — texto ya descifrado). Decide el
      * Notifier: ajenos + recientes + no en la sala abierta en foreground.
      */
-    private fun announceIncoming(msgs: List<NewMsg>) {
+    fun announceIncoming(msgs: List<NewMsg>) {
         val s = store.session ?: return
         val fg = inForeground
         val cur = currentRoomId
@@ -231,6 +248,15 @@ class Prefs(ctx: Context) {
     var baseUrl: String
         get() = sp.getString("base_url", cu.alain.chat.core.C.DEFAULT_BASE)!!
         set(v) = sp.edit().putString("base_url", v).apply()
+
+    /** D104: servidor de avisos ntfy. Default ntfy.sh; si ETECSA lo bloquea,
+     *  se cambia aquí (self-host o alterno) sin tocar la app. Sin barra final. */
+    var ntfyUrl: String
+        get() = sp.getString("ntfy_url", cu.alain.chat.core.C.NTFY_DEFAULT)!!
+        set(v) {
+            val t = v.trim().trimEnd('/')
+            sp.edit().putString("ntfy_url", if (t.isEmpty()) cu.alain.chat.core.C.NTFY_DEFAULT else t).apply()
+        }
 
     /** ID de dispositivo estable por instalación (lo pide el backend en auth). */
     val deviceId: String

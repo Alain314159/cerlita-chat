@@ -70,8 +70,13 @@ object WorkSync {
 class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result {
         val app = applicationContext as ChatApp
+        // D104: drain ntfy primero (caché de 12 h: pings que llegaron mientras
+        // no había proceso) — el ping puede traer el sobre cifrado: se ingiere
+        // y notifica SIN abrir la app. Best-effort: si ntfy falla, el /sync de
+        // abajo trae lo mismo por la vía clásica.
+        try { cu.alain.chat.notify.NtfyChannel.pollOnce(app, "worker") } catch (_: Exception) {}
         // Las notificaciones salen del callback del engine (misma política que
-        // el timbre Realtime, D63) — aquí solo se sincroniza.
+        // timbre Realtime, D63) — aquí solo se sincroniza.
         app.engine.syncOnce()
         return Result.success() // el periódico nunca se rinde por red: reintenta en 15 min
     }
