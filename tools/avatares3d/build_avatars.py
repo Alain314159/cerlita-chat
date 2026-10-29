@@ -49,6 +49,8 @@ BELT_C   = (0xC2/255, 0x7A/255, 0x92/255)
 PARTY_C  = (0xF0/255, 0x75/255, 0x8D/255)
 CAP_C    = (0x6F/255, 0x9E/255, 0xD8/255)
 SCARF_C  = (0xE0/255, 0x8A/255, 0x6A/255)
+SOLE_D   = (0x5A/255, 0x46/255, 0x44/255)   # suelas oscuras que "apoyan" (D112)
+TEE_FIT  = 1.16                              # holgura de camiseta (D112; era 1.135 = pegada)
 
 FAMS = {
     "pig": {
@@ -76,10 +78,12 @@ A = {
     "head_c":  (0.0, 0.02, 0.86), "head_r": 0.300,
     "torso_c": (0.0, 0.0, 0.40), "torso_s": (0.255, 0.215, 0.300),
     "sh_z": 0.575,
-    "arm_head": (0.185, 0.0, 0.575), "arm_tail": (0.315, 0.02, 0.40),
-    "arm_r": 0.072, "paw_r": 0.084,
-    "feet_c": (0.115, 0.045, 0.072), "feet_s": (0.085, 0.150, 0.072),
-    "eye_x": 0.112, "eye_z": 0.915, "eye_r": 0.034,
+    # (D112) brazos más cortos y regordetes + patas grandes
+    "arm_head": (0.185, 0.0, 0.575), "arm_tail": (0.298, 0.03, 0.428),
+    "arm_r": 0.076, "paw_r": 0.088,
+    "feet_c": (0.115, 0.048, 0.076), "feet_s": (0.094, 0.168, 0.078),
+    # (D112) ojos GRANDES (0.034 -> 0.047) y un poco más bajos
+    "eye_x": 0.113, "eye_z": 0.888, "eye_r": 0.047,
 }
 
 # ─────────────────────────── helpers de escena ─────────────────────────────────
@@ -234,6 +238,36 @@ def ellipsoid_surface(center, scale, dir_vec, offset=0.0):
     return Vector(center) + d * (1.0 / k + offset)
 
 
+def darken(rgb, f=0.82):
+    """(D112) Un tono más abajo del mismo color: cuellos/puños/dobladillos."""
+    return tuple(c * f for c in rgb)
+
+
+def solidify(obj, thickness=0.014):
+    """(D112) Grosor de tela REAL: el borde del dobladillo muestra la pared de
+    la prenda. Antes las prendas eran láminas sin grosor (leían 'pintadas').
+    Se aplica tras transform_apply y ANTES de posicionar/parentar."""
+    m = obj.modifiers.new("Solid", "SOLIDIFY")
+    m.thickness = thickness
+    m.offset = 0.0
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier="Solid")   # 4.2: kwarg "modifier" (no "modifier_name")
+    return obj
+
+
+def smile_chain(name, pts, r, mat, bone="head"):
+    """(D112 it.5b) Cadena de cilindros + esferas de unión a lo largo de puntos:
+    la boca gato ω. Sin operadores de contexto — bpy.ops.object.convert falla
+    headless ('poll() failed, context is incorrect'). Las esferas en las
+    juntas redondean los quiebres → lee como una curva suave."""
+    out = []
+    for i, p in enumerate(pts):
+        out.append(sphere(name + "_j%d" % i, p, r, mat=mat, bone=bone, seg=16, ring=10))
+    for i in range(len(pts) - 1):
+        out.append(cyl_between(name + "_s%d" % i, pts[i], pts[i + 1], r, mat=mat, bone=bone, seg=12))
+    return out
+
+
 # ─────────────────────────── el cuerpo por familia ─────────────────────────────
 
 def build_armature():
@@ -299,78 +333,111 @@ def turn_around():
 
 
 def build_body(fam, mats):
-    """Cuerpo chibi. Devuelve (lista de objetos, dict anclas de familia)."""
+    """Cuerpo chibi (D112): vinilo brillante, cara EXPRESIVA (ojos grandes con
+    brillo blanco, sonrisa abierta, rubor bajo), cuello, orejas con interior,
+    cola en espiral y extremidades regordetas. Antes: cara vacía, cuerpo
+    'muñeco de nieve'. Devuelve lista de objetos."""
     objs = []
     hc = Vector(A["head_c"]); hr = A["head_r"]
     tc = Vector(A["torso_c"]); ts = Vector(A["torso_s"])
     m_body, m_earin = mats["body"], mats["ear_in"]
 
     # torso pera + cadera (dos elipsoides solapados = silueta suave)
-    objs.append(sphere("Body", tc, 1.0, scale=ts, mat=m_body, bone="spine"))
+    objs.append(sphere("Body", tc, 1.0, scale=ts, mat=m_body, bone="spine", seg=40, ring=20))
     objs.append(sphere("Hips", (0, 0, 0.20), 1.0, scale=(ts.x * 0.94, ts.y * 0.94, 0.16),
-                       mat=m_body, bone="spine"))
+                       mat=m_body, bone="spine", seg=40, ring=20))
+    # (D112) cuello: separa la cabeza de los hombros (leía 'muñeco de nieve')
+    objs.append(cyl("Neck", (0, 0, 0.595), 0.098, 0.098, 0.16, mat=m_body, bone="head", seg=28))
     # cabeza
-    objs.append(sphere("Head", hc, hr, mat=m_body, bone="head"))
+    objs.append(sphere("Head", hc, hr, mat=m_body, bone="head", seg=40, ring=20))
 
     if fam == "pig":
-        # orejas caídas: elipsoides inclinados a los lados-arriba
+        # (D112 it.2 pig) orejas CAÍDAS: cuelgan del lado-superior de la cabeza
+        # inclinadas 42° hacia afuera (leían 'erguidas'). + interior rosa visible.
         for sx, nm in ((1, "EarL"), (-1, "EarR")):
-            e = sphere(nm, (sx * 0.225, 0.0, 1.06), 0.105,
-                       scale=(0.62, 0.30, 1.0), mat=m_body, bone="ear.L" if sx > 0 else "ear.R",
-                       rot=(math.radians(24), 0, math.radians(-sx * 16)))
-        # hocico (bien fuera, como la nariz del koala)
-        spos = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.90, -0.06), 0.010)
+            rot = (math.radians(8), math.radians(sx * 42), math.radians(-sx * 10))
+            ec = (sx * 0.248, 0.01, 1.03)
+            objs.append(sphere(nm, ec, 0.108, scale=(0.52, 0.30, 1.00), mat=m_body,
+                               bone="ear.L" if sx > 0 else "ear.R", rot=rot, seg=36, ring=18))
+            objs.append(sphere(nm + "In", (ec[0], ec[1] + 0.034, ec[2] - 0.018), 0.062,
+                               scale=(0.46, 0.24, 0.72), mat=m_earin,
+                               bone="ear.L" if sx > 0 else "ear.R", rot=rot, seg=28, ring=14))
+        # hocico más presente
+        spos = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.90, -0.06), 0.012)
         objs.append(sphere("Snout", spos, 1.0,
-                           scale=(0.085, 0.058, 0.065), mat=mats["snout"], bone="head"))
+                           scale=(0.094, 0.066, 0.072), mat=mats["snout"], bone="head",
+                           seg=32, ring=16))
         for sx in (1, -1):
-            sp = Vector(spos) + Vector((sx * 0.032, 0.052, 0.0))
-            objs.append(sphere("Nostril" + ("L" if sx > 0 else "R"), sp, 0.012,
-                               mat=mats["ink"], bone="head"))
-        # colita: espiral aplastada (toro parcial no—toro pequeño pegado al cuerpo)
-        objs.append(torus("Tail", (0, -ts.y * 0.92, 0.34), 0.035, 0.013,
-                          mat=m_body, bone="spine", rot=(math.radians(90), 0, 0)))
+            sp = Vector(spos) + Vector((sx * 0.036, 0.062, -0.004))
+            objs.append(sphere("Nostril" + ("L" if sx > 0 else "R"), sp, 0.013,
+                               mat=mats["ink"], bone="head", seg=16, ring=8))
+        # (D112 it.2 pig) colita: 4 anillos MUY juntos (paso 0.024, tubo 0.0105)
+        # = rampa continua → lee rizo/espiral (3 anillos separados leía 'C/gancho')
+        ty = -ts.y * 0.88
+        for i, (maj, zz) in enumerate(((0.048, 0.320), (0.037, 0.344), (0.028, 0.368),
+                                       (0.021, 0.392))):
+            objs.append(torus("Tail%d" % i, (0, ty, zz), maj, 0.0105, mat=m_body, bone="spine",
+                              rot=(math.radians(90), 0, 0)))
     else:
         # orejas koala: GRANDES, arriba a los lados + disco interior
         for sx, bn, nm in ((1, "ear.L", "EarL"), (-1, "ear.R", "EarR")):
-            objs.append(sphere(nm, (sx * 0.255, 0.01, 1.055), 0.125,
-                               scale=(0.92, 0.55, 1.0), mat=m_body, bone=bn))
-            objs.append(sphere(nm + "In", (sx * 0.262, 0.062, 1.05), 0.062,
-                               scale=(0.95, 0.42, 0.95), mat=m_earin, bone=bn, seg=24, ring=12))
-        # nariz grande vertical (bien AFUERA de la cabeza)
-        npos = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.94, 0.10), 0.012)
+            objs.append(sphere(nm, (sx * 0.258, 0.012, 1.062), 0.132,
+                               scale=(0.92, 0.55, 1.0), mat=m_body, bone=bn, seg=36, ring=18))
+            objs.append(sphere(nm + "In", (sx * 0.268, 0.070, 1.058), 0.068,
+                               scale=(0.95, 0.42, 0.95), mat=m_earin, bone=bn, seg=28, ring=14))
+        # (D112) nariz grande vertical BRILLANTE (rough 0.12) + brillo especular
+        # blanco (la 'nariz húmeda' del koala)
+        npos = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.94, 0.10), 0.014)
         objs.append(sphere("Nose", npos, 1.0,
-                           scale=(0.062, 0.058, 0.096), mat=mats["ink"], bone="head"))
+                           scale=(0.068, 0.064, 0.104), mat=mats["ink"], bone="head",
+                           seg=32, ring=16))
+        objs.append(sphere("NoseHi", Vector(npos) + Vector((-0.018, 0.050, 0.030)), 0.012,
+                           mat=mats["hi"], bone="head", seg=20, ring=10))
 
-    # ojos: esferas oscuras SOBRE la superficie de la cara
+    # (D112) ojos: GRANDES (0.034→0.047), brillantes (rough 0.12) + punto de
+    # luz blanco arriba-afuera: EL gesto kawaii nº1 (antes: perdigones apagados)
     for sx in (1, -1):
-        p = ellipsoid_surface(hc, (hr, hr, hr), (sx * 0.42, 0.95, 0.12), -0.004)
+        p = ellipsoid_surface(hc, (hr, hr, hr), (sx * 0.40, 0.96, 0.10), -0.004)
         objs.append(sphere("Eye" + ("L" if sx > 0 else "R"), p,
-                           A["eye_r"] + 0.003, scale=(1.0, 0.62, 1.25), mat=mats["ink"], bone="head"))
-    # rubor: discos empotrados mirando hacia afuera (rotación pasada al helper)
+                           A["eye_r"], scale=(1.0, 0.66, 1.30), mat=mats["ink"], bone="head",
+                           seg=32, ring=16))
+        objs.append(sphere("EyeHi" + ("L" if sx > 0 else "R"),
+                           Vector(p) + Vector((sx * 0.015, 0.030, 0.022)), 0.0115,
+                           mat=mats["hi"], bone="head", seg=20, ring=10))
+    # rubor: más grande y más bajo (junto a la sonrisa) — it.5: aún mayor
     for sx in (1, -1):
-        n = (Vector((sx * 0.66, 0.50, -0.42))).normalized()
+        n = (Vector((sx * 0.62, 0.52, -0.30))).normalized()
         p = ellipsoid_surface(hc, (hr, hr, hr), n, -0.006)
-        objs.append(sphere("Blush" + ("L" if sx > 0 else "R"), p, 0.052,
-                           scale=(1.0, 0.35, 0.78), mat=mats["blush"], bone="head",
-                           seg=20, ring=10, rot=n.to_track_quat("Y", "X").to_euler()))
-    # sonrisa: elipsoide plano sobre la superficie, bajo el hocico/nariz
-    mpos = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.93, -0.34), -0.004)
-    objs.append(sphere("Mouth", mpos, 0.032,
-                       scale=(1.25, 0.30, 0.42), mat=mats["ink"], bone="head", seg=20, ring=10))
+        objs.append(sphere("Blush" + ("L" if sx > 0 else "R"), p, 0.066,
+                           scale=(1.0, 0.42, 0.82), mat=mats["blush"], bone="head",
+                           seg=28, ring=14, rot=n.to_track_quat("Y", "X").to_euler()))
+    # (D112 it.6) BOCA U ANCHA Y ATREVIDA: la ω sutil (±0.012) leía 'gusanito'
+    # (VLM it.6). Receta del propio VLM: 'ω o U ancha'. La U con amplitud
+    # 0.032 (valle abajo, puntas arriba) y tubo 30% más grueso LEE de lejos.
+    mzc = hc.z - 0.117
+    mpts = []
+    for i in range(9):
+        x = -0.068 + 0.136 * i / 8
+        dz = -0.032 * (1 - (x / 0.068) ** 2)      # U: centro abajo, puntas arriba
+        z = mzc + dz
+        f = 1 - (x / hr) ** 2 - ((z - hc.z) / hr) ** 2
+        y = hc.y + hr * math.sqrt(max(0.02, f)) + 0.008
+        mpts.append(Vector((x, y, z)))
+    objs.extend(smile_chain("Mouth", mpts, 0.0125, mats["ink"]))
 
     # brazos (cápsulas hombro->pata) + patas
     for sx, bn, nm, pn in ((1, "arm.L", "ArmL", "PawL"), (-1, "arm.R", "ArmR", "PawR")):
         objs.append(capsule(nm, (sx * A["arm_head"][0], A["arm_head"][1], A["arm_head"][2]),
                             (sx * A["arm_tail"][0], A["arm_tail"][1], A["arm_tail"][2]),
-                            A["arm_r"], mat=m_body, bone=bn))
-        objs.append(sphere(pn, (sx * A["arm_tail"][0], A["arm_tail"][1] + 0.01, A["arm_tail"][2]),
-                           A["paw_r"] if fam == "koala" else A["paw_r"] * 0.92,
-                           mat=m_body, bone=bn))
+                            A["arm_r"], mat=m_body, bone=bn, seg=32))
+        objs.append(sphere(pn, (sx * A["arm_tail"][0], A["arm_tail"][1] + 0.012, A["arm_tail"][2]),
+                           A["paw_r"] if fam == "koala" else A["paw_r"] * 0.93,
+                           mat=m_body, bone=bn, seg=24, ring=12))
 
     # pies
     for sx, bn, nm in ((1, "foot.L", "FootL"), (-1, "foot.R", "FootR")):
         objs.append(sphere(nm, (sx * A["feet_c"][0], A["feet_c"][1], A["feet_c"][2]),
-                           1.0, scale=A["feet_s"], mat=m_body, bone=bn))
+                           1.0, scale=A["feet_s"], mat=m_body, bone=bn, seg=32, ring=16))
 
     return objs
 
@@ -387,8 +454,8 @@ def family_anchors(fam):
         "shoulder": Vector((A["arm_head"][0], A["arm_head"][1], A["arm_head"][2])),
         "arm_tail": Vector((A["arm_tail"][0], A["arm_tail"][1], A["arm_tail"][2])),
         "eye_y": hc.y + hr * 0.74, "eye_z": A["eye_z"], "eye_x": A["eye_x"],
-        "eye_pos": {sx: ellipsoid_surface(hc, (hr, hr, hr), (sx * 0.42, 0.95, 0.12), 0.0)
-                     for sx in (1, -1)},
+        "eye_pos": {sx: ellipsoid_surface(hc, (hr, hr, hr), (sx * 0.40, 0.96, 0.10), 0.0)
+                     for sx in (1, -1)},   # (D112) = posición real de los ojos nuevos
         "head_top": Vector((0, hc.y * 0.35, hc.z + hr * 0.97)),
         "ear_out": Vector((0.30, 0.03, 0.97)),
         "feet": [Vector((A["feet_c"][0], A["feet_c"][1], A["feet_c"][2])),
@@ -396,11 +463,11 @@ def family_anchors(fam):
         "neck_z": 0.60,
     }
     if fam == "pig":
-        base["hat_pos"] = Vector((0, 0.02, 1.14))       # entre orejas caídas
-        base["ear_out"] = Vector((0.27, 0.02, 1.10))
+        base["hat_pos"] = Vector((0, 0.02, 1.15))       # entre orejas caídas
+        base["ear_out"] = Vector((0.275, 0.02, 1.115))
     else:
-        base["hat_pos"] = Vector((0, 0.0, 1.20))        # sobre orejas grandes
-        base["ear_out"] = Vector((0.33, 0.05, 1.02))
+        base["hat_pos"] = Vector((0, 0.0, 1.21))        # sobre orejas grandes
+        base["ear_out"] = Vector((0.34, 0.055, 1.03))
     return base
 
 
@@ -438,19 +505,27 @@ def cyl_between(name, a, b, r, mat=None, bone=None, seg=20):
 
 
 def build_tee(gid, color, fam, anc, dots=False, stripes=False, base_color=None):
-    """Camiseta: casquete elipsoidal (lathe) + dobladillo + mangas en los brazos."""
+    """Camiseta (D112): holgada (TEE_FIT 1.16), con GROSOR de tela (solidify),
+    cuello acanalado un tono abajo y puños en las mangas. Antes: lámina
+    1.135 sin grosor pegada al cuerpo (leía 'ropa pintada')."""
     tc, ts = anc["tc"], anc["ts"]
     m = make_mat("M_" + gid, base_color or color)
+    mc = make_mat("M_collar_" + gid, darken(base_color or color))  # cuello/puños
     objs = []
-    shell = lathe("tee_shell_" + gid, ellip_profile(tc.z, ts.z, ts.x, 0.305, 0.70, 1.135),
+    shell = lathe("tee_shell_" + gid, ellip_profile(tc.z, ts.z, ts.x, 0.305, 0.70, TEE_FIT),
                   mat=m, bone="spine")
     shell.scale = (1.0, ts.y / ts.x, 1.0)
     bpy.ops.object.transform_apply(scale=True)
+    solidify(shell, 0.014)
     objs.append(shell)
     # dobladillo que tapa el borde abierto inferior
-    hem_r = ts.x * 1.135 * math.sqrt(1 - ((0.305 - tc.z) / ts.z) ** 2)
+    hem_r = ts.x * TEE_FIT * math.sqrt(1 - ((0.305 - tc.z) / ts.z) ** 2)
     objs.append(torus("tee_hem_" + gid, (0, 0, 0.307), hem_r, 0.020, mat=m, bone="spine",
                       scale=(1.0, ts.y / ts.x, 1.35)))
+    # (D112) cuello acanalado: aro en el borde superior, un tono más oscuro
+    col_r = ts.x * TEE_FIT * math.sqrt(1 - ((0.665 - tc.z) / ts.z) ** 2)
+    objs.append(torus("tee_collar_" + gid, (0, 0, 0.667), col_r, 0.018, mat=mc, bone="spine",
+                      scale=(1.0, ts.y / ts.x, 1.30)))
     if dots:
         md = make_mat("M_dotsdot", TEE_PINK)
         n, ga = 26, math.pi * (3 - math.sqrt(5))
@@ -459,23 +534,26 @@ def build_tee(gid, color, fam, anc, dots=False, stripes=False, base_color=None):
             rad = math.sqrt(max(0, 1 - y * y))
             th = ga * i
             d = Vector((math.cos(th) * rad, math.sin(th) * rad * 0.9 + 0.25, y * 0.9)).normalized()
-            p = ellipsoid_surface(tc, (ts.x * 1.135, ts.y * 1.135, ts.z * 1.135), d, 0.008)
+            p = ellipsoid_surface(tc, (ts.x * TEE_FIT, ts.y * TEE_FIT, ts.z * TEE_FIT), d, 0.008)
             if p.z > 0.315 and p.z < 0.66:
-                objs.append(sphere("dot%d" % i, p, 0.021, mat=md, bone="spine", seg=12, ring=8))
+                objs.append(sphere("dot%d" % i, p, 0.023, mat=md, bone="spine", seg=16, ring=10))
     if stripes:
         mb = make_mat("M_band", STR_BAND)
         for z in (0.335, 0.425, 0.515):
             f = (z - tc.z) / ts.z
-            rr = math.sqrt(max(0.0, 1 - f * f)) * 1.135
-            objs.append(torus("band%d" % int(z * 100), (0, 0, z), 0.10, 0.026, mat=mb,
+            rr = math.sqrt(max(0.0, 1 - f * f)) * TEE_FIT
+            objs.append(torus("band%d" % int(z * 100), (0, 0, z), 0.10, 0.028, mat=mb,
                               bone="spine", scale=(ts.x * rr / 0.10, ts.y * rr / 0.10, 1.15)))
-    # mangas unidas a los huesos de los brazos (giran con el saludo)
+    # mangas unidas a los huesos de los brazos (giran con el saludo) — más
+    # cortas (71% del brazo) + puño acanalado al final de la manga
     for sx, bn in ((1, "arm.L"), (-1, "arm.R")):
         a = Vector((sx * anc["shoulder"].x, anc["shoulder"].y, anc["shoulder"].z))
         d = (Vector((sx * anc["arm_tail"].x, anc["arm_tail"].y, anc["arm_tail"].z)) - a).normalized()
-        mid = a + d * 0.095
-        objs.append(cyl_between("sleeve_" + bn, a + d * 0.01, mid + d * 0.075, 0.098,
+        end = a + d * 0.135
+        objs.append(cyl_between("sleeve_" + bn, a + d * 0.01, end, 0.100,
                                 mat=m, bone=bn))
+        objs.append(torus("cuff_" + bn, end + d * 0.004, 0.096, 0.013, mat=mc, bone=bn,
+                          rot=Vector((0, 0, 1)).rotation_difference(d).to_euler()))
     return wear(gid, objs)
 
 
@@ -486,23 +564,30 @@ def wear(gid, objs):
 
 
 def build_dress(fam, anc):
-    """Vestido de la cerdita: canesú + falda acampanada (lathe) + cinturón + mangas globo."""
+    """Vestido (D112): canesú y falda con GROSOR (solidify), dobladillo al
+    borde de la falda un tono abajo, mangas globo. Antes: láminas sin grosor."""
     tc, ts = anc["tc"], anc["ts"]
     m = make_mat("M_dress", DRESS_C)
     mb = make_mat("M_belt", BELT_C)
+    mh = make_mat("M_hem_dress", darken(DRESS_C))
     objs = []
-    bod = lathe("dress_bod", ellip_profile(tc.z + 0.10, ts.z * 0.68, ts.x, 0.435, 0.66, 1.10),
+    bod = lathe("dress_bod", ellip_profile(tc.z + 0.10, ts.z * 0.68, ts.x, 0.435, 0.66, 1.13),
                 mat=m, bone="spine")
     bod.scale = (1.0, ts.y / ts.x, 1.0)
     bpy.ops.object.transform_apply(scale=True)
+    solidify(bod, 0.012)
     objs.append(bod)
     skirt = lathe("dress_skirt",
-                  [(ts.x * 1.02, 0.455), (ts.x * 1.10, 0.40), (ts.x * 1.24, 0.33),
-                   (ts.x * 1.38, 0.26), (ts.x * 1.47, 0.20), (ts.x * 1.50, 0.16),
-                   (ts.x * 1.47, 0.155)], mat=m, bone="spine")
+                  [(ts.x * 1.04, 0.455), (ts.x * 1.14, 0.40), (ts.x * 1.28, 0.33),
+                   (ts.x * 1.42, 0.26), (ts.x * 1.50, 0.20), (ts.x * 1.54, 0.16),
+                   (ts.x * 1.50, 0.155)], mat=m, bone="spine")
     skirt.scale = (1.0, ts.y / ts.x, 1.0)
     bpy.ops.object.transform_apply(scale=True)
+    solidify(skirt, 0.012)
     objs.append(skirt)
+    # (D112) dobladillo visible al borde de la falda (pared de tela + cae sombra)
+    objs.append(torus("dress_hem", (0, 0, 0.158), ts.x * 1.50, 0.024, mat=mh, bone="spine",
+                      scale=(1.0, ts.y / ts.x, 1.15)))
     objs.append(torus("dress_belt", (0, 0, 0.465), ts.x * 1.10, 0.024, mat=mb, bone="spine",
                       scale=(1.0, ts.y / ts.x, 1.2)))
     # lazo del cinturón
@@ -510,29 +595,31 @@ def build_dress(fam, anc):
     for sx in (1, -1):
         objs.append(cone("belt_ribbon%d" % sx, (sx * 0.055, ts.y * 1.13, 0.465), 0.030, 0.062,
                          mat=mb, bone="spine", rot=(0, 0, math.radians(90 if sx > 0 else -90)), seg=16))
-    # mangas globo
+    # mangas globo (un pelín más grandes)
     for sx, bn in ((1, "arm.L"), (-1, "arm.R")):
         a = Vector((sx * anc["shoulder"].x, anc["shoulder"].y, anc["shoulder"].z))
         d = (Vector((sx * anc["arm_tail"].x, anc["arm_tail"].y, anc["arm_tail"].z)) - a).normalized()
-        p = a + d * 0.055
-        objs.append(sphere("puff_" + bn, p, 0.098, scale=(1.0, 1.0, 1.15), mat=m, bone=bn, seg=20, ring=12))
+        p = a + d * 0.050
+        objs.append(sphere("puff_" + bn, p, 0.104, scale=(1.0, 1.0, 1.15), mat=m, bone=bn, seg=24, ring=14))
     return wear("dress", objs)
 
 
 def build_suit(fam, anc):
-    """Traje del koala: chaqueta columna (lathe) + camisa V + solapas + pajarita + botones + mangas."""
+    """Traje del koala (D112): chaqueta holgada con GROSOR, pañuelo blanco en
+    el pecho, solapas, pajarita, botones y mangas hasta la pata."""
     tc, ts = anc["tc"], anc["ts"]
     mj = make_mat("M_jacket", NAVY)
     mw = make_mat("M_shirtw", SHIRT_W)
     objs = []
     jack = lathe("suit_jack",
-                 [(ts.x * 1.16, 0.315), (ts.x * 1.20, 0.38), (ts.x * 1.22, 0.47),
-                  (ts.x * 1.20, 0.55), (ts.x * 1.13, 0.615), (ts.x * 0.95, 0.665),
+                 [(ts.x * 1.20, 0.315), (ts.x * 1.26, 0.38), (ts.x * 1.28, 0.47),
+                  (ts.x * 1.24, 0.55), (ts.x * 1.16, 0.615), (ts.x * 0.90, 0.665),
                   (ts.x * 0.55, 0.70)], mat=mj, bone="spine")
     jack.scale = (1.0, ts.y / ts.x, 1.0)
     bpy.ops.object.transform_apply(scale=True)
+    solidify(jack, 0.012)
     objs.append(jack)
-    front_y = ts.y * 1.225
+    front_y = ts.y * 1.285
     # camisa en V: panel blanco + dos prismas que la enmarcan
     objs.append(cube("suit_shirt", (0, front_y, 0.56), 1.0, mat=mw, bone="spine",
                      rot=(0, 0, math.radians(45)), scale=(0.115, 0.014, 0.115)))
@@ -548,6 +635,9 @@ def build_suit(fam, anc):
     objs[-1].data.materials[0] = bpy.data.materials["M_bt"]
     objs.append(sphere("bt_knot", (0, front_y + 0.014, 0.632), 0.024, mat=bpy.data.materials["M_bt"],
                        bone="spine", seg=16, ring=10))
+    # (D112) pañuelo blanco asomando en el pecho (detalle de sastre)
+    objs.append(cube("pocket", (-0.062, front_y + 0.002, 0.545), 1.0, mat=mw, bone="spine",
+                     rot=(0, 0, math.radians(12)), scale=(0.034, 0.008, 0.020)))
     for z in (0.50, 0.415):
         objs.append(sphere("btn%.0f" % (z * 100), (0, front_y + 0.006, z), 0.017,
                            mat=mw, bone="spine", seg=14, ring=8))
@@ -555,36 +645,39 @@ def build_suit(fam, anc):
     for sx, bn in ((1, "arm.L"), (-1, "arm.R")):
         a = Vector((sx * anc["shoulder"].x, anc["shoulder"].y, anc["shoulder"].z))
         b = Vector((sx * anc["arm_tail"].x, anc["arm_tail"].y, anc["arm_tail"].z))
-        objs.append(cyl_between("slv_" + bn, a, b + (b - a).normalized() * 0.06, 0.088, mat=mj, bone=bn))
+        objs.append(cyl_between("slv_" + bn, a, b + (b - a).normalized() * 0.06, 0.092, mat=mj, bone=bn))
     return wear("suit", objs)
 
 
 def build_shoes(gid, color, fam, anc):
     m = make_mat("M_" + gid, color)
     ms = make_mat("M_sole", SHIRT_W)
+    md = make_mat("M_soled_" + gid, SOLE_D)   # (D112) suela oscura que 'apoya'
     objs = []
     for sx, bn in ((1, "foot.L"), (-1, "foot.R")):
         fx, fy, fz = sx * anc["feet"][0].x, anc["feet"][0].y, anc["feet"][0].z
-        if fam == "pig":  # botitas: caña + pie bulbo
-            objs.append(cyl("cuff_" + bn, (fx, fy - 0.012, fz + 0.085), 0.062, 0.058, 0.075,
+        if fam == "pig":  # botitas: caña + pie bulbo + suela oscura
+            objs.append(cyl("cuff_" + bn, (fx, fy - 0.012, fz + 0.085), 0.066, 0.062, 0.075,
                             mat=m, bone=bn))
-            objs.append(sphere("boot_" + bn, (fx, fy + 0.014, fz - 0.010), 1.0,
-                               scale=(0.098, 0.168, 0.080), mat=m, bone=bn))
-            objs.append(torus("bootrim_" + bn, (fx, fy - 0.012, fz + 0.122), 0.061, 0.012,
+            objs.append(sphere("boot_" + bn, (fx, fy + 0.016, fz - 0.008), 1.0,
+                               scale=(0.104, 0.180, 0.086), mat=m, bone=bn))
+            objs.append(torus("bootrim_" + bn, (fx, fy - 0.012, fz + 0.122), 0.065, 0.012,
                               mat=ms, bone=bn, scale=(1.0, 1.0, 1.2)))
+            objs.append(torus("sole_" + bn, (fx, fy + 0.014, 0.022), 0.080, 0.013, mat=md,
+                              bone=bn, rot=(math.radians(90), 0, 0)))
         else:  # sneakers: caja redondeada + suela blanca + puntera
-            objs.append(cube("sneak_" + bn, (fx, fy + 0.012, fz + 0.006), 1.0, mat=m, bone=bn,
-                             scale=(0.096, 0.170, 0.070)))
-            objs.append(cube("sole_" + bn, (fx, fy + 0.012, 0.024), 1.0, mat=ms, bone=bn,
-                             scale=(0.102, 0.180, 0.028)))
-            objs.append(sphere("toe_" + bn, (fx, fy + 0.115, 0.035), 1.0,
-                               scale=(0.070, 0.060, 0.042), mat=ms, bone=bn, seg=16, ring=10))
+            objs.append(cube("sneak_" + bn, (fx, fy + 0.016, fz + 0.004), 1.0, mat=m, bone=bn,
+                             scale=(0.102, 0.180, 0.076)))
+            objs.append(cube("sole_" + bn, (fx, fy + 0.016, 0.020), 1.0, mat=ms, bone=bn,
+                             scale=(0.108, 0.190, 0.034)))
+            objs.append(sphere("toe_" + bn, (fx, fy + 0.125, 0.032), 1.0,
+                               scale=(0.076, 0.066, 0.046), mat=ms, bone=bn, seg=16, ring=10))
     return wear(gid, objs)
 
 
 def build_glasses(fam, anc):
-    m = make_mat("M_glasses", INK, rough=0.35)
-    ml = make_mat("M_lens", (0.35, 0.42, 0.50), alpha=0.42)
+    m = make_mat("M_glasses", INK, rough=0.22)   # (D112) plástico más brillante
+    ml = make_mat("M_lens", (0.35, 0.42, 0.50), alpha=0.30)  # (D112) lentes más claras
     objs = []
     for sx in (1, -1):
         ep = Vector(anc["eye_pos"][sx])
@@ -643,19 +736,36 @@ def build_flower(fam, anc):
 def build_party(fam, anc):
     m = make_mat("M_party", PARTY_C)
     mp = make_mat("M_pompom", SHIRT_W)
-    base = anc["hat_pos"] + Vector((0, 0.035, 0.09))
-    objs = [cone("hat", base, 0.105, 0.235, mat=m, bone="head", rot=(math.radians(-9), 0, 0)),
-            sphere("pompom", base + Vector((0, 0.033, 0.145)), 0.040, mat=mp, bone="head", seg=16, ring=10)]
+    hc, hr = anc["hc"], anc["hr"]
+    # (D112) el gorro APOYA sobre la cabeza: base anclada a la superficie del
+    # elipsoide apuntando arriba-adelante, inclinado 9° atrás. Antes flotaba
+    # (VLM: 'flota ligeramente sin física').
+    # (D112 it.1) más VERTICAL y presionado 0.02 hacia dentro: la vuelta QA 1
+    # seguía viendo el aro frontal en el aire (la cabeza se curva alejándose
+    # más rápido que el plano del aro). Base r 0.105, inclinación 6°.
+    base = ellipsoid_surface(hc, (hr, hr, hr), (0, 0.30, 0.95), -0.030)
+    axis = Vector((0, -math.sin(math.radians(6)), math.cos(math.radians(6))))
+    objs = [cone("hat", Vector(base) + axis * 0.105, 0.105, 0.235, mat=m, bone="head",
+                 rot=(-math.radians(6), 0, 0)),
+            # (D112 it.4) banda de contacto: aro aplanado en la base — cubre la
+            # unión y da una silueta clara de 'gorro puesto' (no levita)
+            torus("hatband", Vector(base) + axis * 0.012, 0.104, 0.020, mat=mp, bone="head",
+                  rot=Vector((0, 0, 1)).rotation_difference(axis).to_euler(),
+                  scale=(1.0, 1.0, 0.55)),
+            sphere("pompom", Vector(base) + axis * 0.255, 0.040, mat=mp, bone="head",
+                   seg=20, ring=12)]
     return wear("party", objs)
 
 
 def build_cap(fam, anc):
     m = make_mat("M_cap", CAP_C)
     objs = [
-        sphere("cap_crown", (0, 0.01, anc["hc"].z + 0.145), anc["hr"] * 0.97,
-               scale=(1.0, 1.0, 0.74), mat=m, bone="head"),
-        cube("cap_brim", (0, anc["hc"].y + anc["hr"] * 0.72, anc["hc"].z + 0.135), 1.0, mat=m,
-             bone="head", rot=(math.radians(8), 0, 0), scale=(0.145, 0.135, 0.020)),
+        # (D112) corona más ajustada (0.985) y más baja: el aro inferior corta
+        # la cabeza — no flota (VLM lo marcó en v0.12).
+        sphere("cap_crown", (0, 0.01, anc["hc"].z + 0.125), anc["hr"] * 0.985,
+               scale=(1.0, 1.0, 0.70), mat=m, bone="head"),
+        cube("cap_brim", (0, anc["hc"].y + anc["hr"] * 0.72, anc["hc"].z + 0.125), 1.0, mat=m,
+             bone="head", rot=(math.radians(8), 0, 0), scale=(0.150, 0.140, 0.022)),
         sphere("cap_btn", (0, 0.01, anc["hc"].z + anc["hr"] * 0.60), 0.022, mat=m, bone="head",
                seg=12, ring=8),
     ]
@@ -668,9 +778,9 @@ def build_earrings(fam, anc):
     # (D102) anillos FUERA de la cabeza: la superficie a z≈.89 llega a x≈0.30,
     # los aros colgaban a x .262/.298 (mayormente dentro). Ahora cuelgan al
     # costado, bajo la oreja, y de frente se ven de lleno (toro con eje Y).
-    x = 0.322 if fam == "pig" else 0.345
+    x = 0.326 if fam == "pig" else 0.352
     for sx in (1, -1):
-        objs.append(torus("ring%d" % sx, (sx * x, 0.05, 0.885), 0.030, 0.010, mat=m,
+        objs.append(torus("ring%d" % sx, (sx * x, 0.05, 0.878), 0.030, 0.010, mat=m,
                           bone="head", rot=(math.radians(90), 0, 0)))
     return wear("earrings", objs)
 
@@ -690,7 +800,7 @@ def build_heart(fam, anc):
 def build_scarf(fam, anc):
     m = make_mat("M_scarf", SCARF_C)
     objs = [
-        torus("scarf_ring", (0, 0, 0.615), 0.198, 0.052, mat=m, bone="spine",
+        torus("scarf_ring", (0, 0, 0.615), 0.206, 0.056, mat=m, bone="spine",
               scale=(1.0, 0.94, 1.0)),
         cube("scarf_tail", (0.058, anc["ts"].y * 1.02, 0.50), 1.0, mat=m, bone="spine",
              rot=(0, 0, math.radians(6)), scale=(0.052, 0.016, 0.115)),
@@ -836,21 +946,32 @@ def setup_render(dirpath, w=680, h=820):
     sc.render.image_settings.file_format = "PNG"
     sc.render.image_settings.color_mode = "RGBA"
     sc.view_settings.view_transform = "Standard"
-    # luz: sol cálida desde el frente-izquierda + relleno desde frente-derecha
-    sun = bpy.data.lights.new("sun", "SUN")
-    sun.energy = 2.6
-    sun.angle = math.radians(10)
-    so = bpy.data.objects.new("sun", sun)
-    so.rotation_euler = Euler((math.radians(-48), 0, math.radians(28)), "XYZ")
-    link(so)
-    fill = bpy.data.lights.new("fill", "AREA")
-    fill.energy = 70
-    fill.size = 4.0
-    fo = bpy.data.objects.new("fill", fill)
-    fo.location = (2.4, 1.8, 2.2)
-    d = -Vector(fo.location).normalized()
-    fo.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
-    link(fo)
+    # luz (D112 it.2): el estudio 3-luces + MUNDO PASTEL de render_rasters.py
+    # (D102, aprobado) — sin mundo no hay Iluminación Global y los renders
+    # salían casi negros (brillo medio 40/255, medido). Misma receta probada.
+    w = bpy.data.worlds.new("Studio")
+    w.use_nodes = True
+    bg = w.node_tree.nodes["Background"]
+    bg.inputs[0].default_value = (1.0, 0.965, 0.965, 1.0)   # blanco rosado
+    bg.inputs[1].default_value = 0.55                        # sombras pastel
+    sc.world = w
+
+    def area_light(name, loc, energy, size):
+        li = bpy.data.lights.new(name, "AREA")
+        li.energy = energy
+        li.size = size
+        li.color = (1.0, 0.985, 0.96)
+        o = bpy.data.objects.new(name, li)
+        o.location = loc
+        d = -Vector(loc).normalized()
+        o.rotation_euler = d.to_track_quat("-Z", "Y").to_euler()
+        link(o)
+
+    # la cara (tras turn_around) mira a -Y: clave frente-izq-arriba,
+    # relleno frente-der, contra desde atrás para recortar la silueta
+    area_light("key",  (-1.5, -2.1, 2.5), 95, 1.6)
+    area_light("fill", (2.0, -1.5, 1.3), 26, 2.6)
+    area_light("rim",  (0.4, 1.9, 2.1), 20, 1.3)
     cam = bpy.data.cameras.new("cam")
     cam.lens = 52
     co = bpy.data.objects.new("cam", cam)
@@ -919,11 +1040,19 @@ def build_family(fam, colorway_id, wave_axis="Z", wave_lift=1.95):
     ear_in = cw.get("ear_in", spec["ear_in"])
     snout = cw.get("snout", spec.get("snout", spec["body"]))
     mats = {
-        "body": make_mat("M_Body", body),
-        "ear_in": make_mat("M_EarIn", ear_in),
-        "snout": make_mat("M_Snout", snout),
-        "ink": make_mat("M_Ink", INK, rough=0.35),
-        "blush": make_mat("M_Blush", BLUSH, rough=0.7),
+        # (D112) materiales 'juguete de vinilo': cuerpo con brillo suave (0.34,
+        # era 0.55 mate), tinta BRILLANTE (ojos/nariz húmedos, 0.12) y blanco
+        # especular puro para los brillos de ojos.
+        "body": make_mat("M_Body", body, rough=0.34),
+        "ear_in": make_mat("M_EarIn", ear_in, rough=0.45),
+        "snout": make_mat("M_Snout", snout, rough=0.38),
+        # (D112 it.4) tinta MATE suave (0.32): a 0.12 la luz clave la
+        # sobre-especularizaba y LAVABA los rasgos a gris medio (medido:
+        # ojos/nariz/boca a lum 125-175 = 'expresión neutra'). El brillo de
+        # ojos es GEOMETRÍA (EyeHi/NoseHi), no especular.
+        "ink": make_mat("M_Ink", INK, rough=0.32),
+        "blush": make_mat("M_Blush", BLUSH, rough=0.6),
+        "hi": make_mat("M_Hi", (1.0, 1.0, 1.0), rough=0.05),
     }
     rig = build_armature()
     objs = build_body(fam, mats)
@@ -996,6 +1125,13 @@ def qa_family(fam, rig, anc):
     # 8 trasera 3/4 (verificar cola del cerdo / espalda de prendas)
     set_visible(WEAR_IDS, [])
     shot("08_back_threeq", 142)
+    # 9 (D112) primer plano de cara: ojos con brillo, sonrisa, rubor
+    shot("09_face_closeup", 0, el=4, dist=1.35, target=(0, 0.02, 0.92))
+    # 10 (D112) saludo de frente con accesorios (la pose que ve el usuario)
+    set_visible(WEAR_IDS, ["glasses", "party", "shoes_blue"])
+    set_pose_frame(rig, "wave", 12)
+    shot("10_wave_front", 0)
+    reset_pose(rig)
     bpy.context.scene.frame_set(1)
     return sub
 
