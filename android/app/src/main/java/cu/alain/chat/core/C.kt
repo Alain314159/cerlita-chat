@@ -28,12 +28,17 @@ object C {
     const val ST_UNREADABLE = 4
     const val ST_DELIVERED = 5     // ✓✓ lo bajó el otro (rd del /sync, D68)
     const val ST_READ = 6          // ✓✓ azul: recibo de lectura E2EE (kind=3, D68)
+    const val ST_DELETED = 7       // S2/D110: tumba — «borrado para todos»
 
     // ---- Kinds de mensaje (solo locales: el servidor ve ciphertext opaco) ----
     const val KIND_TEXT = 0        // burbuja normal
     const val KIND_PROFILE = 1     // anuncio de perfil (D61)
     const val KIND_ROOM_INFO = 2   // nombre/foto de la sala (v0.6.0, D69)
     const val KIND_READ = 3        // recibo de lectura (v0.6.0, D68)
+    const val KIND_EDIT = 4        // S2/D110: edición de un mensaje propio
+    const val KIND_DELETE = 5      // S2/D110: borrado de un mensaje propio
+    const val KIND_REACTION = 6    // S2/D110: reacción a un mensaje
+    const val KIND_GAME_SCORE = 7  // J0/D111: récord de minijuego de la pareja
 
     // ---- Tipos de sala (v0.7.0, D74) ----
     const val ROOM_GROUP = 0       // grupo: código de invitación (como siempre)

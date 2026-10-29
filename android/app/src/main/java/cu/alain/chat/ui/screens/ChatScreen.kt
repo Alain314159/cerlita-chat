@@ -6,6 +6,7 @@ import android.media.MediaRecorder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,20 +26,25 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -64,7 +70,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -73,6 +82,7 @@ import androidx.compose.ui.window.DialogProperties
 import cu.alain.chat.ChatApp
 import cu.alain.chat.core.C
 import cu.alain.chat.db.Message
+import cu.alain.chat.db.Reaction
 import cu.alain.chat.db.Profile
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.profile.AttachmentMsg
@@ -128,6 +138,13 @@ fun ChatScreen(app: ChatApp, roomId: String) {
     var showAttachMenu by remember { mutableStateOf(false) }
     var viewerBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var saveDoc by remember { mutableStateOf<Pair<AttachmentMsg.Parsed, java.io.File>?>(null) }
+
+    // ── S2/D110: responder · editar · reaccionar · escribir ──
+    val meUid = app.engine.session?.uid ?: ""
+    val reactions by app.db.reactionDao().observeForRoom(roomId).collectAsState(initial = emptyList())
+    val reactionsByMsg = remember(reactions) { reactions.groupBy { it.msgId } }
+    var replyTo by remember(roomId) { mutableStateOf<Message?>(null) }
+    var editing by remember(roomId) { mutableStateOf<Message?>(null) }
 
     val recPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -324,14 +341,32 @@ fun ChatScreen(app: ChatApp, roomId: String) {
         ) {
             itemsIndexed(messages, key = { _, m -> m.msgId }) { idx, m ->
                 val prev = messages.getOrNull(idx - 1) // U3: O(1), era O(n²) con indexOfFirst
-                MessageBubble(app, m, prev, profiles, uploadProgress, onRetry = { msgId ->
-                    scope.launch {
-                        app.engine.retryAttachment(msgId) { }
-                            .onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
-                            .onFailure { e -> sendError = e.message }
-                    }
-                }, onOpenImage = { viewerBitmap = it },
-                    onSaveDoc = { att, file -> saveDoc = att to file; saveLauncher.launch(att.name) })
+                MessageBubble(
+                    app, m, prev, profiles, uploadProgress,
+                    myUid = meUid,
+                    reactions = reactionsByMsg[m.msgId].orEmpty(),
+                    quoted = { id -> messages.firstOrNull { it.msgId == id } },
+                    onReply = { replyTo = it; editing = null },
+                    onEdit = { editing = it; replyTo = null; draft = it.body },
+                    onDelete = { msgId ->
+                        scope.launch {
+                            app.engine.deleteMessage(msgId)
+                                .onFailure { e -> sendError = e.message }
+                        }
+                    },
+                    onReact = { msgId, emoji ->
+                        scope.launch { app.engine.toggleReaction(msgId, emoji) }
+                    },
+                    onRetry = { msgId ->
+                        scope.launch {
+                            app.engine.retryAttachment(msgId) { }
+                                .onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
+                                .onFailure { e -> sendError = e.message }
+                        }
+                    },
+                    onOpenImage = { viewerBitmap = it },
+                    onSaveDoc = { att, file -> saveDoc = att to file; saveLauncher.launch(att.name) },
+                )
             }
         }
 
@@ -409,22 +444,71 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                 }
             }
         } else {
-            // ── composer normal: adjuntar + texto + micro/enviar ──
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
+            // ── composer normal: cita/edición + adjuntar + texto + micro/enviar ──
+            Column(Modifier.imePadding()) {
+                // S2/D110: tira de RESPUESTA o EDICIÓN sobre el composer
+                val acting = editing ?: replyTo
+                if (acting != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    ) {
+                        Row(
+                            Modifier.padding(start = 12.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    if (editing != null) "Editando mensaje"
+                                    else "Respondiendo",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                )
+                                Text(
+                                    cu.alain.chat.profile.AttachmentMsg.preview(acting.body) ?: acting.body
+                                        ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            IconButton(onClick = {
+                                if (editing != null) draft = ""
+                                editing = null
+                                replyTo = null
+                            }) {
+                                Icon(Icons.Default.Close, "Cancelar", tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                            }
+                        }
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
                 IconButton(onClick = { showAttachMenu = true }) {
                     Icon(Icons.Default.AttachFile, "Adjuntar", tint = MaterialTheme.colorScheme.primary)
                 }
                 OutlinedTextField(
                     modifier = Modifier.weight(1f),
                     value = draft,
-                    onValueChange = { if (it.length <= 7500) { draft = it; sendError = null } },
-                    placeholder = { Text("Mensaje…") },
+                    onValueChange = {
+                        if (it.length <= 7500) {
+                            val grew = it.length > draft.length
+                            draft = it
+                            sendError = null
+                            // S2/D110: aviso «escribiendo…» mientras teclea (no al borrar)
+                            if (grew && editing == null) app.engine.sendTyping(roomId)
+                        }
+                    },
+                    placeholder = { Text(if (editing != null) "Editar mensaje…" else "Mensaje…") },
                     maxLines = 5,
                     visualTransformation = VisualTransformation.None,
                     shape = RoundedCornerShape(24.dp),
@@ -435,19 +519,26 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                         onClick = {
                             val text = draft.trim()
                             if (text.isEmpty()) return@IconButton
+                            val ed = editing
+                            val rep = replyTo
                             draft = ""
+                            editing = null
+                            replyTo = null
                             scope.launch {
-                                app.engine.send(roomId, text)
-                                    .onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
+                                val res = if (ed != null) app.engine.editMessage(ed.msgId, text)
+                                else app.engine.send(roomId, text, rep?.msgId)
+                                res.onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
                                     .onFailure { e ->
                                         sendError = e.message ?: "No se pudo encolar el mensaje"
                                         draft = text
+                                        if (ed != null) editing = ed else replyTo = rep
                                     }
                             }
                         },
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.Send, "Enviar",
+                            Icons.AutoMirrored.Filled.Send,
+                            if (editing != null) "Guardar edición" else "Enviar",
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     }
@@ -455,6 +546,7 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                     IconButton(onClick = { recPermission.launch(Manifest.permission.RECORD_AUDIO) }) {
                         Icon(Icons.Default.Mic, "Nota de voz", tint = MaterialTheme.colorScheme.primary)
                     }
+                }
                 }
             }
         }
@@ -577,6 +669,13 @@ private fun MessageBubble(
     prev: Message?,
     profiles: List<Profile>,
     uploadProgress: Map<String, Float>,
+    myUid: String,
+    reactions: List<Reaction>,
+    quoted: (String) -> Message?,
+    onReply: (Message) -> Unit,
+    onEdit: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onReact: (String, String) -> Unit,
     onRetry: (String) -> Unit,
     onOpenImage: (Bitmap) -> Unit,
     onSaveDoc: (AttachmentMsg.Parsed, java.io.File) -> Unit,
@@ -584,9 +683,13 @@ private fun MessageBubble(
     val time = cu.alain.chat.core.Fmt.time(m.ts) // U4: formatter cacheado
     val mine = m.mine
     val haptic = LocalHapticFeedback.current
+    val clipboard = LocalClipboardManager.current
     val att = remember(m.msgId) { AttachmentMsg.parse(m.body) }
     var menu by remember { mutableStateOf(false) }
     val palette = LocalChatPalette.current // D77: burbujas pastel + texto oscuro en Cerlita
+    val deleted = m.state == C.ST_DELETED // S2/D110: tumba de «borrado para todos»
+    val canEdit = mine && !deleted && att == null && m.kind == C.KIND_TEXT
+    val canDelete = mine && !deleted
 
     // perfil del emisor (mensajes viejos pre-v3 no traen uid → fallback a inicial)
     val profile = profiles.firstOrNull { it.uid.equals(m.senderUid, ignoreCase = true) }
@@ -594,6 +697,9 @@ private fun MessageBubble(
     val showHeader = !mine && (prev == null || prev.mine ||
         !prev.senderUid.equals(m.senderUid, ignoreCase = true) ||
         (prev.senderUid.isEmpty() && prev.senderUname != m.senderUname))
+
+    // S2/D110: reacciones agrupadas por emoji (emoji → quién reaccionó)
+    val byEmoji = remember(reactions) { reactions.groupBy { it.emoji } }
 
     Row(
         Modifier.fillMaxWidth(),
@@ -621,6 +727,16 @@ private fun MessageBubble(
                         modifier = Modifier.padding(start = 4.dp, bottom = 2.dp),
                     )
                 }
+                if (deleted) {
+                    // S2/D110: tumba discreta — el mensaje murió para todos
+                    Text(
+                        "Mensaje eliminado",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                } else {
                 Surface(
                     color = when {
                         mine -> palette.sentBubble
@@ -638,11 +754,15 @@ private fun MessageBubble(
                             onClick = {},
                             onLongClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                if (m.state == C.ST_FAILED && att != null) menu = true
+                                menu = true // S2/D110: menú para TODOS los mensajes
                             },
                         ),
                 ) {
                     Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        // S2/D110: cita del mensaje respondido
+                        if (m.replyTo != null) {
+                            QuotedStrip(quoted(m.replyTo), profiles, mine, palette)
+                        }
                         when {
                             att?.type == AttachmentMsg.TYPE_IMAGE ->
                                 ImageBubble(app, m.msgId, att, onOpenImage)
@@ -717,13 +837,87 @@ private fun MessageBubble(
                         }
                     }
                 }
+                // S2/D110: reacciones bajo la burbuja — un toque alterna la mía
+                if (byEmoji.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.padding(top = 2.dp),
+                    ) {
+                        byEmoji.forEach { (emoji, list) ->
+                            val isMine = list.any { it.uid.equals(myUid, ignoreCase = true) }
+                            Surface(
+                                onClick = { onReact(m.msgId, emoji) },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (isMine) palette.accent.copy(alpha = 0.16f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                border = if (isMine) androidx.compose.foundation.BorderStroke(
+                                    1.dp, palette.accent.copy(alpha = 0.7f),
+                                ) else null,
+                            ) {
+                                Text(
+                                    if (list.size > 1) "$emoji ${list.size}" else emoji,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+                }
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("Reintentar envío") },
-                    leadingIcon = { Icon(Icons.Default.Schedule, null) },
-                    onClick = { menu = false; onRetry(m.msgId) },
-                )
+                if (!deleted) {
+                    // S2/D110: reacciones rápidas en la primera línea del menú
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        listOf("❤️", "😂", "👍", "😮", "😢", "🔥").forEach { e ->
+                            Text(
+                                e,
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.clickable { menu = false; onReact(m.msgId, e) },
+                            )
+                        }
+                    }
+                    HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Responder") },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, null) },
+                        onClick = { menu = false; onReply(m) },
+                    )
+                    if (att == null) {
+                        DropdownMenuItem(
+                            text = { Text("Copiar") },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                            onClick = {
+                                menu = false
+                                clipboard.setText(AnnotatedString(m.body))
+                            },
+                        )
+                    }
+                    if (canEdit) {
+                        DropdownMenuItem(
+                            text = { Text("Editar") },
+                            leadingIcon = { Icon(Icons.Default.Edit, null) },
+                            onClick = { menu = false; onEdit(m) },
+                        )
+                    }
+                }
+                if (canDelete) {
+                    DropdownMenuItem(
+                        text = { Text("Eliminar") },
+                        leadingIcon = { Icon(Icons.Default.Delete, null) },
+                        onClick = { menu = false; onDelete(m.msgId) },
+                    )
+                }
+                if (m.state == C.ST_FAILED && att != null) {
+                    DropdownMenuItem(
+                        text = { Text("Reintentar envío") },
+                        leadingIcon = { Icon(Icons.Default.Schedule, null) },
+                        onClick = { menu = false; onRetry(m.msgId) },
+                    )
+                }
             }
         }
         // D94: como en el mockup — el avatar propio acompaña a los mensajes
@@ -738,6 +932,44 @@ private fun MessageBubble(
                 fallbackInitial = senderName,
                 size = 32.dp,
                 photoVersion = profile?.updatedAt ?: 0L,
+            )
+        }
+    }
+}
+
+/** S2/D110: avance del mensaje citado (nombre + texto, 2 líneas). */
+@Composable
+private fun QuotedStrip(
+    q: Message?,
+    profiles: List<Profile>,
+    mine: Boolean,
+    palette: cu.alain.chat.ui.theme.ChatPalette,
+) {
+    Surface(
+        color = if (mine) androidx.compose.ui.graphics.Color.White.copy(alpha = 0.45f)
+        else androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 6.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            val name = profiles.firstOrNull { it.uid.equals(q?.senderUid ?: "", ignoreCase = true) }
+                ?.displayName ?: q?.senderUname ?: ""
+            Text(
+                name.ifEmpty { "Mensaje" },
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                color = if (mine) palette.onSentBubble else palette.accent,
+            )
+            val body = q?.let { AttachmentMsg.preview(it.body) ?: it.body } ?: "Mensaje original"
+            Text(
+                body.ifEmpty { "Mensaje" },
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                color = if (mine) palette.onSentBubble.copy(alpha = 0.8f)
+                else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }

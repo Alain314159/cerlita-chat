@@ -264,4 +264,103 @@ class MigrationTest {
             db6.close()
         }
     }
+
+    /**
+     * v0.14.0 (DB v6) → S2 (DB v7): replyTo + reactions + FTS de búsqueda.
+     * Crea un chat.db v6 EXACTO, lo abre con la AppDatabase actual →
+     * MIGRATION_6_7 + callback FTS (onOpen: tabla virtual + triggers +
+     * repoblado) y verifica cita, reacción y BÚSQUEDA sobre el historial viejo.
+     */
+    @Test
+    fun upgradeV6toV7ReplyReactionsFts() = runBlocking {
+        // del v2 del @Before, subir a v6 con TODA la cadena EXACTA de la historia
+        val raw = SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("chat.db"), null)
+        // v2→3 (perfiles, D61)
+        raw.execSQL("ALTER TABLE messages ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE messages ADD COLUMN senderUid TEXT NOT NULL DEFAULT ''")
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `profiles` (`uid` TEXT NOT NULL PRIMARY KEY, " +
+                "`displayName` TEXT NOT NULL, `avatarJson` TEXT NOT NULL, `photo` INTEGER NOT NULL, " +
+                "`updatedAt` INTEGER NOT NULL)"
+        )
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `room_peer` (`roomId` TEXT NOT NULL, `uid` TEXT NOT NULL, " +
+                "PRIMARY KEY(`roomId`, `uid`))"
+        )
+        // v3→4 (unread + foto de sala, D69)
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN unread INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN photo INTEGER NOT NULL DEFAULT 0")
+        // v4→5 (chats directos + registro de llamadas, D74)
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        raw.execSQL("ALTER TABLE rooms ADD COLUMN peerUid TEXT")
+        raw.execSQL(
+            "CREATE TABLE IF NOT EXISTS `calls` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`roomId` TEXT NOT NULL, `peerUid` TEXT NOT NULL, `peerName` TEXT NOT NULL, " +
+                "`kind` INTEGER NOT NULL, `dir` INTEGER NOT NULL, `status` INTEGER NOT NULL, " +
+                "`startedAt` INTEGER NOT NULL, `answeredAt` INTEGER NOT NULL, `duration` INTEGER NOT NULL)"
+        )
+        // v5→6 (índices, B3)
+        raw.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_room_kind_ts` ON `messages` (`roomId`, `kind`, `ts`, `msgId`)")
+        raw.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_room_mine` ON `messages` (`roomId`, `mine`)")
+        raw.execSQL("CREATE INDEX IF NOT EXISTS `idx_msg_state` ON `messages` (`state`)")
+        // historial real para el FTS
+        raw.execSQL(
+            "INSERT INTO messages VALUES('mf1', 'sala123', 'alain', 1, 'te amo muchisimo', " +
+                "1700000100000, 3, 10, 0, 'uid-yo')"
+        )
+        raw.execSQL(
+            "INSERT INTO messages VALUES('mf2', 'sala123', 'cerlita', 0, 'la playa estaba genial', " +
+                "1700000110000, 3, 11, 0, 'uid-pareja')"
+        )
+        raw.version = 6
+        raw.close()
+
+        val db7 = AppDatabase.build(ctx)
+        try {
+            // abrir ya ejecutó MIGRATION_6_7 (replyTo + reactions) y el callback
+            // FTS (tabla virtual + triggers + repoblado del historial)
+
+            // 1. mensaje con CITA: la columna replyTo vive y viaja en el Flow
+            db7.msgDao().insert(
+                cu.alain.chat.db.Message(
+                    "mr1", "sala123", "alain", true, "yo tambien!", 1700000120000, 3, 12,
+                    0, "uid-yo", "mf1",
+                )
+            )
+            val chat = db7.msgDao().chat("sala123")
+            assertEquals(5, chat.size) // m1, m2 (@Before) + mf1, mf2 + mr1
+            assertEquals("mf1", chat.last { it.msgId == "mr1" }.replyTo)
+
+            // 2. reacción: upsert pisa (una por usuario) y observe la ve
+            db7.reactionDao().upsert(cu.alain.chat.db.Reaction("mf2", "uid-yo", "❤️"))
+            db7.reactionDao().upsert(cu.alain.chat.db.Reaction("mf2", "uid-yo", "😂"))
+            db7.reactionDao().upsert(cu.alain.chat.db.Reaction("mf2", "uid-pareja", "❤️"))
+            val rs = db7.reactionDao().observeForRoom("sala123").first()
+            assertEquals(2, rs.size) // uid-yo solo tiene UNA (la nueva pisa)
+            assertTrue(rs.any { it.uid == "uid-yo" && it.emoji == "😂" })
+
+            // 3. BÚSQUEDA FTS sobre el historial MIGRADO (repoblado por el callback)
+            val hitsPlaya = db7.searchRaw("\"playa\"")
+            assertEquals(1, hitsPlaya.size)
+            assertEquals("mf2", hitsPlaya[0].msgId)
+            // y sobre un mensaje NUEVO insertado después (trigger AFTER INSERT)
+            db7.msgDao().insert(
+                cu.alain.chat.db.Message(
+                    "mn1", "sala123", "alain", true, "playa manana?", 1700000130000, 3, 13,
+                    0, "uid-yo",
+                )
+            )
+            val hits2 = db7.searchRaw("\"playa\"")
+            assertEquals(2, hits2.size)
+            // multi-término (AND implícito)
+            assertEquals(1, db7.searchRaw("\"playa\" \"genial\"").size)
+            // edición actualiza el índice (trigger AFTER UPDATE OF body):
+            // mn1 ya no dice "playa" — solo queda mf2
+            db7.msgDao().applyEdit("mn1", "uid-yo", "manana al malecon")
+            assertEquals(1, db7.searchRaw("\"playa\"").size)
+            assertEquals(1, db7.searchRaw("\"malecon\"").size)
+        } finally {
+            db7.close()
+        }
+    }
 }

@@ -221,6 +221,12 @@ class ChatApp : Application(), Configuration.Provider {
         when (event) {
             "dm" -> engine.requestSync() // Q6/D105: coalescing
             "sig" -> cu.alain.chat.calls.CallDispatcher.onSignal(this, payload) // llamadas (D75)
+            // S2/D110: «escribiendo…» — efímero por broadcast (nunca persiste)
+            "typ" -> try {
+                val j = org.json.JSONObject(payload)
+                engine.onTypingReceived(j.optString("r"), j.optString("u"), j.optString("n"))
+            } catch (_: Exception) {
+            }
         }
     }
 

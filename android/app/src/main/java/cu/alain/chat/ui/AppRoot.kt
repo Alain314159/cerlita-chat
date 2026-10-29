@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
@@ -64,7 +65,9 @@ import cu.alain.chat.ui.screens.ChatScreen
 import cu.alain.chat.ui.screens.ProfileScreen
 import cu.alain.chat.ui.screens.RoomSettingsScreen
 import cu.alain.chat.ui.screens.RoomsScreen
+import cu.alain.chat.ui.screens.SearchScreen
 import cu.alain.chat.ui.screens.SettingsScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /** Navegación interna de la zona Main (pila simple sobre las pestañas). */
@@ -73,6 +76,7 @@ private sealed interface Screen {
     data class Chat(val room: Room) : Screen
     data class Profile(val firstRun: Boolean) : Screen
     data class RoomSettings(val roomId: String) : Screen
+    data object Search : Screen // S2/D110: búsqueda global FTS
 }
 
 /**
@@ -270,6 +274,7 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                     is Screen.Profile ->
                                         Text(if (c.firstRun) "Tu perfil" else "Editar perfil")
                                     is Screen.RoomSettings -> Text("Ajustes de la sala")
+                                    Screen.Search -> Text("Buscar")
                                 }
                             },
                             navigationIcon = {
@@ -285,6 +290,14 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                             },
                             actions = {
                                 when (current) {
+                                    Screen.Home -> {
+                                        // S2/D110: búsqueda global (solo pestaña Chats)
+                                        if (tab == 0) {
+                                            IconButton(onClick = { stack.add(Screen.Search) }) {
+                                                Icon(Icons.Default.Search, "Buscar")
+                                            }
+                                        }
+                                    }
                                     is Screen.Chat -> {
                                         // llamadas (D75): solo en chats directos
                                         if (current.room.kind == cu.alain.chat.core.C.ROOM_DM) {
@@ -318,10 +331,17 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                 tab = tab,
                                 onTab = { tab = it },
                                 onOpenRoom = { room ->
-                                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings }
+                                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings || it is Screen.Search }
                                     stack.add(Screen.Chat(room))
                                 },
                                 onEditProfile = { stack.add(Screen.Profile(firstRun = false)) },
+                            )
+                            Screen.Search -> SearchScreen(
+                                app = app,
+                                onOpenRoom = { room ->
+                                    stack.removeAll { it is Screen.Chat || it is Screen.RoomSettings || it is Screen.Search }
+                                    stack.add(Screen.Chat(room))
+                                },
                             )
                             is Screen.Chat -> ChatScreen(app, c.room.roomId)
                             is Screen.Profile -> ProfileScreen(
@@ -396,7 +416,8 @@ private fun HomeTabs(
 
 /** Título del chat abierto: si la sala tiene foto/nombre propio (D69) se
  *  muestran; si no, el perfil del par (nombre + avatar, D61). El apodo personal
- *  (D78) gana en los chats directos: tocar el título lo edita. */
+ *  (D78) gana en los chats directos: tocar el título lo edita. Bajo el nombre,
+ *  «escribiendo…» en vivo cuando el par está tecleando (S2/D110). */
 @Composable
 private fun ChatTitle(app: ChatApp, room: Room) {
     val meUid = app.engine.session?.uid ?: ""
@@ -410,6 +431,16 @@ private fun ChatTitle(app: ChatApp, room: Room) {
             nicknames[peerUid.lowercase()] ?: header?.peerName ?: room.name
         else -> header?.name ?: room.name
     }
+    // S2/D110: «escribiendo…» — expira solo (ticker de 1 s para retirarlo)
+    val typing by app.engine.typing.collectAsState()
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(typing) {
+        while (typing[room.roomId.lowercase()] != null) {
+            nowMs = System.currentTimeMillis()
+            delay(1000)
+        }
+    }
+    val typingName = typing[room.roomId.lowercase()]?.takeIf { it.second > nowMs }?.first
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.clickable(
@@ -436,7 +467,16 @@ private fun ChatTitle(app: ChatApp, room: Room) {
             )
         }
         Spacer(Modifier.width(10.dp))
-        Text(shownName)
+        Column {
+            Text(shownName)
+            if (typingName != null) {
+                Text(
+                    "$typingName está escribiendo…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
     }
     if (rename && peerUid != null) {
         NicknameDialog(

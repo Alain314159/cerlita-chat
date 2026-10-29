@@ -9,12 +9,14 @@ import cu.alain.chat.db.Message
 import cu.alain.chat.db.OutboxMsg
 import cu.alain.chat.db.PendingMsg
 import cu.alain.chat.db.Profile
+import cu.alain.chat.db.Reaction
 import cu.alain.chat.db.Room
 import cu.alain.chat.db.RoomPeer
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.net.DmPickup
 import cu.alain.chat.net.SyncRow
 import cu.alain.chat.profile.AttachmentMsg
+import cu.alain.chat.profile.ChatMsgs
 import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
 import cu.alain.chat.profile.ReadReceipt
@@ -589,6 +591,7 @@ class ChatEngine(
             store.removeRoomKey(roomId)
             db.roomDao().delete(roomId)
             db.msgDao().clearForRoom(roomId)
+            db.reactionDao().deleteForRoom(roomId) // S2/D110
             db.outboxDao().deleteForRoom(roomId)
             db.pendingDao().deleteForRoom(roomId)
             db.roomPeerDao().deleteForRoom(roomId)
@@ -667,6 +670,7 @@ class ChatEngine(
             db.roomDao().wipe(); db.msgDao().wipe(); db.outboxDao().wipe(); db.pendingDao().wipe()
             db.profileDao().wipe(); db.roomPeerDao().wipe()   // perfiles + pares (D61)
             db.callLogDao().wipe()                              // registro de llamadas (v0.7.0)
+            db.reactionDao().wipe()                              // reacciones (S2/D110)
             avatarsDir.deleteRecursively()                     // fotos propias, de pares y de salas
             File(avatarsDir.parentFile, "attcache").deleteRecursively() // blobs y descargas de adjuntos (D76)
             db.metaDao().setLong("last_seq", 0)
@@ -793,8 +797,10 @@ class ChatEngine(
     /**
      * Cifra y encola un mensaje para una sala. Devuelve Ok(msgId) para la UI
      * inmediata (burbuja "enviando") o Err con mensaje en español.
+     * S2/D110: [replyTo] = msgId citado — viaja E2EE DENTRO del plaintext
+     * (prefijo \u0000Q); el servidor sigue sin ver relaciones entre mensajes.
      */
-    suspend fun send(roomId: String, text: String): Result<String> {
+    suspend fun send(roomId: String, text: String, replyTo: String? = null): Result<String> {
         val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
         if (text.isEmpty()) return Result.failure(IllegalArgumentException("vacío"))
         val key = keys[roomId.lowercase()]
@@ -802,7 +808,9 @@ class ChatEngine(
 
         val msgId = Crypto.uuid7()
         val ts = System.currentTimeMillis()
-        val wire = Crypto.frame(text)
+        val wire = Crypto.frame(
+            if (replyTo != null) ChatMsgs.Reply.encode(replyTo, text) else text,
+        )
         val convKey = Crypto.convKey(key.first, roomId)
         val mk = Crypto.msgKey(convKey, msgId)
         val aad = Crypto.aad(msgId, s.uid, roomId)
@@ -815,12 +823,94 @@ class ChatEngine(
         db.msgDao().insert(
             Message(
                 msgId, roomId, s.uname, mine = true, body = text, ts = ts,
-                state = C.ST_SENDING, senderUid = s.uid,
+                state = C.ST_SENDING, senderUid = s.uid, replyTo = replyTo,
             )
         )
         db.outboxDao().insert(OutboxMsg(msgId, roomId, b64(ct), b64(nonce), ts))
         poke()
         return Result.success(msgId)
+    }
+
+    // ────────────────────────── S2/D110: editar · borrar · reaccionar ──────────────────────────
+
+    /** Edita un mensaje PROPIO (texto). Local al instante + control E2EE. */
+    suspend fun editMessage(msgId: String, newText: String): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val m = db.msgDao().byId(msgId)
+            ?: return Result.failure(IllegalStateException("el mensaje ya no existe"))
+        if (!m.mine || m.kind != C.KIND_TEXT || m.state == C.ST_DELETED || m.body.startsWith("\u0000A")) {
+            return Result.failure(IllegalArgumentException("Ese mensaje no se puede editar"))
+        }
+        if (newText.isBlank()) return Result.failure(IllegalArgumentException("vacío"))
+        db.msgDao().applyEdit(msgId, s.uid, newText.trim())
+        if (sendControl(m.roomId, ChatMsgs.Edit.encode(msgId, newText.trim()), C.KIND_EDIT, "")) poke()
+        return Result.success(Unit)
+    }
+
+    /** Borra un mensaje PROPIO para TODOS (tumba local + control E2EE). */
+    suspend fun deleteMessage(msgId: String): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val m = db.msgDao().byId(msgId)
+            ?: return Result.failure(IllegalStateException("el mensaje ya no existe"))
+        if (!m.mine || m.state == C.ST_DELETED) {
+            return Result.failure(IllegalArgumentException("Ese mensaje no se puede borrar"))
+        }
+        db.msgDao().applyDelete(msgId, s.uid, C.ST_DELETED)
+        if (sendControl(m.roomId, ChatMsgs.Delete.encode(msgId), C.KIND_DELETE, "")) poke()
+        return Result.success(Unit)
+    }
+
+    /** Alterna MI reacción a un mensaje (una por usuario; la nueva pisa). */
+    suspend fun toggleReaction(msgId: String, emoji: String): Result<Unit> {
+        val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
+        val m = db.msgDao().byId(msgId)
+            ?: return Result.failure(IllegalStateException("el mensaje ya no existe"))
+        val cur = db.reactionDao().get(msgId, s.uid)
+        val on = cur?.emoji != emoji
+        if (on) db.reactionDao().upsert(Reaction(msgId, s.uid, emoji))
+        else db.reactionDao().remove(msgId, s.uid)
+        if (sendControl(m.roomId, ChatMsgs.Reaction.encode(msgId, emoji, on), C.KIND_REACTION, "")) poke()
+        return Result.success(Unit)
+    }
+
+    // ────────────────────────── S2/D110: «escribiendo…» ──────────────────────────
+
+    private var lastTypingSent = 0L
+
+    /**
+     * Aviso efímero de que estoy escribiendo — por BROADCAST Realtime, no por
+     * mensajes: no persiste en el servidor, no ocupa el /sync, no deja rastro.
+     * Sin contenido (sala + nombre público), igual que la señalización de
+     * llamadas que ya viaja por ahí. Throttle interno de 2,5 s.
+     */
+    fun sendTyping(roomId: String) {
+        val s = store.session ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastTypingSent < 2_500) return
+        lastTypingSent = now
+        scope.launch {
+            try {
+                val name = db.profileDao().get(s.uid)?.displayName ?: s.uname
+                api.broadcast(
+                    "room-${roomId.lowercase()}", "typ",
+                    org.json.JSONObject().put("r", roomId).put("u", s.uid).put("n", name),
+                )
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * S2/D110: quién está escribiendo — roomId → (nombre, caducidad ms). Lo
+     * alimenta el broadcast "typ" (ChatApp) y la UI lo expira sola (4 s).
+     */
+    val typing = MutableStateFlow<Map<String, Pair<String, Long>>>(emptyMap())
+
+    /** Registra un aviso de escritura recibido (lo llama ChatApp). */
+    fun onTypingReceived(roomId: String, uid: String, name: String) {
+        val s = store.session ?: return
+        if (uid.equals(s.uid, ignoreCase = true)) return // eco propio
+        typing.value = typing.value + (roomId.lowercase() to (name to System.currentTimeMillis() + 4_000))
     }
 
     /**
@@ -1283,6 +1373,40 @@ class ChatEngine(
                     if (p != null) {
                         if (!mine) applyReadReceipt(row.roomId, p.upToSeq)
                         return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_READ, row.senderId)
+                    }
+                }
+                // S2/D110: cita — el texto con la referencia E2EE dentro
+                if (ChatMsgs.Reply.isReply(body)) {
+                    val p = ChatMsgs.Reply.parse(body)
+                    if (p != null) {
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.second, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_TEXT, row.senderId, p.first)
+                    }
+                }
+                // S2/D110: edición — solo el AUTOR puede editar (applyEdit verifica)
+                if (ChatMsgs.Edit.isEdit(body)) {
+                    val p = ChatMsgs.Edit.parse(body)
+                    if (p != null) {
+                        if (!mine) try { db.msgDao().applyEdit(p.first, row.senderId, p.second) } catch (_: Exception) {}
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_EDIT, row.senderId)
+                    }
+                }
+                // S2/D110: borrado para todos → tumba
+                if (ChatMsgs.Delete.isDelete(body)) {
+                    val p = ChatMsgs.Delete.parse(body)
+                    if (p != null) {
+                        if (!mine) try { db.msgDao().applyDelete(p, row.senderId, C.ST_DELETED) } catch (_: Exception) {}
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_DELETE, row.senderId)
+                    }
+                }
+                // S2/D110: reacción (una por usuario; la nueva pisa)
+                if (ChatMsgs.Reaction.isReaction(body)) {
+                    val p = ChatMsgs.Reaction.parse(body)
+                    if (p != null) {
+                        if (!mine) try {
+                            if (p.on) db.reactionDao().upsert(Reaction(p.msgId, row.senderId, p.emoji))
+                            else db.reactionDao().remove(p.msgId, row.senderId)
+                        } catch (_: Exception) {}
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_REACTION, row.senderId)
                     }
                 }
                 Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_TEXT, row.senderId)

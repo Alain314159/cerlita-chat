@@ -53,6 +53,9 @@ data class Message(
     val seq: Long? = null,
     val kind: Int = 0,          // 0=texto · 1=evento de perfil (D61; invisible en el chat)
     val senderUid: String = "", // uid del emisor (perfiles/avatares; "" en filas pre-v3)
+    /** S2/D110: msgId del mensaje citado (responder). Viaja E2EE DENTRO del
+     *  plaintext (prefijo \u0000Q) — el servidor sigue sin ver relaciones. */
+    val replyTo: String? = null,
 )
 
 /** Mensaje pendiente de enviar (persiste el ciphertext hasta el ack del servidor). */
@@ -113,6 +116,18 @@ data class Profile(
 data class RoomPeer(
     val roomId: String,
     val uid: String,
+)
+
+/**
+ * S2/D110: reacción de un usuario a un mensaje — UNA por usuario y mensaje
+ * (la nueva pisa la anterior, como WhatsApp). Viaja E2EE como mensaje de
+ * control kind=6; el servidor solo ve ciphertext.
+ */
+@Entity(tableName = "reactions", primaryKeys = ["msgId", "uid"])
+data class Reaction(
+    val msgId: String,
+    val uid: String,
+    val emoji: String,
 )
 
 // ───────────── entidades v5 (v0.7.0: llamadas) ─────────────
@@ -267,6 +282,20 @@ interface MsgDao {
     @Query("DELETE FROM messages WHERE roomId = :room")
     suspend fun clearForRoom(room: String)
 
+    // ── S2/D110: editar / borrar / citar ──
+
+    /** Aplica una edición SOLO si el mensaje es del editor y es texto. */
+    @Query("UPDATE messages SET body = :text WHERE msgId = :msgId AND senderUid = :sender AND kind = 0")
+    suspend fun applyEdit(msgId: String, sender: String, text: String)
+
+    /** Tumba un mensaje borrado (para todos): cuerpo fuera, estado DELETED. */
+    @Query("UPDATE messages SET body = '', state = :deleted WHERE msgId = :msgId AND senderUid = :sender AND kind = 0")
+    suspend fun applyDelete(msgId: String, sender: String, deleted: Int)
+
+    /** Mensaje citado por id (la burbuja muestra su avance). */
+    @Query("SELECT * FROM messages WHERE msgId = :msgId LIMIT 1")
+    suspend fun byId(msgId: String): Message?
+
     // Lista de conversaciones: último mensaje TEXTO por sala
     @Query(
         """SELECT m.* FROM messages m
@@ -383,6 +412,29 @@ interface RoomPeerDao {
     suspend fun deleteForRoom(room: String)
 
     @Query("DELETE FROM room_peer")
+    suspend fun wipe()
+}
+
+@Dao
+interface ReactionDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(r: Reaction)
+
+    @Query("DELETE FROM reactions WHERE msgId = :msgId AND uid = :uid")
+    suspend fun remove(msgId: String, uid: String)
+
+    /** Mi reacción actual a un mensaje (null = ninguna). */
+    @Query("SELECT * FROM reactions WHERE msgId = :msgId AND uid = :uid LIMIT 1")
+    suspend fun get(msgId: String, uid: String): Reaction?
+
+    /** Reacciones de una sala (la UI las agrupa por msgId). */
+    @Query("SELECT * FROM reactions WHERE msgId IN (SELECT msgId FROM messages WHERE roomId = :room)")
+    fun observeForRoom(room: String): Flow<List<Reaction>>
+
+    @Query("DELETE FROM reactions WHERE msgId IN (SELECT msgId FROM messages WHERE roomId = :room)")
+    suspend fun deleteForRoom(room: String)
+
+    @Query("DELETE FROM reactions")
     suspend fun wipe()
 }
 
@@ -538,10 +590,65 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+/**
+ * v6 → v7 (S2/D110): columna replyTo en messages (citas) + tabla reactions.
+ * La tabla FTS messages_fts NO va aquí: la crea el callback onOpen (idempotente)
+ * para que exista igual en instalaciones NUEVAS y migradas — Room no gestiona
+ * tablas virtuales externas al schema.
+ * Migración REAL: hay teléfonos reales con v0.14.0 y meses de historial.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `messages` ADD COLUMN `replyTo` TEXT")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `reactions` (`msgId` TEXT NOT NULL, `uid` TEXT NOT NULL, " +
+                "`emoji` TEXT NOT NULL, PRIMARY KEY(`msgId`, `uid`))"
+        )
+    }
+}
+
+/**
+ * S2/D110: FTS4 sobre el cuerpo de los mensajes, para la búsqueda global.
+ *
+ * Por qué una tabla virtual PROPIA (con msgId+body) y no @Fts4(contentEntity):
+ * Room no crea los triggers de sincronización para FTS de contenido externo —
+ * solo crea la tabla, y el índice quedaría huérfano al primer INSERT. Aquí el
+ * rowid del FTS = rowid de messages y tres triggers (insert/delete/update de
+ * body) la mantienen al día sin tocar el código de escritura existente. Todo
+ * vive en el callback onOpen (idempotente, CREATE IF NOT EXISTS): instalaciones
+ * nuevas y migradas quedan idénticas, y Room ignora tablas que no son suyas.
+ */
+private val FTS_CALLBACK = object : androidx.room.RoomDatabase.Callback() {
+    override fun onOpen(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `messages_fts` USING fts4(`msgId`, `body`)")
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS `msgs_fts_ai` AFTER INSERT ON `messages` " +
+                "WHEN new.kind = 0 BEGIN " +
+                "INSERT INTO messages_fts(rowid, msgId, body) VALUES (new.rowid, new.msgId, new.body); END"
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS `msgs_fts_ad` AFTER DELETE ON `messages` BEGIN " +
+                "DELETE FROM messages_fts WHERE rowid = old.rowid; END"
+        )
+        db.execSQL(
+            "CREATE TRIGGER IF NOT EXISTS `msgs_fts_au` AFTER UPDATE OF body ON `messages` BEGIN " +
+                "DELETE FROM messages_fts WHERE rowid = old.rowid; " +
+                "INSERT INTO messages_fts(rowid, msgId, body) VALUES (new.rowid, new.msgId, new.body); END"
+        )
+        // repoblado incremental (una vez): el historial previo al primer arranque
+        // con FTS. Barato: solo inserta los rowid que faltan.
+        db.execSQL(
+            "INSERT INTO messages_fts(rowid, msgId, body) " +
+                "SELECT rowid, msgId, body FROM messages WHERE kind = 0 " +
+                "AND rowid NOT IN (SELECT rowid FROM messages_fts)"
+        )
+    }
+}
+
 @Database(
     entities = [Room::class, Message::class, OutboxMsg::class, PendingMsg::class, MetaRow::class,
-        Profile::class, RoomPeer::class, CallLog::class],
-    version = 6,
+        Profile::class, RoomPeer::class, CallLog::class, Reaction::class],
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -554,12 +661,60 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun roomPeerDao(): RoomPeerDao
     abstract fun roomListDao(): RoomListDao
     abstract fun callLogDao(): CallLogDao
+    abstract fun reactionDao(): ReactionDao
+
+    /**
+     * S2/D110: búsqueda global FTS4 — query CRUDA: Room no conoce la tabla
+     * virtual messages_fts (la crea el callback onOpen, no es una @Entity),
+     * así que KSP no puede validarla. Mapeo a mano del cursor a Message.
+     * Los términos llegan escapados con comillas (ftsEscape en la UI).
+     * suspend + IO interna: Room prohíbe query() en main thread.
+     */
+    suspend fun searchRaw(q: String): List<Message> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val out = mutableListOf<Message>()
+            try {
+                query(
+                    androidx.sqlite.db.SimpleSQLiteQuery(
+                        "SELECT m.msgId, m.roomId, m.senderUname, m.mine, m.body, m.ts, m.state, " +
+                            "m.seq, m.kind, m.senderUid, m.replyTo " +
+                            "FROM messages m JOIN messages_fts ON messages_fts.rowid = m.rowid " +
+                            "WHERE messages_fts MATCH ? AND m.kind = 0 " +
+                            "ORDER BY m.ts DESC LIMIT 200",
+                        arrayOf(q),
+                    ),
+                ).use { c ->
+                    val iReply = c.getColumnIndex("replyTo")
+                    while (c.moveToNext()) {
+                        out.add(
+                            Message(
+                                msgId = c.getString(0),
+                                roomId = c.getString(1),
+                                senderUname = c.getString(2),
+                                mine = c.getInt(3) != 0,
+                                body = c.getString(4),
+                                ts = c.getLong(5),
+                                state = c.getInt(6),
+                                seq = if (c.isNull(7)) null else c.getLong(7),
+                                kind = c.getInt(8),
+                                senderUid = c.getString(9),
+                                replyTo = if (iReply >= 0 && !c.isNull(iReply)) c.getString(iReply) else null,
+                            ),
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+                // sin FTS todavía (primera apertura) o query inválida: sin resultados
+            }
+            out
+        }
 
     companion object {
         fun build(ctx: Context): AppDatabase =
             // androidx.room.Room (calificado: la entidad local se llama Room)
             androidx.room.Room.databaseBuilder(ctx.applicationContext, AppDatabase::class.java, "chat.db")
-                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addCallback(FTS_CALLBACK)
                 // B7 (auditoría): SIN fallback destructivo. Antes, una migración
                 // olvidada borraba el historial EN SILENCIO. Ahora: crash visible
                 // en desarrollo (y en CI, MigrationTest obligatorio por salto) en
