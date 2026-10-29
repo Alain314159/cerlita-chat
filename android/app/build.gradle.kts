@@ -41,6 +41,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // D116 (Fase V): cobertura JaCoCo de los tests unitarios — el informe
+            // la exige con umbral publicado para los paquetes críticos.
+            // Tarea: createDebugUnitTestCoverageReport
+            enableUnitTestCoverage = true
+        }
         release {
             // R8 ON desde la v1 (regla del skill: nunca activarlo "después")
             isMinifyEnabled = true
@@ -78,6 +84,15 @@ android {
                 }
             }
         }
+    }
+
+    // D117 (Fase V): lint con BASE — los avisos actuales quedan congelados en
+    // lint-baseline.xml (comprometido) y CUALQUIER aviso nuevo rompe el build.
+    // «Base de lint pública y cero avisos nuevos» (informe 1.0, tabla 5).
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        warningsAsErrors = false
     }
 
     packaging {

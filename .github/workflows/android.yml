@@ -70,6 +70,20 @@ jobs:
       - name: Tests (JVM + Robolectric)
         run: cd android && ./gradlew :app:testDebugUnitTest --stacktrace -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m"
 
+      # D116 (Fase V): cobertura con UMBRAL publicado (docs/qa/COBERTURA.md)
+      # — crypto ≥ 70% LINEA y ≥ 130 tests. Rompe el build si cae.
+      - name: Cobertura (umbral D116)
+        run: |
+          cd android && ./gradlew :app:createDebugUnitTestCoverageReport -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m"
+          python3 ../tools/qa/coverage_gate.py \
+            app/build/reports/coverage/test/debug/report.xml \
+            app/build/test-results/testDebugUnitTest
+
+      # D117 (Fase V): lint con base — cero avisos NUEVOS (los 71 actuales
+      # están congelados en app/lint-baseline.xml).
+      - name: Lint (base D117, cero avisos nuevos)
+        run: cd android && ./gradlew :app:lintDebug -Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m"
+
       # Heap subido para CI: el -Xmx2048m de gradle.properties (pensado para
       # el sandbox de 3,9 GB) hace que lintVital muera de OOM en el runner
       # (hallazgo del primer run: FirPartialBodyExpressionResolveTransformer).
@@ -89,6 +103,14 @@ jobs:
           name: cerlita-chat-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
+
+      - name: Subir reporte de cobertura (HTML)
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura-html
+          path: android/app/build/reports/coverage/test/debug/
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Publicar Release (solo tags v*)
         if: startsWith(github.ref, 'refs/tags/v')

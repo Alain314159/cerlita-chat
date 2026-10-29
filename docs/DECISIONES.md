@@ -493,3 +493,18 @@ Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters det
 **CI**: job `instrumented` nuevo en Android CI — ATD Pixel 6 API 34 (aosp-atd) con KVM en ubuntu-latest, con caché de la imagen (~1,3 GB) para no descargarla en cada push. Se arreglaron además los triggers del workflow que estaban corruptos (`branches: ain]` → `[main]`) y no disparaban CI en pushes a main.
 
 **Criterio de salida (Fase V)**: «la integración continua ejecuta en verde la prueba de instrumentación» — este commit más la iteración hasta el verde.
+
+## D116/D117 — Lo que se mide se defiende: cobertura con umbral publicado y lint con base (v0.18.0)
+
+**Contexto.** Brecha 5 del informe 1.0 («calidad no medida»): sin cobertura, sin base de lint, sin presupuesto de rendimiento — «lo que no se mide, se degrada». Y la tabla 5 exige para la 1.0: base de lint publicada con cero avisos nuevos, y umbral de cobertura publicado para los paquetes críticos.
+
+**D116 — Cobertura.** `enableUnitTestCoverage` en debug (JaCoCo vía AGP) + **puerta publicada** `tools/qa/coverage_gate.py` que corre en CI y ROMPE el build si se incumple:
+
+- `cu.alain.chat.crypto` LINEA **≥ 70 %** — medido al publicar: **75,1 %**. El informe lo predijo («seguramente rondaría cifras excelentes y ganaría el argumento para siempre») y lo confirmó.
+- Total de tests unitarios **≥ 130** (medido: 132) — el criterio de salida LITERAL de la Fase P para la 1.0.
+
+**Honestidad ante todo**: NO se publica suelo para `engine` porque sería un número FALSO — los tests del motor corren bajo el sandbox de Robolectric, que el agente JaCoCo de AGP no instrumenta (empíricamente verificado esta sesión: todo paquete Robolectric aparece al 0 % con sus tests en verde). La limitación y su remedio (instrumentación offline / Kover cuando soporte el Kotlin embebido de AGP 9) quedan documentados en `docs/qa/COBERTURA.md` con los números del primer corte por paquete. Números falsos no; números limitados con receta para completarlos, sí.
+
+**D117 — Lint.** Base `app/lint-baseline.xml` (71 issues congelados: 2 errores, 60 avisos, 9 hints — el estado REAL de 14,7k líneas de Kotlin) + `abortOnError`: **cualquier aviso nuevo rompe el build**, en local y en CI (`lintDebug` en cada push). La absorción de deuda es visible en diffs: arreglar y regenerar la base baja el contador; regenerar con un aviso dentro lo confiesa.
+
+**Ambos en CI**: pasos «Cobertura (umbral D116)» y «Lint (base D117)» en el job build; el HTML de cobertura se sube como artefacto `cobertura-html`.
