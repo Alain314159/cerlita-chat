@@ -52,11 +52,21 @@ class DoorbellService : Service() {
         @Volatile
         var connected: Boolean = false
             private set
+
+        /** S1/D105: al volver la red (NetWatch) — reconexión inmediata del
+         *  timbre del FGS sin esperar al backoff. Inofensivo si no corre. */
+        fun kickDoorbell() {
+            instance?.doorbell?.kick()
+        }
+
+        @Volatile
+        private var instance: DoorbellService? = null
     }
 
     override fun onCreate() {
         super.onCreate()
         running = true
+        instance = this
         // Contrato de startForegroundService: SIEMPRE foreground primero
         // (aunque luego descubramos que no hay sesión y hagamos stopSelf).
         startInForeground()
@@ -78,10 +88,11 @@ class DoorbellService : Service() {
             anonKey = { cu.alain.chat.core.C.ANON_KEY },
             scope = scope,
             onDoorbell = { _roomId -> // el roomId no hace falta: /sync trae todo lo nuevo
-                scope.launch { app.engine.syncOnce() }
+                // Q6/D105: coalescing — N timbres en ráfaga = 1-2 ciclos, no N
+                app.engine.requestSync()
             },
             onConnected = { // (re)conexión = alcance de reloj: sincroniza lo perdido
-                scope.launch { app.engine.syncOnce() }
+                app.engine.requestSync()
             },
             onStateChange = { connected = it },
             onBroadcast = { event, payload -> app.onRealtimeEvent(event, payload) }, // dm + llamadas
@@ -121,6 +132,7 @@ class DoorbellService : Service() {
     override fun onDestroy() {
         running = false
         connected = false
+        instance = null
         doorbell?.shutdown()
         scope.cancel()
         super.onDestroy()
@@ -171,6 +183,10 @@ class BootReceiver : android.content.BroadcastReceiver() {
             intent.action != Intent.ACTION_MY_PACKAGE_REPLACED
         ) return
         val app = ctx.applicationContext as? ChatApp ?: return
-        if (app.store.session != null && app.prefs.instantBg) Doorbell.ensureStarted(ctx)
+        if (app.store.session != null) {
+            if (app.prefs.instantBg) Doorbell.ensureStarted(ctx)
+            // S1/D105: la 3ª capa (alarma) también revive tras reinicio/actualizar
+            cu.alain.chat.notify.SyncAlarm.schedule(ctx)
+        }
     }
 }

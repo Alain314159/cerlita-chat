@@ -58,6 +58,7 @@ class RealtimeDoorbell(
     private var topics: Set<String> = emptySet()
     private var ref = 0
     private var hbJob: Job? = null
+    private var reconnectJob: Job? = null
     private var backoffMs = 5_000L
     @Volatile private var started = false
     @Volatile private var connected = false
@@ -87,6 +88,18 @@ class RealtimeDoorbell(
         stop()
         client.dispatcher.executorService.shutdown()
         client.connectionPool.evictAll()
+    }
+
+    /**
+     * Q2/S1 (D105): «despierta ya». Cancela la reconexión pendiente y conecta
+     * en el acto. Lo llama NetWatch al VOLVER la red (onAvailable) — sin esto,
+     * tras un apagón el timbre podía seguir ciego hasta 60 s (backoff alto).
+     * Inofensivo si ya está conectado o parado.
+     */
+    fun kick() {
+        if (!started || connected) return
+        reconnectJob?.cancel()
+        connect()
     }
 
     /** Nuevos topics de sala (diff: no reabre la conexión). */
@@ -140,8 +153,18 @@ class RealtimeDoorbell(
             }
         }
 
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            // Q2/S1 (D105): «sin red» ≠ «servidor caído». Un fallo de DNS/ruta
+            // (UnknownHostException/ConnectException) falla RÁPIDO y barato:
+            // el backoff se REINICIA a 5 s para que al volver la red conecte
+            // en el primer intento — antes subía a 60 s y había hasta 1 min
+            // de ceguera tras el apagón. Los fallos de servidor/protocolo
+            // mantienen la escalada 5→60 s de siempre.
+            if (t is java.net.UnknownHostException || t is java.net.ConnectException) {
+                backoffMs = 5_000L
+            }
             scheduleReconnect()
+        }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
             scheduleReconnect()
@@ -163,7 +186,8 @@ class RealtimeDoorbell(
         if (!started) return
         val wait = backoffMs + Random.nextLong(0, backoffMs / 4) // jitter ≤25 %
         backoffMs = min(backoffMs * 2, 60_000L)
-        scope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
             delay(wait)
             connect()
         }

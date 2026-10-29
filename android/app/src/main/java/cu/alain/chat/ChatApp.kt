@@ -14,6 +14,7 @@ import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.notify.NtfyChannel
 import cu.alain.chat.notify.RealtimeDoorbell
+import cu.alain.chat.notify.SyncAlarm
 import cu.alain.chat.vault.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -123,6 +124,7 @@ class ChatApp : Application(), Configuration.Provider {
 
         Notifier.ensureServiceChannel(this)
         cu.alain.chat.work.WorkSync.ensurePeriodic(this)
+        cu.alain.chat.net.NetWatch.ensure(this) // Q3/D105: despertar al volver la red
         engine.refreshState()
         engine.onProcessStart() // sesión viva tras reinicio: claves a RAM + salas del servidor
         engine.ensureSessionExpiry() // D93: sesión vieja sin exp → preguntarla al servidor
@@ -176,6 +178,10 @@ class ChatApp : Application(), Configuration.Provider {
         } else {
             NtfyChannel.stop()
         }
+        // S1/D105: 3ª capa — la alarma vive mientras viva la sesión (con FGS
+        // vivo es redundante y barata; con FGS muerto por el OEM es la que
+        // acota el daño a ≤ 6 min). Sin sesión: nada que despertar.
+        if (hasSession) SyncAlarm.schedule(this) else SyncAlarm.cancel(this)
     }
 
     private fun startAppDoorbell() {
@@ -184,8 +190,8 @@ class ChatApp : Application(), Configuration.Provider {
             baseUrl = { prefs.baseUrl },
             anonKey = { cu.alain.chat.core.C.ANON_KEY },
             scope = appScope,
-            onDoorbell = { _ -> appScope.launch { engine.syncOnce() } },
-            onConnected = { appScope.launch { engine.syncOnce() } },
+            onDoorbell = { _ -> engine.requestSync() }, // Q6/D105: coalescing
+            onConnected = { engine.requestSync() },
             onBroadcast = { event, payload -> onRealtimeEvent(event, payload) },
             userId = { store.session?.uid?.lowercase() },
         )
@@ -213,8 +219,25 @@ class ChatApp : Application(), Configuration.Provider {
      */
     fun onRealtimeEvent(event: String, payload: String) {
         when (event) {
-            "dm" -> appScope.launch { engine.syncOnce() }
+            "dm" -> engine.requestSync() // Q6/D105: coalescing
             "sig" -> cu.alain.chat.calls.CallDispatcher.onSignal(this, payload) // llamadas (D75)
+        }
+    }
+
+    /**
+     * Q3/D105 (NetWatch.onAvailable): la red VOLVIÓ. Kick del timbre vivo
+     * (conecta ya, sin esperar al backoff) + sync inmediato (los mensajes
+     * del apagón llegan en el primer segundo) + poll ntfy best-effort (si
+     * lo caído era Supabase, ntfy trae el sobre por la otra ruta). Sin
+     * sesión no hay nada que hacer.
+     */
+    fun onNetworkBack() {
+        if (store.session == null) return
+        appDoorbell?.kick()
+        DoorbellService.kickDoorbell()
+        appScope.launch {
+            engine.requestSync()
+            try { NtfyChannel.pollOnce(this@ChatApp, "net") } catch (_: Exception) {}
         }
     }
 

@@ -17,6 +17,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- S1/D105: 3ª capa de despertar — alarma ~4-6 min (Doze incluido).
+         Sin el permiso especial (Android 13+ no lo da por defecto) degrada
+         limpia a setAndAllowWhileIdle: nada rompe. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:name=".ChatApp"
@@ -71,6 +75,13 @@
                 <action android:name="cu.alain.chat.action.MARK_READ" />
             </intent-filter>
         </receiver>
+
+        <!-- S1/D105: 3ª capa de despertar — alarma que drena ntfy + /sync
+             aunque el OEM mate el FGS del timbre. Se replanifica sola. -->
+        <receiver
+            android:name=".notify.SyncAlarmReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <!-- Compartir el export cifrado del historial -->
         <provider

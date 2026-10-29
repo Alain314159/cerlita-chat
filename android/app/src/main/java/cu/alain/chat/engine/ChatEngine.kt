@@ -1034,6 +1034,40 @@ class ChatEngine(
      * dispararlos a la vez y el cursor (last_seq) avanzaría dos veces. */
     private val syncMutex = kotlinx.coroutines.sync.Mutex()
 
+    // ── Q6/S1 (D105): coalescing de syncs ──
+    // El timbre dispara un sync por CADA broadcast recibido; con N salas
+    // activas llegaban N syncOnce encolados por el mutex (N polls inútiles
+    // encadenados, cada uno con su RTT). Ahora: si ya hay un ciclo en marcha,
+    // el recién llegado solo marca «repite» y el ciclo corriente vuelve a
+    // empezar al terminar — N timbres seguidos = 1-2 ciclos, no N.
+    private val syncRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val syncAgain = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Pide un ciclo de sync CON coalescing (lo usan timbre, red y alarma —
+     * los eventos que pueden llegar en ráfaga). Los caminos con su propio
+     * ritmo (polling, workers) siguen llamando [syncOnce] directamente.
+     * Nunca lanza y nunca se pierde un despertar (carrera del exit-window
+     * cubierta en el finally).
+     */
+    fun requestSync() {
+        if (!syncRunning.compareAndSet(false, true)) {
+            syncAgain.set(true) // ya hay uno en marcha: que repita al acabar
+            return
+        }
+        scope.launch {
+            try {
+                do {
+                    syncAgain.set(false)
+                    try { syncOnce() } catch (_: Exception) {}
+                } while (syncAgain.get())
+            } finally {
+                syncRunning.set(false)
+                if (syncAgain.get()) requestSync() // llegó justo al salir: no perderlo
+            }
+        }
+    }
+
     /**
      * Un ciclo de sync: baja todo lo nuevo (hasta 204), descifra y guarda.
      * Devuelve nº de mensajes nuevos legibles, o -1/-2 si hubo error de red/auth.
