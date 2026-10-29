@@ -366,3 +366,63 @@ S1 (v0.15.0), como propone el roadmap de la investigación D103.
 degradación, inyección/replay, multi-tema, since, attachment); NtfyTest JVM (KAT
 cruzado Python↔Kotlin del tema, build/parse, límites); PushIngestTest Robolectric
 (push→NewMsg, replay→dedup, fillSeq, eco mine, pending sin clave).
+
+
+## D105 — S1 QoS del despertar: reconexión inteligente + NetworkCallback + coalescing + AlarmManager 3ª capa (v0.15.0)
+
+**Decisión (29-oct-2026).** Ejecución del roadmap D103 (S1) tras el «dale haz todo S1 y el resto también». Cuatro arreglos que blindan la entrega, cada uno degrada limpio y ninguno rompe la arquitectura:
+
+1. **Q2 — «sin red» ≠ «servidor caído»** (`RealtimeDoorbell`): `UnknownHostException`/`ConnectException` falla RÁPIDO y barato → el backoff se REINICIA a 5 s (antes escalaba a 60 s: hasta un minuto de ceguera justo cuando la red vuelve). Los fallos de servidor/protocolo mantienen la escalada 5→60 s de siempre. Además `kick()`: cancela la reconexión pendiente y conecta YA.
+2. **Q3 — NetWatch** (`net/NetWatch.kt`, nuevo): `registerDefaultNetworkCallback` → `onAvailable` dispara kick de AMBOS timbres (in-app y FGS) + `requestSync()` + un poll ntfy best-effort (si lo caído era Supabase, ntfy trae el sobre por la otra ruta). El mensaje del apagón llega en el PRIMER segundo de red, no «hasta 5 min después».
+3. **Q6 — coalescing de syncs** (`ChatEngine.requestSync`): N timbres en ráfaga = 1-2 ciclos de /sync, no N encolados por el Mutex (cada uno con su RTT). AtomicBoolean «hay uno en marcha → marca repetición»; la carrera del exit-window se cubre en el finally (jamás se pierde un despertar). Lo usan timbre, red y alarma; polling y workers siguen con `syncOnce` directo (ya tienen su propio ritmo).
+4. **3ª capa — SyncAlarm** (`notify/SyncAlarm.kt`, nuevo): `setExactAndAllowWhileIdle` cada 4-6 min con jitter. En Doze es de las pocas excepciones que SÍ se ejecuta (WorkManager clavado a 15 min, FGS matable por el OEM): el peor caso con FGS muerto baja de 15 min a ≤6 min (Doze profundo lo espacia a ~9 min — límite del sistema, documentado). Sin el permiso exacto (Android 13+ no lo concede por defecto) degrada a `setAndAllowWhileIdle`. Se replanifica sola, revive en BOOT/MY_PACKAGE_REPLACED, y la enciende/apaga `syncDoorbell` (punto único D72) según sesión.
+
+**Capas de aviso resultantes (todas gratis, ninguna decide)**: WS timbre (instantáneo) → ntfy con sobre cifrado (D104, no pasa por Supabase) → alarma exacta 4-6 min (Doze incluido) → WorkManager 15 min. El servidor sigue sin cambiar NADA.
+
+## D106 — S1 /sync en UNA query con CTE + rate limiting (v0.15.0)
+
+**Decisión.** Q4: cada poll pagaba 5 queries secuenciales (sesión, mensajes, UPDATE delivered, entregas de otros, wraps dm) — ~2,5 s de siesta por poll en red de 500 ms RTT, con el poll cada 15 s en foreground y por timbre. Ahora TODO en **un solo round-trip** con CTEs encadenadas: `sess` (valida token y saca uid) → `served` (mensajes, global o por sala) → `upd` (delivered_seq a partir de lo servido — CTE de modificación: Postgres garantiza ejecutarla exactamente una vez, se lea o no) → `rd` (entregas de otros) → `dmk` (wraps). El modo sala (?room=) comparte la MISMA query; `memb` distingue 403 de 204.
+
+**La caché de sesión propuesta en la investigación resultó INNECESARIA**: al viajar la validación en la misma query no cuesta ningún round-trip extra y la revocación de un token sigue siendo INMEDIATA (mejor que cachear 60 s). **Rate limiting blando** por instancia cálida: 40 sync/min por token → 429 `rate_limited` (polling activo 12/min + timbre + red + alarma + worker caben de sobra; solo corta bucles desbocados; cliente con mensaje en español).
+
+**Hallazgo del e2e**: `encode(..., 'base64')` de Postgres mete `\n` cada 76 chars → `translate(..., chr(10), '')` en nonce/ciphertext/wrapped (el smoke test lo cazó comparando bytes EXACTOS). Verificado en producción deploy v76: smoke 37/37 + receipts 24/24 + room_history 26/26 + dm 20/20.
+
+## D107 — S1 llamadas a prueba de todo: FGS mic+cámara, full-screen intent, cámara solo al aceptar, calidad adaptativa + señal (v0.15.0)
+
+**Decisión.** Los 4 pendientes de la investigación D103 §4.2 + el indicador de señal:
+
+1. **FGS de llamada** (`calls/CallService.kt`, tipo `microphone|camera`): sin esto, apagar la pantalla o salir de la app podía CONGELAR el proceso y matar la llamada a los segundos aunque WebRTC estuviera conectado. Arranca al marcar/aceptar (siempre desde UI: permisos concedidos, requisito Android 14 para los tipos mic/cam) y se para al colgar — la notificación vive y muere con la llamada.
+2. **Full-screen intent** (`USE_FULL_SCREEN_INTENT` + canal `calls` IMPORTANCE_HIGH): la llamada ENTRANTE con pantalla apagada/bloqueada/en otra app antes «no existía». Ahora prende la pantalla sobre el bloqueo con Rechazar directo (CallActionReceiver); en 14+ sin permiso FSI degrada a heads-up. Pantalla de llamada con `FLAG_SHOW_WHEN_LOCKED|TURN_SCREEN_ON` (los métodos Window.setShowWhenLocked fueron REMOVIDOS del SDK 37 — hallazgo de sesión) y `FLAG_KEEP_SCREEN_ON` en videollamada activa. Los permisos de llamada se piden ANTES de marcar (el FGS mic/cam los exige concedidos; las entrantes ya los pedían al aceptar).
+3. **Cámara solo al aceptar** (`asCallee`): el receptor de una videollamada crea la PISTA (la negociación SDP la exige) pero SIN capturador — el indicador de cámara ya NO se enciende antes de tocar Aceptar; nada sale del teléfono. `startCameraIfNeeded()` en `accept()`.
+4. **Calidad adaptativa**: captura 720p si la cámara lo soporta (suelo 640×480 verificado por `getSupportedFormats`) + techo 900 kbps (`RtpSender.parameters.encodings.maxBitrateBps`) que protege los datos en ETECSA — por debajo del techo WebRTC adapta resolución/fps solo (GCC/REMB), la llamada nunca se corta por calidad.
+5. **Señal** (`getStats` cada 3 s → nivel 0/1/2 por RTT del candidate-pair nominado): barritas + «señal débil/muy mala» en la llamada activa — «se cortó» deja de ser la primera noticia de red mala.
+
+## D108 — S0' fluidez: ventana de historial, miniaturas por bytes y Cerlita noche (v0.15.0)
+
+**Decisión.** Los tres pendientes de UI de la auditoría:
+
+1. **U2 — ventana de historial** (en vez de Paging 3): `observeChatWindow(room, limit)` emite SOLO los últimos 200 mensajes; el scroll arriba sube el límite +300 (carga bajo demanda estilo Telegram, claves estables → sin saltos). MISMO objetivo que Paging 3 (no re-emitir 5 000 filas por cada ✓) con ~30 líneas y CERO dependencias/arquitectura nueva (LazyPagingItems+reverseLayout traía más riesgo que valor). El chip «↓N» y el auto-scroll ahora solo reaccionan a mensajes NUEVOS al final (cambia el último msgId): el prepend de historia no mueve nada ni inventa «nuevos».
+2. **U3 — miniaturas**: decodificación con `inSampleSize` al tamaño de burbuja (512 px) + LruCache por BYTES (6 MB) en vez de 24 bitmaps completos de 4-9 MB; el visor a pantalla completa decodifica su propia versión 1440 px desde el archivo en caché.
+3. **U5 — Cerlita noche** (opción 5 en Ajustes): la MISMA rueda cálida de D77 invertida — coral aclarado #E8A0AC para contraste AA, fondos ciruela #20191C/#291F23, burbujas enviadas rosa apagado #6E454E con texto rosado claro. «De noche la app es rosa claro» resuelto sin perder la identidad.
+
+## D109 — S0' adjuntos sin OOM: 8 MB, subida streaming y reintentable, limpieza diaria (v0.15.0)
+
+**Decisión.** B8 de la auditoría. `MAX_FILE` 20→8 MB (pico de RAM al cifrar ~24 MB transitorios, aceptable en gamas bajas; las subidas larguísimas por ETECSA dejan de ser la norma). **El AEAD a trozos (formato v2) se evaluó y se RECHAZÓ**: rompería la descarga de TODOS los adjuntos ya en el servidor — el coste no justifica el beneficio con tope de 8 MB. Lo que sí cambió: (1) `storageUploadFile` — el cuerpo sale del ARCHIVO por bloques de 32 KB (RequestBody con FileInputStream), nunca entero en RAM (la versión por bytes quedó sin uso y se retiró); (2) el blob cifrado se escribe a attcache ANTES de subir — si el proceso muere a mitad de subida, `recoverOrphanUploads` marca FALLIDA y el botón Reintentar tiene el material entero (antes: reenviar a mano); (3) el picker comprueba el TAMAÑO por metadatos antes de leer un byte; (4) `AttCacheCleanWorker` diario: attcache (dl-* y *.bin) crecía INDEFINIDAMENTE (auditoría S4) — borra lo de +30 días, lo vivo se re-descarga al abrirlo.
+
+## D110 — S2 «el chat que esperabas»: responder, reacciones, editar/borrar, escribiendo…, búsqueda FTS (v0.15.0)
+
+**Decisión.** Las 5 features más echadas de menos, todas E2EE con el patrón de prefijos de control de siempre (`\u0000` + letra que un texto jamás produce): **Q** citar · **E** editar · **D** borrar · **R** reaccionar.
+
+- **Responder**: la referencia viaja E2EE DENTRO del plaintext (`\u0000Q{"i","t"}`) — el servidor sigue sin ver relaciones entre mensajes. Tira de cita sobre el composer + avance citado dentro de la burbuja (fallback «Mensaje original» si la cita está fuera de la ventana).
+- **Reacciones**: UNA por usuario y mensaje (la nueva pisa, como WhatsApp) — tabla `reactions` (DB v7); fila de emojis rápidos en el long-press (❤️😂👍😮😢🔥) + chips bajo la burbuja con contador y resaltado de la propia.
+- **Editar** (propio, texto) y **Eliminar para todos** (tumba `ST_DELETED` discreta): `applyEdit`/`applyDelete` verifican AUTOR (senderUid) — un control ajeno jamás toca mensajes de otro.
+- **«Escribiendo…»**: broadcast Realtime EFÍMERO (evento `typ` por el canal que ya usa la señalización de llamadas) — no persiste en el servidor, no ocupa el /sync, no deja rastro; throttle 2,5 s, expira a los 4 s, el título del chat lo muestra en vivo.
+- **Búsqueda global FTS4** (la F4 de la auditoría): tabla virtual `messages_fts` con rowid=messages.rowid y 3 triggers (insert/delete/update-of-body), creada por callback `onOpen` IDEMPOTENTE (instalaciones nuevas y migradas quedan idénticas; Room ignora tablas ajenas). Por qué no `@Fts4(contentEntity)`: Room no crea los triggers de sincronización — el índice quedaría huérfano al primer INSERT. Por eso la query es cruda (`searchRaw`, suspend+IO: Room prohíbe query() en main thread — hallazgo cazado por MigrationTest). Input escapado con comillas por término (AND implícito, sin sorpresas de sintaxis FTS). Lupa en la pestaña Chats → SearchScreen con debounce 250 ms.
+
+**DB v6→v7** (MIGRATION_6_7 REAL: replyTo + reactions), menú de long-press para TODOS los mensajes (Reintentar ya no era el único habitante). Tests: ChatMsgsTest (framing) + migración con cita+reacción+FTS sobre historial migrado. **128/128**.
+
+## D111 — J0 minijuego 2048: el patrón de Telegram, E2EE y offline (v0.15.0)
+
+**Decisión.** Ejecución del J0 del roadmap D103: replicar el patrón «el juego ES un mensaje del chat» de Telegram sin su servidor. **Assets locales del APK** (`assets/games/2048/index.html`, ~13 KB propio en vanilla JS, 0 red — crítico en ETECSA) dentro de un WebView que SOLO carga `file:///android_asset` (http/https bloqueado) con **puente mínimo** `window.Cerlita`: `player()` (quién juega, del perfil E2EE local), `theme()` (paleta Cerlita VIVA — claro o noche según Ajustes), `record()` (récord de la pareja), `haptic()` (VibrationEffect), `submit(score)`. Cinco métodos inocuos, todo local, nada de initData que falsificar.
+
+**Burbuja de juego**: mensaje VISIBLE cuyo cuerpo es `\u0000G{"g","s"}` cifrado como cualquier texto (el servidor solo ve ciphertext) — burbuja con título, récord de la pareja en vivo y botón «Jugar» (menú adjuntar gana «Juego 🕹️»). **Récord E2EE de la pareja**: cada puntuación viaja como control INVISIBLE kind=KIND_GAME_SCORE; gana la mayor; persiste en meta `gm_<room>_<game>_r`; `gameRecords` StateFlow vivo — la burbuja se actualiza sola cuando alguien bate la marca, con toast «¡Nuevo récord de la pareja!». Notificaciones y citas muestran «🎮 Juego 2048», no el sobre crudo. J1 (catálogo 4-5 juegos + mensajes de servicio) y J2 (conecta-4 por turnos sobre mensajes) reutilizan TODO esto tal cual.

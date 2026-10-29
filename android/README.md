@@ -1,11 +1,12 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.6.0 "Cerlita
-Chat"**: modelo rooms (D54) + import del respaldo (D58) + icono propio (D60) +
-perfiles E2EE con avatares (D61) + notificaciones por timbre Realtime
-(D63-D67) + **recibos ✓/✓✓, ajustes de sala y tiempo real SIN notificación
-persistente (D68-D72)**.
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.15.0 «Sin
+retrasos»**: roadmap D103 completo — QoS del despertar (4 capas: timbre WS →
+ntfy D104 → alarma exacta → worker), `/sync` en 1 query, ventana de historial,
+llamadas a prueba de todo (FGS mic/cam, full-screen entrante, cámara al aceptar,
+señal), S2 (responder · reacciones · editar/borrar · escribiendo… · búsqueda
+FTS4) y J0 (minijuego 2048 E2EE con récord de la pareja, D105-D111).
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
