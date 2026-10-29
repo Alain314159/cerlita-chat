@@ -47,11 +47,15 @@ class RealtimeDoorbell(
     /** uid con sesión: se suscribe además al topic personal user-<uid> (D74). */
     private val userId: () -> String? = { null },
 ) {
-    /** URL del WS derivada de la URL base (https://x/functions/v1 → wss://x/...). */
+    /** URL del WS derivada de la URL base (https://x/functions/v1 → wss://x/...).
+     *  D115: el esquema se deriva del de la base (http→ws) — permite apuntar el
+     *  timbre al backend simulado EN el dispositivo en la prueba instrumentada;
+     *  en producción (https) queda exactamente igual que siempre. */
     private val wsUrl: String = run {
         val base = baseUrl().trimEnd('/')
         val host = base.removePrefix("https://").removePrefix("http://").substringBefore('/')
-        "wss://$host/realtime/v1/websocket?apikey=${anonKey()}&vsn=${Phoenix.VSN}"
+        val scheme = if (base.startsWith("http://")) "ws" else "wss"
+        "$scheme://$host/realtime/v1/websocket?apikey=${anonKey()}&vsn=${Phoenix.VSN}"
     }
 
     private var ws: WebSocket? = null

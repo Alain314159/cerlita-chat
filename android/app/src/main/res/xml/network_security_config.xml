@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  D115: todo el tráfico de la app va cifrado en tránsito (equivalente al
+  usesCleartextTraffic="false" de siempre — la config lo reemplaza y endurece).
+
+  EXCEPCIÓN ÚNICA y deliberada: loopback en claro (127.0.0.1 / 10.0.2.2).
+  La primera prueba instrumentada del proyecto (FlujoCriticoTest) levanta un
+  backend simulado (MockWebServer) DENTRO del propio dispositivo: la app habla
+  con él por http://127.0.0.1 — un socket que NUNCA sale del teléfono, no hay
+  red en claro. Sin esta excepción la instrumentada no puede existir; con
+  ella, producción sigue sin poder hablar HTTP en claro con nadie.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

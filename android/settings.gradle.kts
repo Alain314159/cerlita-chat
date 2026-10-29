@@ -26,3 +26,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "chat-e2ee"
 include(":app")
+include(":mockbackend")

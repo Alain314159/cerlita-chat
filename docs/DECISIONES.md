@@ -474,3 +474,22 @@ Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters det
 **Descartes.** ACRA (maduro y libre, pero su valor está en senders HTTP/correo que aquí no aportan y suma dependencia al binario); Sentry gratis (SDK + DSN + un punto de fuga de metadatos que el modelo E2EE no necesita; además el informe saldría sin consentimiento explícito por evento). El coste de la opción elegida: cero pesos al APK, cero superficie de ataque nueva, funciona sin red y sin cuenta.
 
 **Criterio de salida (Fase V)**: «llega el primer reporte real de fallo con traza, versión y modelo» — queda cubierto: el informe lleva los tres, y la entrega es resistente a ETECSA (offline-first, comparte cuando haya red).
+
+## D115 — La primera prueba instrumentada: el flujo crítico en un Android real (v0.18.0)
+
+**Contexto.** Brecha 2 del informe 1.0 («cero verificación en dispositivo real»): el directorio `androidTest` no existía y los cinco defectos más dañosos de la historia del proyecto (ICE antes que SDP, altavoz de API 31+, barra de navegación duplicada, botones del sistema que no se ocultaban, tema que «no se parecía en nada») pasaron indemnes ante la suite JVM de entonces Y de ahora.
+
+**Decisión.** `FlujoCriticoTest` — la primera prueba de instrumentación del proyecto, ejecutando en Android REAL (emulador ATD gestionado en CI, KVM) el flujo que define el producto con el stack completo de verdad:
+
+1. **alta** → cuenta creada, sesión sellada en el AndroidKeyStore real, AppState → Main, onboarding de perfil en pantalla;
+2. **entrada** → logout (borrado local) + login de nuevo, clave X25519 del teléfono sobreviviendo (D74);
+3. **envío** → sala creada (room_new), mensaje cifrado, ✓ al llegar el ack del /outbox;
+4. **recepción en segundo plano** → app al fondo (ciclo real onStop), el FGS del timbre mantiene el WebSocket, broadcast «new-msg» inyectado por el canal real → /sync → descifrado → BD + badge de no leídos.
+
+**Cómo se hace sin tocar producción** (regla de coste cero + H16, usuarios quemados): un **backend simulado que corre EN el dispositivo** (`:mockbackend`, MockWebServer en 127.0.0.1) implementa el contrato exacto de las Edge Functions (auth/sync/outbox/turn/heartbeat + el protocolo Phoenix del WebSocket con inyector de timbre). `prefs.baseUrl` ya era inyectable (D2) y ntfy apunta también al simulado: cero llamadas reales, cero usuarios gastados. Una excepción de cleartext SOLO para loopback en `network_security_config` (127.0.0.1/10.0.2.2) — producción sigue sin poder hablar HTTP en claro con nadie. El esquema del WS del timbre ahora se deriva del de la base (http→ws), sin cambio para producción (https→wss).
+
+**Defensa en dos mundos**: el módulo `:mockbackend` se valida en JVM por `MockBackendTest` (7 tests: formas exactas de Api.kt, eco de acks, cursor de sync, y los frames Phoenix parseados por el PROPIO parser de la app) en cada run de tests; la instrumentada lo reutiliza en el dispositivo. Mismo código, dos mundos. (El Kotlin integrado de AGP 9 no admite source sets compartidos test/androidTest — hallazgo de esta sesión — de ahí el módulo Gradle.)
+
+**CI**: job `instrumented` nuevo en Android CI — ATD Pixel 6 API 34 (aosp-atd) con KVM en ubuntu-latest, con caché de la imagen (~1,3 GB) para no descargarla en cada push. Se arreglaron además los triggers del workflow que estaban corruptos (`branches: ain]` → `[main]`) y no disparaban CI en pushes a main.
+
+**Criterio de salida (Fase V)**: «la integración continua ejecuta en verde la prueba de instrumentación» — este commit más la iteración hasta el verde.

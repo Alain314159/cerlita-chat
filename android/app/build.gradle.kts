@@ -25,6 +25,8 @@ android {
         versionCode = 19
         versionName = "0.17.0"
         vectorDrawables { useSupportLibrary = true }
+        // D115: la primera prueba instrumentada del proyecto (FlujoCriticoTest)
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -60,7 +62,23 @@ android {
 
     buildFeatures { compose = true }
 
-    testOptions { unitTests { isIncludeAndroidResources = true } }
+    testOptions {
+        unitTests { isIncludeAndroidResources = true }
+        // D115: dispositivo gestionado ATD (Automated Test Device) para la
+        // instrumentada en CI — imagen AOSP recortada para pruebas, arranca
+        // en ~40 s en un runner ubuntu-latest con KVM. Tarea: pixelAtdDebugAndroidTest
+        // (AGP 9: el contenedor de dispositivos se llama localDevices)
+        managedDevices {
+            localDevices {
+                create("pixelAtd") {
+                    device = "Pixel 6"
+                    apiLevel = 34
+                    systemImageSource = "aosp-atd"
+                    require64Bit = true
+                }
+            }
+        }
+    }
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -109,6 +127,21 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.16")
     testImplementation("androidx.test:core:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
+
+    // D115: backend simulado (módulo :mockbackend) — validado en JVM por
+    // MockBackendTest en cada run de tests, reutilizado por la instrumentada
+    testImplementation(project(":mockbackend"))
+
+    // D115: la primera prueba instrumentada — flujo crítico en dispositivo real
+    androidTestImplementation(project(":mockbackend"))
+    androidTestImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation(platform(libs.compose.bom))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
 
 tasks.withType<Test>().configureEach {
