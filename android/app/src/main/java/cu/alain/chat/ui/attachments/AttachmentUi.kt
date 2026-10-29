@@ -58,17 +58,48 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/** Caché en RAM de miniaturas descifradas (msgId → bitmap). */
-private val thumbCache = object : LruCache<String, Bitmap>(24) {}
+/**
+ * S0'/D108 (U3): caché de miniaturas por BYTES (~6 MB, no 24 bitmaps) y
+ * decodificación con inSampleSize al tamaño real de uso — antes decodificaba
+ * a resolución completa (hasta 1600 px) para burbujas de 190 dp y la LruCache
+ * contaba ENTRADAS (24 bitmaps de 4-9 MB = presión de memoria + GC continuo
+ * + re-decodes). El visor a pantalla completa pide su propia decodificación
+ * mayor (1440 px) sin pasar por la caché.
+ */
+private const val THUMB_MAX_PX = 512
+private const val VIEWER_MAX_PX = 1440
+
+private val thumbCache = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
+}
+
+/** Decodifica un archivo al mayor múltiplo entero que quepa en maxPx. */
+internal fun decodeScaled(path: String, maxPx: Int): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= maxPx || bounds.outHeight / (sample * 2) >= maxPx) {
+            sample *= 2
+        }
+        BitmapFactory.decodeFile(
+            path,
+            BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /**
- * Descarga (una vez) y descifra la imagen de un adjunto; cachea el bitmap.
- * Devuelve null mientras trabaja (la UI muestra un spinner) — el estado
- * `error` distingue "sin red" de "cargando".
+ * Descarga (una vez) y descifra la imagen de un adjunto; cachea la MINIATURA
+ * decodificada al tamaño de burbuja. Devuelve null mientras trabaja (la UI
+ * muestra un spinner) — el estado `error` distingue "sin red" de "cargando".
  */
 @Composable
 fun rememberAttachmentImage(app: ChatApp, msgId: String, att: AttachmentMsg.Parsed): Bitmap? {
-    var bmp by remember(msgId) { mutableStateOf(thumbCache.get(msgId)) }
+    var bmp by remember(msgId) { mutableStateOf(thumbCache.get("$msgId:$THUMB_MAX_PX")) }
     var tried by remember(msgId) { mutableStateOf(false) }
     LaunchedEffect(msgId) {
         if (bmp == null && !tried) {
@@ -76,13 +107,13 @@ fun rememberAttachmentImage(app: ChatApp, msgId: String, att: AttachmentMsg.Pars
             val loaded = withContext(Dispatchers.IO) {
                 try {
                     val f = app.engine.downloadAttachment(msgId, att)
-                    BitmapFactory.decodeFile(f.path)
+                    decodeScaled(f.path, THUMB_MAX_PX)
                 } catch (_: Exception) {
                     null
                 }
             }
             if (loaded != null) {
-                thumbCache.put(msgId, loaded)
+                thumbCache.put("$msgId:$THUMB_MAX_PX", loaded)
                 bmp = loaded
             }
         }
@@ -263,7 +294,7 @@ fun AudioBubble(
     }
 }
 
-/** Burbuja de IMAGEN: miniatura descifrada; click → visor a pantalla completa. */
+/** Burbuja de IMAGEN: miniatura descifrada; click → visor grande. */
 @Composable
 fun ImageBubble(
     app: ChatApp,
@@ -272,6 +303,7 @@ fun ImageBubble(
     onOpenViewer: (Bitmap) -> Unit,
 ) {
     val bmp = rememberAttachmentImage(app, msgId, att)
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     if (bmp == null) {
         Box(
             Modifier
@@ -286,7 +318,21 @@ fun ImageBubble(
             contentScale = ContentScale.Crop,
             modifier = Modifier
                 .size(190.dp)
-                .clickable { onOpenViewer(bmp) },
+                // D108: el visor recibe su PROPIA decodificación grande (1440 px)
+                // desde el archivo en caché — la burbuja vive con su miniatura
+                .clickable {
+                    scope.launch {
+                        val big = withContext(Dispatchers.IO) {
+                            try {
+                                val f = app.engine.downloadAttachment(msgId, att)
+                                decodeScaled(f.path, VIEWER_MAX_PX) ?: bmp
+                            } catch (_: Exception) {
+                                bmp
+                            }
+                        }
+                        onOpenViewer(big)
+                    }
+                },
         )
     }
 }

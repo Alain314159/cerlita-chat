@@ -185,6 +185,26 @@ interface MsgDao {
     @Query("SELECT * FROM messages WHERE roomId = :room AND kind = 0 ORDER BY ts ASC, msgId ASC")
     fun observeChat(room: String): Flow<List<Message>>
 
+    /**
+     * S0'/D108 (U2): ventana del final del historial — los últimos `limit`
+     * mensajes. Antes observeChat re-emitía TODO el historial con cada tick
+     * de estado (✓→✓✓): con 5 000 mensajes cada cambio recomponía la lista
+     * entera. Ahora el Flow solo emite la ventana y la UI sube el límite al
+     * hacer scroll arriba (carga bajo demanda estilo Telegram). La subquery
+     * DESC+LIMIT usa el índice idx_msg_room_kind_ts.
+     */
+    @Query(
+        """SELECT * FROM (
+             SELECT * FROM messages WHERE roomId = :room AND kind = 0
+             ORDER BY ts DESC, msgId DESC LIMIT :limit
+           ) ORDER BY ts ASC, msgId ASC"""
+    )
+    fun observeChatWindow(room: String, limit: Int): Flow<List<Message>>
+
+    /** ¿Cuántos mensajes tiene la sala en total? (saber si queda historia) */
+    @Query("SELECT COUNT(*) FROM messages WHERE roomId = :room AND kind = 0")
+    suspend fun countVisible(room: String): Int
+
     @Query("SELECT * FROM messages WHERE roomId = :room AND kind = 0 ORDER BY ts ASC, msgId ASC")
     suspend fun chat(room: String): List<Message>
 

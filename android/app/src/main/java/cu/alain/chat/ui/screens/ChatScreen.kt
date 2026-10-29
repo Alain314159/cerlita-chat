@@ -50,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -96,12 +97,24 @@ import kotlinx.coroutines.withContext
 fun ChatScreen(app: ChatApp, roomId: String) {
 
     val ctx = LocalContext.current
-    val messages by app.db.msgDao().observeChat(roomId).collectAsState(initial = emptyList())
+    // S0'/D108 (U2): ventana del historial — el Flow SOLO emite los últimos
+    // `window` mensajes; al hacer scroll arriba se sube el límite y Room
+    // re-emite con más historia (carga bajo demanda, claves estables → sin
+    // saltos). Antes cada ✓/tick re-emitía TODO el historial.
+    var window by remember(roomId) { mutableStateOf(200) }
+    val messages by app.db.msgDao().observeChatWindow(roomId, window)
+        .collectAsState(initial = emptyList())
     val profiles by app.db.profileDao().observeAll().collectAsState(initial = emptyList())
     var draft by remember { mutableStateOf("") }
     var sendError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+
+    // carga bajo demanda: cerca del tope → ventana +300 (si queda historia)
+    val firstVisible by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: 0 } }
+    LaunchedEffect(firstVisible, window) {
+        if (firstVisible <= 2 && messages.size >= window) window += 300
+    }
 
     // progreso de subida por msgId (la burbuja lo pinta, D76)
     val uploadProgress = remember { mutableStateMapOf<String, Float>() }
@@ -275,12 +288,19 @@ fun ChatScreen(app: ChatApp, roomId: String) {
     // auto-scroll + acusar lectura + badge (B5/U2 auditoría):
     //  · solo salta al final si YA estabas cerca del final — si estás leyendo
     //    historia, la posición se respeta y aparece un chip «↓ N nuevos»
-    //  · el badge de no leídos baja AL INSTANTE con la sala abierta (antes
-    //    solo al entrar: el contador subía mientras leías)
+    //  · D108: el chip y el scroll SOLO responden a mensajes NUEVOS AL FINAL
+    //    (cambia el último msgId); la carga de historia por scroll arriba
+    //    (prepend) no mueve nada ni inventa «nuevos»
+    //  · el badge de no leídos baja AL INSTANTE con la sala abierta
     var newBelow by remember(roomId) { mutableStateOf(0) }
     var initialScroll by remember(roomId) { mutableStateOf(true) }
+    var lastSeenId by remember(roomId) { mutableStateOf<String?>(null) }
     LaunchedEffect(messages.size) {
         if (messages.isEmpty()) return@LaunchedEffect
+        val lastId = messages.last().msgId
+        val grewAtEnd = lastId != lastSeenId
+        if (lastSeenId != null && !grewAtEnd) return@LaunchedEffect // prepend de historia
+        lastSeenId = lastId
         val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
         if (initialScroll || lastVisible >= messages.size - 3) {
             initialScroll = false

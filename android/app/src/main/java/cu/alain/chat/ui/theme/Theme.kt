@@ -99,6 +99,53 @@ private val CerlitaScheme = lightColorScheme(
     scrim = Color(0xFF4A3D3F),
 )
 
+// ─────────────────────────────────────────────────────────────────────────
+// S0'/D108 (U5): CERLITA NOCHE — la misma pareja de rosa/ciruela, invertida.
+// No es un dark genérico: los tonos siguen la MISMA rueda cálida de D77
+// (coral #D87884 → claro #E8A0AC para contraste sobre oscuro; fondos ciruela
+// #20191C/#291F23; burbujas enviadas rosa apagado #6E454E con texto rosado
+// claro — el pastel de siempre, de noche). «De noche la app es rosa claro»
+// era el pendiente U5 de la auditoría.
+// ─────────────────────────────────────────────────────────────────────────
+
+private val CerlitaNightScheme = darkColorScheme(
+    primary = Color(0xFFE8A0AC),          // coral aclarado para contraste AA
+    onPrimary = Color(0xFF4A2530),
+    primaryContainer = Color(0xFF5A3640),
+    onPrimaryContainer = Color(0xFFF6D4DA),
+    secondary = Color(0xFFD4B4BC),
+    onSecondary = Color(0xFF3B2A30),
+    secondaryContainer = Color(0xFF4E3A41),
+    onSecondaryContainer = Color(0xFFEFE0E4),
+    tertiary = Color(0xFFE58A97),         // ✓✓ leído de noche
+    onTertiary = Color(0xFF47232C),
+    tertiaryContainer = Color(0xFF5C3038),
+    onTertiaryContainer = Color(0xFFF8D6DC),
+    background = Color(0xFF20191C),       // ciruela muy oscuro (no negro)
+    onBackground = Color(0xFFE5D8DC),
+    surface = Color(0xFF291F23),
+    onSurface = Color(0xFFE5D8DC),
+    surfaceVariant = Color(0xFF463A40),
+    onSurfaceVariant = Color(0xFFC9B7BD),
+    surfaceContainer = Color(0xFF2E2428),
+    surfaceContainerLow = Color(0xFF2A2124),
+    surfaceContainerHigh = Color(0xFF352A2E),
+    surfaceContainerHighest = Color(0xFF3E3236),
+    surfaceContainerLowest = Color(0xFF1C1618),
+    surfaceDim = Color(0xFF181215),
+    surfaceBright = Color(0xFF443639),
+    inverseSurface = Color(0xFFE5D8DC),
+    inverseOnSurface = Color(0xFF2E2428),
+    inversePrimary = Color(0xFF8E4E5B),
+    outline = Color(0xFF5E4C52),
+    outlineVariant = Color(0xFF463A40),
+    error = Color(0xFFE88080),
+    onError = Color(0xFF2E1515),
+    errorContainer = Color(0xFF5C2626),
+    onErrorContainer = Color(0xFFF8D5D5),
+    scrim = Color(0xFF000000),
+)
+
 /**
  * Colores del CHAT que NO caben en el esquema M3 (D77): en Cerlita las
  * burbujas propias son PASTEL con texto oscuro y el fondo del chat es más
@@ -140,20 +187,22 @@ object CallColors {
     val reject = Color(0xFFE07070)   // «Rechazar» (muestreado #E07070)
 }
 
-/** Modos de tema (v0.7.0): sistema / claro / oscuro / cerlita. */
+/** Modos de tema (v0.7.0): sistema / claro / oscuro / cerlita (+ noche, D108). */
 object Themes {
     const val SYSTEM = "system"
     const val LIGHT = "light"
     const val DARK = "dark"
     const val CERLITA = "cerlita"
+    const val CERLITA_NIGHT = "cerlita_night"
 
-    val OPTIONS = listOf(SYSTEM, LIGHT, DARK, CERLITA)
+    val OPTIONS = listOf(SYSTEM, LIGHT, DARK, CERLITA, CERLITA_NIGHT)
 
     /** Etiqueta en español para la UI. */
     fun label(mode: String): String = when (mode) {
         SYSTEM -> "Según el sistema"
         LIGHT -> "Claro"
         DARK -> "Oscuro"
+        CERLITA_NIGHT -> "Cerlita noche 🌙"
         else -> "Cerlita 💗"
     }
 }
@@ -170,6 +219,7 @@ fun ChatTheme(mode: String = Themes.SYSTEM, content: @Composable () -> Unit) {
     val dark = if (Build.VERSION.SDK_INT >= 29) isSystemInDarkTheme() else true
     val scheme = when (mode) {
         Themes.CERLITA -> CerlitaScheme
+        Themes.CERLITA_NIGHT -> CerlitaNightScheme
         Themes.LIGHT ->
             if (Build.VERSION.SDK_INT >= 31) dynamicLightColorScheme(LocalContext.current)
             else LightScheme
@@ -183,15 +233,27 @@ fun ChatTheme(mode: String = Themes.SYSTEM, content: @Composable () -> Unit) {
             else -> LightScheme
         }
     }
-    val palette = if (mode == Themes.CERLITA) ChatPalette(
-        chatWallpaper = Color(0xFFE0C2C4),
-        sentBubble = Color(0xFFF6C6CC),
-        onSentBubble = Color(0xFF5E4247),
-        recvBubble = Color(0xFFCCBABA),
-        onRecvBubble = Color(0xFF4A3E3E),
-        readTick = Color(0xFFC24D5E),
-        accent = Color(0xFFD87884),
-    ) else ChatPalette.fromScheme(scheme)
+    val palette = when (mode) {
+        Themes.CERLITA -> ChatPalette(
+            chatWallpaper = Color(0xFFE0C2C4),
+            sentBubble = Color(0xFFF6C6CC),
+            onSentBubble = Color(0xFF5E4247),
+            recvBubble = Color(0xFFCCBABA),
+            onRecvBubble = Color(0xFF4A3E3E),
+            readTick = Color(0xFFC24D5E),
+            accent = Color(0xFFD87884),
+        )
+        Themes.CERLITA_NIGHT -> ChatPalette(
+            chatWallpaper = Color(0xFF1C1518),
+            sentBubble = Color(0xFF6E454E),      // rosa apagado: el pastel, de noche
+            onSentBubble = Color(0xFFF6E4E7),
+            recvBubble = Color(0xFF3B2F35),
+            onRecvBubble = Color(0xFFD9C9CE),
+            readTick = Color(0xFFE58A97),
+            accent = Color(0xFFE8A0AC),
+        )
+        else -> ChatPalette.fromScheme(scheme)
+    }
 
     CompositionLocalProvider(LocalChatPalette provides palette) {
         MaterialTheme(colorScheme = scheme, content = content)
