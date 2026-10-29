@@ -8,6 +8,7 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.InetAddress
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
@@ -50,7 +51,9 @@ class MockBackend {
 
     fun start() {
         server.dispatcher = disp
-        server.start()
+        // Bind explícito a 127.0.0.1: el default es «localhost» y la network
+        // security policy de la app diferencia AMBOS nombres de dominio.
+        server.start(InetAddress.getByName("127.0.0.1"), 0)
     }
 
     fun stop() {
