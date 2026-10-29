@@ -215,6 +215,22 @@ object Crypto {
     fun sigKey(roomKey: ByteArray, roomId: String, callId: String): ByteArray =
         hkdf(convKey(roomKey, roomId), callId.lowercase().toByteArray(StandardCharsets.UTF_8), "sig-v1")
 
+    /**
+     * Tema ntfy de una conversación (D104): mismo patrón que convKey/sigKey —
+     * HKDF(roomKey, salt=roomId, "ntfy-topic-v1") a 16 bytes → base32 minúsculas
+     * con prefijo "c": 27 chars ≈ 128 bits de entropía, no enumerable.
+     *
+     * El servidor NUNCA lo conoce: se deriva en el MÓVIL — el emisor lo usa para
+     * publicar el ping DESPUÉS del ack del outbox; el receptor para suscribirse
+     * al poll. 1 tema por conversación (sala o DM, misma madre roomKey): todos
+     * los miembros escuchan el mismo y cada quien descarta su eco por msgId.
+     * Rota solo al rotar la roomKey (D46).
+     */
+    fun ntfyTopic(roomKey: ByteArray, roomId: String): String {
+        val k = hkdf(roomKey, roomId.lowercase().toByteArray(StandardCharsets.UTF_8), "ntfy-topic-v1", 16)
+        return "c" + base32Encode(k).lowercase()
+    }
+
     /** AAD (D41): liga el ciphertext a mensaje, emisor y sala. */
     fun aad(msgId: String, senderId: String, roomId: String): ByteArray =
         "v1|$msgId|${senderId.lowercase()}|${roomId.lowercase()}"

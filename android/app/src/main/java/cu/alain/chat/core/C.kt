@@ -54,6 +54,15 @@ object C {
     const val MAX_FILE = 20 * 1024 * 1024  // 20 MB cifrado (bucket: 25)
     const val MAX_RECORD_MS = 5 * 60 * 1000L
 
+    // ---- Canal ntfy (D104) ----
+    /** Servidor de avisos por defecto; alterno/self-host si ETECSA lo bloquea. */
+    const val NTFY_DEFAULT = "https://ntfy.sh"
+    /** Umbral de degradación a despertador puro. ntfy.sh convierte bodies >4 KB
+     *  en ATTACHMENT con URL pública (hallazgo H25) — nunca provocarlo. */
+    const val NTFY_PING_MAX = 3400
+    /** Máx filas por ping: presupuesto anti-spam del parse (m ≤ 8). */
+    const val NTFY_PING_ROWS = 8
+
     // ---- Polling adaptativo (D15) ----
     const val POLL_ACTIVE_MS = 5_000L        // tras actividad
     const val POLL_IDLE_MAX_MS = 300_000L    // reposo máximo: 5 min

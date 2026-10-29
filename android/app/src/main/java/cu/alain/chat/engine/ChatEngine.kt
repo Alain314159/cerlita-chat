@@ -81,6 +81,8 @@ class ChatEngine(
     private val onNewMessages: (List<NewMsg>) -> Unit,
     /** D72: avisa de login/logout para encender/apagar el timbre (lo cablea ChatApp). */
     private val onSessionChanged: () -> Unit = {},
+    /** D104: canal ntfy para el ping tras el ack; null = sin canal (tests). */
+    private val ntfy: cu.alain.chat.net.Ntfy? = null,
 ) {
 
     /** roomId → (roomKey, roomSalt). RAM solamente; persisten selladas en el vault. */
@@ -167,6 +169,16 @@ class ChatEngine(
     fun sigKeyFor(roomId: String, callId: String): ByteArray? {
         val ks = keys[roomId.lowercase()] ?: return null
         return Crypto.sigKey(ks.first, roomId, callId)
+    }
+
+    /**
+     * Tema ntfy de la conversación (D104), derivado de la roomKey del vault.
+     * Lo usan el EMISOR (publicar el ping tras el ack) y el RECEPTOR
+     * (suscribir el poll) — el servidor nunca lo ve.
+     */
+    fun ntfyTopicFor(roomId: String): String? {
+        val ks = keys[roomId.lowercase()] ?: return null
+        return Crypto.ntfyTopic(ks.first, roomId)
     }
 
     /** Código de invitación reconstruido de la clave del vault (ajustes de sala):
@@ -981,6 +993,25 @@ class ChatEngine(
                         if (m.msgId in ok) db.msgDao().setState(m.msgId, C.ST_SENT)
                         // los no-acked se quedan en outbox para el siguiente intento
                     }
+                    // D104: ping ntfy del lote recién ackeado. El orden
+                    // ack→publish es canónico (publicar antes del commit haría
+                    // despertar al receptor sin mensaje). Best-effort: si falla,
+                    // el timbre Realtime o el /sync de 15 min del receptor cubren
+                    // — igual que el broadcast del servidor (D63).
+                    if (ntfy != null && ok.isNotEmpty()) {
+                        val topic = ntfyTopicFor(roomId)
+                        if (topic != null) {
+                            val rows = chunk.filter { it.msgId in ok }
+                                .map { cu.alain.chat.net.Ntfy.PingRow(it.msgId, it.nonceB64, it.ctB64, it.ts) }
+                            if (rows.isNotEmpty()) {
+                                try {
+                                    val body = cu.alain.chat.net.Ntfy.buildPing(roomId, s.uid, s.uname, rows)
+                                    ntfy.publish(topic, body)
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    }
                 } catch (e: ApiException) {
                     when {
                         e.http == 401 -> { sessionExpired(); return acked }
@@ -1098,6 +1129,30 @@ class ChatEngine(
     }
 
     /**
+     * D104: ingiere filas llegadas por el canal ntfy (el sobre cifrado que
+     * viaja dentro del ping). Mismo camino que el /sync — dedup por PK (ecos
+     * propios, replays y duplicados timbre+ping no existen dos veces), a
+     * pending si aún no hay clave — de modo que el mensaje se VE al instante
+     * sin round-trip a Supabase. El /sync de confirmación que el poller hace
+     * justo después rellena el seq (fillSeq), los recibos y el resto del lote.
+     * Comparte el syncMutex: jamás compite con un syncOnce en curso.
+     */
+    suspend fun ingestFromPush(rows: List<SyncRow>): List<NewMsg> = syncMutex.withLock {
+        val s = store.session ?: return emptyList()
+        val fresh = mutableListOf<NewMsg>()
+        val newPeers = mutableSetOf<String>()
+        for (row in rows) {
+            try {
+                ingest(row, s, newPeers)?.let { fresh.add(it) }
+            } catch (_: Exception) {
+                // una fila malformada no tira el lote
+            }
+        }
+        if (newPeers.isNotEmpty()) announceToRooms(newPeers) // D61: presentarme a los pares nuevos
+        fresh
+    }
+
+    /**
      * Procesa una fila del sync. Devuelve el mensaje NUEVO legible (kind=0)
      * para notificar, o null si es eco conocido / va a pending / es evento de
      * perfil (los anuncios no se notifican ni aparecen en el chat).
@@ -1108,11 +1163,14 @@ class ChatEngine(
         newPeerRooms: MutableSet<String>,
     ): NewMsg? {
         if (db.msgDao().exists(row.msgId)) {
-            // eco de un mensaje propio ya en Room. El seq del SERVIDOR nace
-            // aquí (el insert local fue ANTES del envío): guardarlo para que
-            // los recibos ✓✓ (markDeliveredUpTo/markReadUpTo) lo encuentren.
-            // No se toca state/body: los locales mandan (ST_SENT/DELIVERED/READ).
-            if (row.seq != null && row.senderId.equals(s.uid, ignoreCase = true)) {
+            // Ya está en Room: eco propio (multi-dispositivo), duplicado del
+            // canal ntfy (timbre+ping a la vez) o mensaje ingerido antes por
+            // push con seq 0. seq>0 = el servidor la conoce → guardarla para
+            // que los recibos ✓✓ (markDeliveredUpTo/markReadUpTo) lo encuentren
+            // (también para ajenos: uno llegado por push la tiene en 0 hasta
+            // este /sync). seq==0 no toca nada. State/body nunca: los locales
+            // mandan (ST_SENT/DELIVERED/READ).
+            if (row.seq > 0) {
                 try { db.msgDao().fillSeq(row.msgId, row.seq) } catch (_: Exception) {}
             }
             return null
