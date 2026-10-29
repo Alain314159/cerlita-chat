@@ -73,7 +73,9 @@ y verificados E2E contra producción (`backend/scripts/e2e_rooms_client.py`, 22 
 export JAVA_HOME=/home/z/toolchain/jdk-21.0.13+9                 # JDK 21 COMPLETO
 export ANDROID_HOME=/home/z/toolchain/sdk                        # platform 37.0 + build-tools 36/37
 cd android
-./gradlew :app:testDebugUnitTest   # tests JVM+Robolectric (55: cripto + import + perfiles + phoenix + notificador + smoke + migración)
+./gradlew :app:testDebugUnitTest   # tests JVM+Robolectric (121: cripto, import, perfiles,
+                        # phoenix, notificador, smoke, migración, dm, ice, callsignals,
+                        # roominfo, nicknames, avatares, NtfyTest, PushIngestTest)
 ./gradlew :app:assembleRelease     # APK firmado + R8 (2,8 MB)
 ```
 
@@ -105,6 +107,9 @@ app/src/main/java/cu/alain/chat/
   vault/SessionStore.kt ss.bin (sesión) + rooms.bin (roomKeys selladas)
   net/Api.kt            OkHttp: auth (reg/in/out/room_new/room_join/rooms),
                         sync, outbox {room}, heartbeat; errores → español
+  net/Ntfy.kt           canal ntfy (D104): publish del ping tras el ack
+                        (X-Firebase: no), poll multi-tema con cursor since,
+                        parse del ping con presupuesto anti-spam (m≤8)
   db/Db.kt              Room v3: rooms, messages (kind/senderUid), outbox, pending,
                         meta, profiles, room_peer · migración REAL 2→3
   engine/ChatEngine.kt  claves por sala en RAM · createRoom/joinRoom/restoreRoomKey ·
@@ -116,6 +121,8 @@ app/src/main/java/cu/alain/chat/
   notify/RealtimeDoorbell.kt  WS a mano sobre OkHttp (~150 líneas, D65):
                         reconexión 5→60 s + jitter, heartbeat 30 s, diff de topics
   notify/DoorbellService.kt   FGS remoteMessaging (D64) + BootReceiver + helper
+  notify/NtfyChannel.kt  poll ntfy (D104): loop 15 s si el WS está caído +
+                        drain de la caché 12 h en el SyncWorker; estado p/ Ajustes
   profile/Profile.kt    AvatarConfig (capas) + ProfileMsg (formato cable \u0000P)
   profile/Photos.kt     foto cuadrada JPEG con degradación 128→96→64 ≤5 KB + EXIF
   export/…              export .e2ee v2 (historial + claves) + import (D58)
@@ -424,3 +431,38 @@ composite 2D viejo.
   muestran el look nuevo SIN re-guardar nada.
 - Verificación: facing GLB por script (ojos/nariz a +Z), determinismo del
   render (Δ=0), composite(base+sprite) vs render directo <2% px, previews VLM.
+
+## v0.14.0 — «Aviso de amor» (notificaciones ntfy, D104)
+
+El usuario pidió notificaciones en tiempo real con ntfy y «una app de calidad».
+Se implementó el canal ntfy del doc v2 §9 (D45 adelantada) con la mejora §9.2:
+**el ping lleva el sobre cifrado** — el receptor descifra y VE el mensaje sin
+round-trip a Supabase, y el aviso sigue llegando con Supabase caído (el tema se
+deriva de la roomKey en el móvil; el servidor NUNCA lo conoce: cero cambios de
+backend). 3 capas de aviso: timbre Realtime (primario) → canal ntfy (respaldo
+con sobre, poll 15 s solo si el WS está caído) → SyncWorker 15 min (ahora
+drena la caché ntfy de 12 h ANTES del /sync: notifica sin abrir la app).
+
+- `Crypto.ntfyTopic`: HKDF(roomKey, salt=roomId, "ntfy-topic-v1") a 16 B →
+  base32 minúsculas con prefijo c (27 chars, 128 bits, KAT cruzado Python↔Kotlin).
+- Emisor: ping best-effort tras el ack del outbox (orden canónico ack→publish),
+  ≤8 filas por lote; si el sobre no cabe (>3400 chars) → despertador puro.
+  `X-Firebase: no` en todo publish (ntfy.sh reenviaría a FCM por defecto).
+- Receptor: `ingestFromPush` (mismo Mutex y camino del /sync: dedup por PK);
+  el /sync de confirmación rellena seq (fillSeq ahora aplica también a ajenos,
+  y seq 0 se guarda NULL — antes un eco ajeno jamás se rellenaba).
+- Ajustes: estado del canal + servidor de avisos editable (self-host si ETECSA
+  bloquea ntfy.sh) + botón «Guardar y probar» con latencia medida.
+- Seguridad (e2e 32/32 en vivo): AEAD tira inyecciones, msgId tira replays,
+  eco propio = exists. Hallazgo H25: bodies >4 KB se vuelven ATTACHMENT con
+  URL pública en ntfy.sh — el umbral 3400 lo evita de raíz.
+- Verificación: e2e_ntfy.py 32/32 (producción + ntfy.sh REAL), NtfyTest 7,
+  PushIngestTest 4 (Robolectric) → 121/121. APK 37,5 MB, misma firma 37b6d4…
+  (versionCode 16). Cero migraciones de BD (cursor en `meta`).
+
+Entorno (H21 reconfirmado): el sandbox MATA los procesos background entre
+llamadas — el toolchain se reconstruye SIEMPRE en FOREGROUND
+(`bash /home/z/my-project/scripts/rebuild_toolchain.sh`, descargas con
+`curl -C -`). El AndroidKeyStore no existe en Robolectric: KeyVault expone
+`sealFn/unsealFn` inyectables solo para tests (patrón H5), restauradas en
+@AfterClass.

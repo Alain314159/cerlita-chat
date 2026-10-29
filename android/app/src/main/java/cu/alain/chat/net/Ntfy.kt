@@ -11,6 +11,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+/** Fila del ping: lo mínimo que el receptor necesita para ingest+AAD. */
+data class PingRow(val msgId: String, val nonceB64: String, val ctB64: String, val ts: Long)
+
 /**
  * Canal de notificaciones ntfy (D104) — el DESPERTADOR redundante del timbre,
  * con el sobre cifrado dentro del ping.
@@ -110,9 +113,6 @@ class Ntfy(private val baseUrl: () -> String) {
 
     companion object {
         private val OCTET = "application/octet-stream".toMediaType()
-
-        /** Fila del ping: lo mínimo que el receptor necesita para ingest+AAD. */
-        data class PingRow(val msgId: String, val nonceB64: String, val ctB64: String, val ts: Long)
 
         /**
          * Ping de un lote ackeado: hasta las [C.NTFY_PING_ROWS] últimas filas

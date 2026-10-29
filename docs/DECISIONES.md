@@ -297,3 +297,72 @@ Capturas del usuario tras v0.12.0: (1) el perfil de Ajustes "se sigue viendo igu
 ## D103 — Pausa de avatares 3D; prioridad al chat (fiabilidad/velocidad), llamadas y minijuegos estilo Telegram (solo investigación)
 El usuario pausa el trabajo de avatares («no es lo más importante») y reorienta: (1) chat que funcione bien, mensajes que lleguen sin retrasos, todo rápido y fluido; (2) mejorar llamadas y videollamadas; (3) investigar la plataforma de juegos/bots de Telegram para traer minijuegos a Cerlita — esta parte SOLO investigación, sin código. Hallazgo de sesión: el sandbox estaba congelado en v0.7.1; al rebasear se descubre que origin/main ya está en v0.13.0 con v0.8.0 «Sin letra pequeña» (D84-D89: auditoría arreglada — cursores por sala, índices, 401 sin borrar nada, mensajes nunca mudos, TURN+AEC, señalización cifrada) y D90-D102 (avatares 3D GLB/SceneView). Se redacta `docs/INVESTIGACION-CHAT-TELEGRAM.md` sobre el estado real v0.13.0: quedan verificados como PENDIENTES B2/B5/B8 (kind en lista, badge al leer, streaming de adjuntos), QoS (reconexión que distingue red caída, NetworkCallback, sync en 1 query, AlarmManager 3ª capa, coalescing), UI (Paging 3, O(n²), miniaturas, tema oscuro) y llamadas (FGS microphone+camera, full-screen intent, cámara solo al aceptar, calidad adaptativa, stats). Investigación Telegram: clientes open source (GPL), TDLib y servidor Bot API Boost 1.0, SERVIDOR CERRADO; sus juegos/Mini Apps son HTML5 en WebView + puente JS (games.js / telegram-web-app.js) con el chat como capa social (mensaje de juego, récords del chat, mensaje de servicio al batir récord, multiplayer compartido caso de primera clase) — patrón replicable gratis en Cerlita: assets locales en el APK (offline-first ETECSA) + puente propio mínimo (tema/háptica/jugador/score) + `kind` de control `\u0000G` + récords E2EE + juegos por turnos sobre los propios mensajes + tiempo real reutilizando el canal de señalización de llamadas. Roadmap propuesto: S0' restos de auditoría → S1 QoS/llamadas → S2 features de chat → J0-J2 minijuegos; avatares retomables tras J2.
 
+
+## D104 — Notificaciones ntfy: el despertador que no pasa por el chat del servidor (v0.14.0)
+
+**Decisión (29-oct-2026).** El usuario pidió «añadamos las notificaciones con ntfy o
+como se llame, quiero notificaciones en tiempo real y una app de calidad; si quieres
+puedes usar Cloudflare Worker o algo similar que sea gratis si eso va a servir para
+las notificaciones o cualquier otra cosa». D45 quedó degradada a «sustituto solo si
+algún día se abandona Supabase» — el usuario la adelanta, y se implementa el canal
+ntfy del doc v2 §9 adaptado al modelo rooms+DM de v0.7.0, con la mejora del diseño
+original §9.2: **el ping lleva el sobre cifrado**, no solo el despertador.
+
+**Arquitectura — 3 capas de aviso, cada una degrada limpia, ninguna decide:**
+1. **Timbre Realtime WS** (D63, ya existía): el primario, instantáneo, pasa por Supabase.
+2. **Canal ntfy** (nuevo): 1 tema por conversación `c+base32(HKDF(roomKey,
+   salt=roomId, "ntfy-topic-v1", 16))` — 27 chars, 128 bits, no enumerable.
+   Publicador = **el móvil emisor, tras el ack del outbox** (orden canónico
+   ack→publish): el servidor NUNCA conoce el tema → cero cambios de backend, cero
+   SQL, cero intermediarios. El ping lleva ≤8 filas del lote (mismo orden posicional
+   que /sync, seq=0) y el receptor las ingiere por el MISMO camino del sync (mismo
+   Mutex, dedup por PK): el mensaje se VE al instante sin round-trip — en ETECSA
+   (RTT de segundos) esa es la diferencia que se nota, y con Supabase caído sigue
+   llegando. Si el sobre no cabe (>[C.NTFY_PING_MAX]=3400 chars): despertador puro
+   y el /sync que el propio ping provoca trae el lote.
+3. **SyncWorker ~15 min** (ya existía): ahora drena la caché ntfy (12 h) ANTES del
+   /sync — con la app cerrada y sin FGS, los pings pendientes se ingieren y
+   notifican SIN abrir la app.
+
+**Por qué ntfy y no Cloudflare Worker** (la pregunta del usuario): el publicador es
+el propio móvil tras el ack — meter un Worker en el camino haría PEOR: vería los
+temas y los sobres (hoy no existe intermediario), añadiría latencia y un SPOF más.
+Cloudflare queda para el futuro bot de comandos (doc v2 §6.4), donde sí aporta.
+Cero Firebase: `X-Firebase: no` en todo publish (ntfy.sh reenviaría a FCM por
+defecto — hallazgo auditoría §4.3).
+
+**Seguridad** (doc v2 §9.3, verificada e2e 32/32 en vivo): publicar es gratis para
+quien conozca el tema, pero LEER solo con la roomKey — el AEAD tira lo inyectado
+(tag inválido), el msgId (PK local) tira los replays, el eco propio es exists y no
+notifica. El parse descarta en silencio, sin log (el atacante no aprende nada).
+**H25 (nuevo hallazgo ntfy.sh)**: los bodies >4 KB NO se rechazan — se convierten en
+ATTACHMENT con URL pública y 3 h de retención; el umbral 3400 lo evita de raíz y el
+receptor tira el evento «You received a file…» porque no es JSON de ping.
+
+**Límites ntfy.sh respetados** (12 h caché, 250/día, 60 req/5 s, 200 MB/día — los
+polls cuentan desde ntfy 2.28): SIEMPRE `since` con cursor `ntfy_since` en meta
+(solape 30 s que deshace el dedup por PK); el poll SOLO cuando el WS está caído
+(cada 15 s, el bucle del NtfyChannel) o en la pasada del worker (15 min); 1 publish
+por lote ackeado (≤8 filas), nunca por mensaje.
+
+**Cambios de código**: `Crypto.ntfyTopic`; `net/Ntfy.kt` (publish/poll/parse con
+presupuesto anti-spam); ChatEngine: `ntfyTopicFor` (patrón sigKeyFor), ping
+best-effort tras el ack en drainOutbox, `ingestFromPush` público, y fillSeq ahora
+`seq>0` SIN restricción de mine — un ajeno llegado por push con seq 0 recibe su seq
+en el /sync de confirmación y los ✓✓ lo encuentran (antes el eco ajeno jamás se
+rellenaba); `notify/NtfyChannel` (loop + estado para Ajustes); SyncWorker con drain
+previo; `Prefs.ntfyUrl` (self-host/alterno si ETECSA bloquea ntfy.sh) + Ajustes:
+estado del canal, servidor editable y botón «Guardar y probar» (publish+poll a un
+tema aleatorio con latencia); `announceIncoming` público (lo llama el poller).
+Cursor en `meta` → **cero migraciones de BD**.
+
+**Qué NO es**: no sustituye al timbre (D63 sigue como primario), no es FCM (sin
+Google), y con la app cerrada y el proceso MUERTO por el OEM sigue mandando el
+SyncWorker de 15 min — el AlarmManager exacto (3ª capa de despertar) queda para
+S1 (v0.15.0), como propone el roadmap de la investigación D103.
+
+**Verificación en 3 capas** (misma regla que el resto del protocolo): e2e_ntfy.py
+32/32 contra Supabase REAL + ntfy.sh REAL (espejo Python: tema, ping con sobre,
+degradación, inyección/replay, multi-tema, since, attachment); NtfyTest JVM (KAT
+cruzado Python↔Kotlin del tema, build/parse, límites); PushIngestTest Robolectric
+(push→NewMsg, replay→dedup, fillSeq, eco mine, pending sin clave).

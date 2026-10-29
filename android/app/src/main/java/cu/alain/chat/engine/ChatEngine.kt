@@ -1002,7 +1002,7 @@ class ChatEngine(
                         val topic = ntfyTopicFor(roomId)
                         if (topic != null) {
                             val rows = chunk.filter { it.msgId in ok }
-                                .map { cu.alain.chat.net.Ntfy.PingRow(it.msgId, it.nonceB64, it.ctB64, it.ts) }
+                                .map { cu.alain.chat.net.PingRow(it.msgId, it.nonceB64, it.ctB64, it.ts) }
                             if (rows.isNotEmpty()) {
                                 try {
                                     val body = cu.alain.chat.net.Ntfy.buildPing(roomId, s.uid, s.uname, rows)
@@ -1187,7 +1187,7 @@ class ChatEngine(
             // sala sin clave en este teléfono (2º dispositivo, clave perdida):
             // se archiva cifrada; al restaurar el código de invitación se drena.
             db.pendingDao().insert(
-                PendingMsg(row.msgId, row.roomId, row.senderUname, row.senderId, row.nonceB64, row.ctB64, row.ts, row.seq)
+                PendingMsg(row.msgId, row.roomId, row.senderUname, row.senderId, row.nonceB64, row.ctB64, row.ts, row.seq.takeIf { it > 0 } ?: 0L)
             )
             return null
         }
@@ -1208,22 +1208,26 @@ class ChatEngine(
         roomKey: ByteArray,
     ): Message {
         val mine = row.senderId.equals(s.uid, ignoreCase = true)
+        // D104: seq 0 = «aún sin seq» (ping ntfy sin /sync de confirmación).
+        // En DB va NULL, no 0: fillSeq (… AND seq IS NULL) la rellenará cuando
+        // el /sync traiga la seq real — igual que un mensaje propio enviado.
+        val dbSeq = row.seq.takeIf { it > 0 }
         return try {
             val convKey = Crypto.convKey(roomKey, row.roomId)
             val mk = Crypto.msgKey(convKey, row.msgId)
             val wire = Crypto.open(mk, b64d(row.nonceB64), b64d(row.ctB64), Crypto.aad(row.msgId, row.senderId, row.roomId))
             if (wire == null) {
-                Message(row.msgId, row.roomId, row.senderUname, mine, "[no se pudo descifrar]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
+                Message(row.msgId, row.roomId, row.senderUname, mine, "[no se pudo descifrar]", row.ts, C.ST_UNREADABLE, dbSeq, 0, row.senderId)
             } else {
                 val body = Crypto.unframe(wire)
-                    ?: return Message(row.msgId, row.roomId, row.senderUname, mine, "[mensaje con formato desconocido]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
+                    ?: return Message(row.msgId, row.roomId, row.senderUname, mine, "[mensaje con formato desconocido]", row.ts, C.ST_UNREADABLE, dbSeq, 0, row.senderId)
                 // anuncio de perfil (D61): actualiza el perfil del emisor (o el
                 // propio, en un teléfono nuevo) y NO se muestra en el chat
                 if (ProfileMsg.isProfile(body)) {
                     val p = ProfileMsg.parse(body)
                     if (p != null) {
                         applyProfile(row.senderId, p)
-                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, C.KIND_PROFILE, row.senderId)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_PROFILE, row.senderId)
                     }
                 }
                 // info de sala (D69): nombre/foto compartidos — invisible en el chat
@@ -1231,7 +1235,7 @@ class ChatEngine(
                     val p = RoomInfoMsg.parse(body)
                     if (p != null) {
                         applyRoomInfo(row.roomId, p)
-                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, row.seq, C.KIND_ROOM_INFO, row.senderId)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, p.name, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_ROOM_INFO, row.senderId)
                     }
                 }
                 // recibo de lectura (D68): el par leyó hasta u → mis ✓✓ azules.
@@ -1240,13 +1244,13 @@ class ChatEngine(
                     val p = ReadReceipt.parse(body)
                     if (p != null) {
                         if (!mine) applyReadReceipt(row.roomId, p.upToSeq)
-                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, row.seq, C.KIND_READ, row.senderId)
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_READ, row.senderId)
                     }
                 }
-                Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, row.seq, C.KIND_TEXT, row.senderId)
+                Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_TEXT, row.senderId)
             }
         } catch (_: Exception) {
-            Message(row.msgId, row.roomId, row.senderUname, mine, "[error]", row.ts, C.ST_UNREADABLE, row.seq, 0, row.senderId)
+            Message(row.msgId, row.roomId, row.senderUname, mine, "[error]", row.ts, C.ST_UNREADABLE, dbSeq, 0, row.senderId)
         }
     }
 

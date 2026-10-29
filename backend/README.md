@@ -211,3 +211,24 @@ Para 2 usuarios: de sobra. Un mensaje típico ≈ 200 B → 1 GB ≈ 5 millones 
   usuarios en e2e, Storage exige JWT clásico → secret SUPA_SVC_JWT,
   upload-sign no disponible → subida directa con anon key).
 - e2e_dm 20/20 · e2e_files 20/20 · smoke 37/37 · funciones v56.
+
+## v0.14.0 — canal ntfy (D104): CERO cambios de backend
+
+Las notificaciones ntfy (D45 adelantada por el usuario) NO tocan el servidor:
+el tema se deriva de la roomKey en el MÓVIL (`HKDF(roomKey, salt=roomId,
+"ntfy-topic-v1")` → `c`+26 base32 = 27 chars, 128 bits) — el emisor publica el
+ping a ntfy.sh DESPUÉS del ack del outbox (orden canónico), y el receptor lo
+poll-ea con cursor `since`. El servidor jamás conoce los temas; Supabase puede
+caerse que el aviso (con el sobre cifrado dentro) sigue llegando.
+
+- `scripts/e2e_ntfy.py` 32/32 contra producción + ntfy.sh REAL: tema derivado,
+  ping con sobre descifrado SIN round-trip a Supabase, degradación a puro
+  >3400 chars, inyección/replay (AEAD + dedup por msgId), eco propio, multi-tema
+  en un poll, `since=<unix>` como cursor, mensaje grande por /sync.
+- **H25 (hallazgo ntfy.sh)**: un body >4 KB NO se rechaza — se convierte en
+  ATTACHMENT (retención 3 h + URL pública) y el `message` del evento deja de
+  ser el ping. El umbral propio de 3400 chars lo evita de raíz; el parse del
+  cliente descarta el evento en silencio.
+- `X-Firebase: no` en todo publish (ntfy.sh reenviaría a FCM por defecto; el
+  proyecto prohíbe Firebase). Límites respetados: 12 h caché, 250 msg/día,
+  60 req/5 s, 200 MB/día (los polls cuentan desde ntfy 2.28) — SIEMPRE `since`.

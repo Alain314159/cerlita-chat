@@ -24,6 +24,20 @@ object KeyVault {
     private const val IV_LEN = 12
     private const val TAG_BITS = 128
 
+    fun seal(plain: ByteArray, aad: String): ByteArray = sealFn(plain, aad)
+
+    fun unseal(blob: ByteArray, aad: String): ByteArray? = unsealFn(blob, aad)
+
+    // ── solo tests (patrón H5 de v0.3.0) ──
+    // El provider AndroidKeyStore NO existe en Robolectric (primer test que
+    // lo toca, D104): se inyecta una implementación transparente en @BeforeClass
+    // y se RESTAURA en @AfterClass guardando la original. La producción jamás
+    // escribe estas vars; el cifrado real es sealReal/unsealReal.
+    @Volatile var sealFn: (ByteArray, String) -> ByteArray = ::sealReal
+        internal set
+    @Volatile var unsealFn: (ByteArray, String) -> ByteArray? = ::unsealReal
+        internal set
+
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance(KS).apply { load(null) }
         (ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
@@ -42,14 +56,14 @@ object KeyVault {
         return gen.generateKey()
     }
 
-    fun seal(plain: ByteArray, aad: String): ByteArray {
+    private fun sealReal(plain: ByteArray, aad: String): ByteArray {
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.ENCRYPT_MODE, key())
         c.updateAAD(aad.toByteArray(Charsets.UTF_8))
         return c.iv + c.doFinal(plain)
     }
 
-    fun unseal(blob: ByteArray, aad: String): ByteArray? = try {
+    private fun unsealReal(blob: ByteArray, aad: String): ByteArray? = try {
         require(blob.size > IV_LEN)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         c.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, blob, 0, IV_LEN))
