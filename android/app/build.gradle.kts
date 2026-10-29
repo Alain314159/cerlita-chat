@@ -22,8 +22,8 @@ android {
         applicationId = "cu.alain.chat"
         minSdk = 24          // D/P1: máximo alcance; requiere desugaring
         targetSdk = 36       // D/P2: un nivel por detrás del último — comportamiento probado
-        versionCode = 19
-        versionName = "0.17.0"
+        versionCode = 20
+        versionName = "0.18.0"
         vectorDrawables { useSupportLibrary = true }
         // D115: la primera prueba instrumentada del proyecto (FlujoCriticoTest)
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

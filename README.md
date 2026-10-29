@@ -3,13 +3,15 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: app Android **v0.17.0 «Ligera»** — chat E2EE completo (rooms + DM +
-adjuntos + llamadas + minijuego 2048 + **avatares 2D** — cerdita y koala por capas
-con accesorios, o foto: el 3D se eliminó en D113 y la APK bajó a la mitad) con
-**4 capas de aviso**: timbre Realtime (D63), **canal ntfy con el sobre cifrado
-dentro del ping** (D104), alarma exacta 4-6 min (D105) y SyncWorker 15 min.
-**Sin Firebase** (X-Firebase: no en todo publish). APK **19,5 MB** firmada
-(misma firma 37b6d4…, actualiza encima). 122/122 tests.
+**Estado**: app Android **v0.18.0 «Verificación»** — chat E2EE completo (rooms + DM +
+adjuntos + llamadas + minijuego 2048 + avatares 2D cerdita/koala con accesorios o foto) con
+**4 capas de aviso** (timbre Realtime, ntfy con sobre cifrado, alarma exacta, SyncWorker)
+y, desde esta versión, **verificación de 1.0**: reporte de fallos propio (D114), **primera
+prueba instrumentada** ejecutando el flujo crítico en Android real desde CI (D115),
+cobertura con umbral publicado (D116 — crypto 75,1%), lint con base y cero avisos
+nuevos (D117) y la memoria institucional mudada al repo (D118). **Sin Firebase**.
+APK **18,6 MB** firmada (misma firma 37b6d4…, actualiza encima). 132/132 tests unitarios
++ 4/4 instrumentados en CI.
 
 ## Documentación
 
@@ -19,7 +21,10 @@ dentro del ping** (D104), alarma exacta 4-6 min (D105) y SyncWorker 15 min.
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.17.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares 2D (D113), cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.18.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares 2D (D113), QA de 1.0 (D114-D118), cripto, build, tests |
+| [docs/qa/COBERTURA.md](docs/qa/COBERTURA.md) | Suelos de cobertura publicados y números por paquete (D116) |
+| [docs/ENTORNO.md](docs/ENTORNO.md) | Receta de reconstrucción del entorno desde cero (D118) |
+| [docs/worklog.md](docs/worklog.md) | Registro de trabajo de cada sesión (D118) |
 
 ## Estado (28-oct-2026)
 

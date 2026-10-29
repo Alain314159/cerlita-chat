@@ -509,8 +509,13 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
             }
         }
 
+        // Versión real del paquete (nada de literales que envejecen mal)
         Text(
-            "v0.7.0 · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
+            "v" + (try {
+                ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+            } catch (_: Exception) {
+                "?"
+            }) + " · Cerlita Chat · salas con ChaCha20-Poly1305 · el servidor nunca ve tus mensajes ni tu perfil",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterHorizontally),

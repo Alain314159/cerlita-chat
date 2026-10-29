@@ -1,11 +1,28 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.17.0 «Ligera»**:
-FUERA el 3D para siempre (D113) — el avatar es 2D (cerdita y koala por capas
-con ropa, calzado y accesorios) o foto de perfil. Mismos ids y wire: los
-perfiles guardados siguen igual. APK 39,8 → 19,5 MB (−51 %), sin SceneView,
-sin GLB, sin Filament. Vista previa viva 2D de D98 restaurada en el editor.
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.18.0
+«Verificación»**: la app aprende a delatarse cuando falla y el proyecto pasa
+de «confío» a «compruebo» (Fase V del informe de preparación 1.0, D114-D118):
+
+- **Reporte de fallos propio (D114)**: capturador fatal + no-fatal que escribe
+  traza, versión, teléfono, Android y pantalla activa a disco; bandeja al
+  arrancar (y en Ajustes → Soporte) que comparte el informe por el canal que
+  la pareja elija (Telegram/correo). Nada se envía solo. Cero dependencias.
+- **Primera prueba instrumentada del proyecto (D115)**: `FlujoCriticoTest`
+  ejecuta en Android REAL (ATD en CI) el flujo completo — alta → entrada →
+  envío con ✓ → recepción CON LA APP EN SEGUNDO PLANO (push del timbre por
+  WebSocket → /sync → descifrado → BD) — contra `:mockbackend`, un backend
+  simulado que corre en el propio dispositivo (127.0.0.1): producción intacta.
+- **Cobertura con umbral publicado (D116)**: `crypto` ≥ 70 % LINEA (medido
+  75,1 %) y ≥ 130 tests — la puerta `tools/qa/coverage_gate.py` rompe el build
+  en CI si se incumple. Números y límite Robolectric documentados en
+  `docs/qa/COBERTURA.md`.
+- **Lint con base (D117)**: 71 avisos congelados en `app/lint-baseline.xml`,
+  cualquier aviso NUEVO rompe el build.
+- **v0.17.0 «Ligera»** (previa): FUERA el 3D para siempre (D113) — el avatar
+  es 2D (cerdita y koala por capas con ropa, calzado y accesorios) o foto de
+  perfil. APK 39,8 → 18,6 MB, misma firma, actualiza encima.
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
