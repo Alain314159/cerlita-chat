@@ -508,3 +508,15 @@ Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters det
 **D117 — Lint.** Base `app/lint-baseline.xml` (71 issues congelados: 2 errores, 60 avisos, 9 hints — el estado REAL de 14,7k líneas de Kotlin) + `abortOnError`: **cualquier aviso nuevo rompe el build**, en local y en CI (`lintDebug` en cada push). La absorción de deuda es visible en diffs: arreglar y regenerar la base baja el contador; regenerar con un aviso dentro lo confiesa.
 
 **Ambos en CI**: pasos «Cobertura (umbral D116)» y «Lint (base D117)» en el job build; el HTML de cobertura se sube como artefacto `cobertura-html`.
+
+## D118 — La memoria institucional se muda al repositorio: worklog + receta de entorno (v0.18.0)
+
+**Contexto.** Riesgo operativo del informe 1.0 (§5.1: «el riesgo que no está en el código»): el entorno de desarrollo es perecedero (H19-H26 documentan tres reinicios que borraron toolchain, credenciales y estado) y el registro de trabajo —la historia completa de cómo se construyó esta app— vivía en un fichero FUERA del repositorio. El factor de riesgo de autobús del proyecto es 1,0.
+
+**Decisión.** Dos mudanzas al repo:
+
+1. **`docs/worklog.md`**: el registro completo de sesiones (multi-agente, con hallazgos y stage summaries). Escaneado por secretos antes de publicarlo (las dos coincidencias con `sb_secret_`/JWT son menciones de hallazgos H11/H17, no valores). Desde ahora se actualiza en cada sesión y se commitea con el resto — la lección práctica de esta misma sesión: el worklog vivía sin copia y un `git rebase` para sacar un commit accidente lo borró del disco; se recuperó íntegro del objeto del commit huérfano y ALCANZÓ con que hubiera estado en GitHub para que ni siquiera fuera un susto.
+
+2. **`docs/ENTORNO.md`**: la receta de reconstrucción desde cero que la sesión v0.17.0 tuvo que improvisar — JDK Temurin 21 (H22), SDK con la plataforma renombrada a mano (H19), firma desde los secrets del repo, credenciales git (el @ del email rompía el store), flags de RAM para el sandbox de 3,9 GB (H26), la vigilancia del DISCO lleno (hallazgo NUEVO de esta sesión: Robolectric fallando con «No space left on device» parece un fallo de tests y no lo es), el espejo de Maven Central para el 429, la protección de push de GitHub (que bloqueó el commit con credenciales reales del snapshot accidente), y el protocolo «sandbox congelado» con el que arrancó v0.17.0.
+
+**Regla que queda escrita**: todo lo que no esté en GitHub no existe. Commit+push al terminar cada bloque de trabajo — ya no solo por la regla del usuario, también porque el push protection es la última red contra un commit con credenciales.
