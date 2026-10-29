@@ -459,3 +459,18 @@ Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters det
 **Resultado medible**: APK 39,8 → **19,5 MB** (−51 %), 122/122 tests (los 6 de mapeo GLB salen con su objeto), firma idéntica 37b6d4…, versionCode 19. Coste de mantenimiento del avatar: cero dependencias, cero pipeline externo.
 
 **Regla para el futuro**: no se vuelve al 3D. Si se quiere más variedad de avatar, el camino es ARTE 2D nuevo (bases/colorways/accesorios sobre las anclas existentes), que es barato, medible y no toca el binario.
+
+## D114 — Reporte de fallos propio: captor a disco + bandeja con compartir (v0.18.0)
+
+**Contexto.** Brecha 1 del informe de preparación 1.0 («ceguera operativa»): sin ningún mecanismo de reporte, un cierre en el teléfono de ella no existía como dato — llegaba como comentario verbal, sin traza, sin versión, sin modelo. Es la brecha CRÍTICA número uno porque sin ella las demás no se pueden cerrar con evidencia: la semana de uso real que exige la 1.0 solo produce veredicto si hay algo que cuente los fallos.
+
+**Decisión.** Captor PROPIO, sin dependencias nuevas (`qa/CrashReporter.kt`, ~180 líneas):
+
+- **Fatal**: `Thread.setDefaultUncaughtExceptionHandler` que escribe el informe a `filesDir/crashes/` y ENCADENA al handler previo — el diálogo de Android queda intacto.
+- **No fatal**: `CoroutineExceptionHandler` en el scope de la app — un fallo de corutina deja huella sin matar el proceso (misma bandeja).
+- **Contenido**: fecha, tipo, versión+versionCode, fabricante+modelo, Android+SDK, **pantalla activa** (AppRoot la anota en cada cambio de ruta), hilo, traza completa y cola de logcat del propio proceso (best-effort, sin permisos).
+- **Entrega**: NADA se envía solo. Al siguiente arranque la bandeja (AppRoot) ofrece «Enviar informe» → `ACTION_SEND` de texto — la pareja elige Telegram/correo; también desde Ajustes → Soporte. FIFO de 5 pendientes, enviados autodestruidos a 7 días.
+
+**Descartes.** ACRA (maduro y libre, pero su valor está en senders HTTP/correo que aquí no aportan y suma dependencia al binario); Sentry gratis (SDK + DSN + un punto de fuga de metadatos que el modelo E2EE no necesita; además el informe saldría sin consentimiento explícito por evento). El coste de la opción elegida: cero pesos al APK, cero superficie de ataque nueva, funciona sin red y sin cuenta.
+
+**Criterio de salida (Fase V)**: «llega el primer reporte real de fallo con traza, versión y modelo» — queda cubierto: el informe lleva los tres, y la entrega es resistente a ETECSA (offline-first, comparte cuando haya red).

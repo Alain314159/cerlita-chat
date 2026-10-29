@@ -15,7 +15,9 @@ import cu.alain.chat.notify.Notifier
 import cu.alain.chat.notify.NtfyChannel
 import cu.alain.chat.notify.RealtimeDoorbell
 import cu.alain.chat.notify.SyncAlarm
+import cu.alain.chat.qa.CrashReporter
 import cu.alain.chat.vault.SessionStore
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -82,8 +84,13 @@ class ChatApp : Application(), Configuration.Provider {
         nicknames.value = prefs.allNicknames()
     }
 
-    /** Scope de aplicación para lanzar el notificador desde el callback del engine. */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** Scope de aplicación para lanzar el notificador desde el callback del engine.
+     *  D114: los fallos NO fatales de corutina dejan informe en disco (sin
+     *  matar el proceso) — misma bandeja que los fatales. */
+    private val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            CoroutineExceptionHandler { _, t -> CrashReporter.reportNonFatal(t) },
+    )
 
     // ── Timbre (D72): SIN notificación persistente por defecto ──
     // Con la app ABIERTA el WebSocket Realtime vive DENTRO del proceso (sin
@@ -102,6 +109,7 @@ class ChatApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        CrashReporter.install(this) // D114: PRIMERO — cualquier fallo desde aquí deja traza
         prefs = Prefs(this)
         themeFlow.value = prefs.theme
         api = Api { prefs.baseUrl }

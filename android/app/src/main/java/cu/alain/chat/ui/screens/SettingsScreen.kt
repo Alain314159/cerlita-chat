@@ -61,6 +61,7 @@ import cu.alain.chat.notify.Doorbell
 import cu.alain.chat.notify.DoorbellService
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.notify.NtfyChannel
+import cu.alain.chat.qa.CrashReporter
 import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.ui.theme.Themes
 import kotlinx.coroutines.launch
@@ -83,6 +84,9 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
     var exportUri by remember { mutableStateOf<Uri?>(null) }
     var exportError by remember { mutableStateOf<String?>(null) }
     var showLogout by remember { mutableStateOf(false) }
+
+    // D114: informes de fallo guardados (bandeja manual desde Soporte)
+    var crashReports by remember { mutableStateOf(CrashReporter.pending()) }
 
     // ── import del respaldo ──
     var importUri by remember { mutableStateOf<Uri?>(null) }
@@ -465,6 +469,42 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                         Spacer(Modifier.width(6.dp))
                         Text("Cerrar sesión")
                     }
+                }
+            }
+        }
+
+        // ── soporte (D114): informes de fallo guardados en este teléfono ──
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Soporte", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Si la app se cierra sola, queda guardado un informe del fallo (traza, " +
+                        "versión y teléfono). Nada se envía solo: se comparte desde aquí " +
+                        "por el canal que elijas.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        enabled = crashReports.isNotEmpty(),
+                        onClick = {
+                            val f = crashReports.firstOrNull() ?: return@OutlinedButton
+                            val text = try { CrashReporter.text(f) } catch (_: Exception) { "" }
+                            if (text.isNotEmpty()) {
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_SUBJECT, "Informe de fallo — Cerlita Chat")
+                                    putExtra(Intent.EXTRA_TEXT, text)
+                                }
+                                try {
+                                    ctx.startActivity(Intent.createChooser(send, "Enviar informe de fallo"))
+                                } catch (_: Exception) {}
+                            }
+                            CrashReporter.markSent(f)
+                            crashReports = CrashReporter.pending()
+                        },
+                    ) { Text("Enviar informe (${crashReports.size})") }
                 }
             }
         }

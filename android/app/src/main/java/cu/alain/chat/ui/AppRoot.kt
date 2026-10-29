@@ -11,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -59,6 +61,7 @@ import cu.alain.chat.calls.CallDispatcher
 import cu.alain.chat.db.Room
 import cu.alain.chat.engine.AppState
 import cu.alain.chat.notify.Notifier
+import cu.alain.chat.qa.CrashReporter
 import cu.alain.chat.ui.screens.AuthScreens
 import cu.alain.chat.ui.screens.CallsScreen
 import cu.alain.chat.ui.screens.ChatScreen
@@ -91,6 +94,15 @@ private sealed interface Screen {
 fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
     val ctx = LocalContext.current
 
+    // D114: si la app se cerró desde la última visita, la bandeja ofrece el
+    // informe (traza+versión+teléfono) por el canal que la usuaria elija.
+    CrashInbox(ctx)
+
+    // D114: la última pantalla viva viaja dentro del informe de fallo
+    LaunchedEffect(state) {
+        CrashReporter.note(if (state is AppState.Main) "Main" else "Login")
+    }
+
     // Permiso de notificaciones (33+) — se pide una vez al entrar a Main
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -113,6 +125,9 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
         AppState.Main -> {
             val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
             val current = stack.last()
+
+            // D114: pantalla exacta (Home/Chat/Perfil/…) para el informe
+            LaunchedEffect(current) { CrashReporter.note(current::class.simpleName ?: "Home") }
 
             // pestaña seleccionada (v0.7.0): vive AQUÍ para que el título la lea
             var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -547,5 +562,76 @@ private fun launchOutgoingCall(app: ChatApp, room: Room, video: Boolean) {
                 ?.let { app.db.profileDao().get(it)?.displayName }
             ?: "@${room.name.removePrefix("@")}"
         CallDispatcher.startOutgoing(app, room, peerName, video)
+    }
+}
+
+/**
+ * D114: bandeja de informes de fallo. Si CrashReporter dejó informes en disco
+ * (cierre inesperado desde la última visita), se ofrece ENVIAR la traza por
+ * el canal que la usuaria elija (ACTION_SEND: Telegram, correo, …). El informe
+ * no sale solo: decisión explícita, siempre. Ver → texto completo; Descartar
+ * → se borra. Con varios pendientes se ofrecen de uno en uno (el más reciente
+ * primero).
+ */
+@Composable
+private fun CrashInbox(ctx: android.content.Context) {
+    var pending by remember { mutableStateOf(cu.alain.chat.qa.CrashReporter.pending()) }
+    var viewing by remember { mutableStateOf(false) }
+    val f = pending.firstOrNull() ?: return
+
+    val share: (java.io.File) -> Unit = { file ->
+        val text = try { cu.alain.chat.qa.CrashReporter.text(file) } catch (_: Exception) { "" }
+        if (text.isNotEmpty()) {
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, "Informe de fallo — Cerlita Chat")
+                putExtra(Intent.EXTRA_TEXT, text)
+            }
+            try {
+                ctx.startActivity(Intent.createChooser(send, "Enviar informe de fallo"))
+            } catch (_: Exception) {
+            }
+        }
+        cu.alain.chat.qa.CrashReporter.markSent(file)
+        pending = cu.alain.chat.qa.CrashReporter.pending()
+        viewing = false
+    }
+
+    AlertDialog(
+        onDismissRequest = { }, // decisión explícita: Enviar / Ver / Descartar
+        title = { Text("La app se cerró inesperadamente") },
+        text = {
+            Text(
+                "Quedó guardado un informe del fallo (traza, versión y teléfono) para " +
+                    "arreglarlo más rápido. ¿Se lo envías por Telegram o correo?" +
+                    if (pending.size > 1) "\n\n(${pending.size} informes pendientes)" else "",
+            )
+        },
+        confirmButton = { TextButton({ share(f) }) { Text("Enviar informe") } },
+        dismissButton = {
+            Row {
+                TextButton({ viewing = true }) { Text("Ver") }
+                TextButton({
+                    cu.alain.chat.qa.CrashReporter.discard(f)
+                    pending = cu.alain.chat.qa.CrashReporter.pending()
+                    viewing = false
+                }) { Text("Descartar") }
+            }
+        },
+    )
+
+    if (viewing) {
+        AlertDialog(
+            onDismissRequest = { viewing = false },
+            title = { Text("Informe de fallo") },
+            text = {
+                Text(
+                    try { cu.alain.chat.qa.CrashReporter.text(f) } catch (_: Exception) { "(ilegible)" },
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = { TextButton({ viewing = false }) { Text("Cerrar") } },
+        )
     }
 }
