@@ -73,3 +73,26 @@ Arreglo: `turn_around()` en build_family gira TODO (rig + mallas + empties,
 keep-transform con un Empty padre) 180° en Z antes de exportar; `qa_shot`
 volvió a az 0 = frente (lado -Y). Regla: toda pieza nueva del pipeline mira a
 -Y en Blender, sin excepción.
+
+## v0.16.0 (D112): la escultura v2 — qué cambió en el pipeline
+
+Regenerar TODO tras el overhaul: `blender -b -P build_avatars.py` (GLB+QA) y
+`render_rasters.py` (bases+sprites). El resto de las reglas de arriba SIGUE
+igual (ids de catálogo como contrato, un GLB por colorway, prendas=Empties,
+QA antes de subir). Cambios concretos:
+
+- **Constantes nuevas**: `TEE_FIT=1.16` (holgura, era 1.135), `SOLE_D`
+  (suelas oscuras). `A` actualizado (ojos 0.047, brazos cortos, pies mayores).
+- **Materiales**: body 0.34 / tinta 0.32 / `hi` blanco 0.05 (brillos). El
+  specular JAMÁS por debajo de 0.25 en rasgos oscuros: los lava (lección
+  medida con PIL: rasgos a lum 125-175 = cara «neutra»).
+- **Ropa**: `solidify()` 0.012-0.014 ANTES de posicionar; cuellos/puños con
+  `darken(color)`; el gorro fiesta se ancla con `ellipsoid_surface` + banda.
+- **La boca U**: `smile_chain()` (cilindros+esferas). NO usar
+  `bpy.ops.object.convert` (curvas→malla) en headless: poll() falla.
+- **QA**: `setup_render` usa AHORA el estudio 3-luces + MUNDO PASTEL de
+  render_rasters.py (sin mundo, GI=0 → renders a 40/255). Dos planos nuevos:
+  09_face_closeup y 10_wave_front.
+- **Puerta de calidad**: rubro VLM (glm-5v) por familia hasta «APROBADO»,
+  más legibilidad de rasters a 384 px. 7+2 iteraciones pagaron: boca plana →
+  ω «gusanito» → U ancha 0.032; gorro flotando → banda de contacto.

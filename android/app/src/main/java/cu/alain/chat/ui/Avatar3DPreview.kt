@@ -20,7 +20,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.unit.dp
 import cu.alain.chat.profile.AvatarConfig
+import com.google.android.filament.LightManager
 import io.github.sceneview.SceneView
+import io.github.sceneview.math.Direction
+import io.github.sceneview.node.LightNode
 import io.github.sceneview.node.ModelNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberModelInstance
@@ -112,6 +115,10 @@ fun Avatar3DPreview(
                 engine = engine,
                 modelLoader = modelLoader,
                 isOpaque = false, // (D102) transparente: se ve el escenario detrás
+                // (D112) fuera el relleno por defecto (plano): abajo montamos el
+                // estudio 3 luces del pipeline de renders (D102) — relleno cálido
+                // frente-derecha + corte frío desde atrás sobre la principal.
+                fillLightNode = null,
                 onTouchEvent = { e, _ ->
                     when (e.actionMasked) {
                         MotionEvent.ACTION_DOWN -> {
@@ -131,6 +138,20 @@ fun Avatar3DPreview(
                     false // no consumir: el orbit de la cámara sigue funcionando
                 },
             ) {
+                // (D112) estudio en vivo: relleno cálido frente-derecha y corte
+                // frío detrás-arriba (recorta la silueta sobre el escenario)
+                LightNode(
+                    type = LightManager.Type.DIRECTIONAL,
+                    intensity = 30_000f,
+                    direction = Direction(-0.55f, -0.41f, -0.68f),
+                    apply = { color(1.0f, 0.96f, 0.92f) },
+                )
+                LightNode(
+                    type = LightManager.Type.DIRECTIONAL,
+                    intensity = 20_000f,
+                    direction = Direction(0f, -0.5f, 0.86f),
+                    apply = { color(0.88f, 0.94f, 1.0f) },
+                )
                 ModelNode(
                     modelInstance = inst,
                     autoAnimate = false,

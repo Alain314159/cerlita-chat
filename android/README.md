@@ -1,12 +1,11 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.15.0 «Sin
-retrasos»**: roadmap D103 completo — QoS del despertar (4 capas: timbre WS →
-ntfy D104 → alarma exacta → worker), `/sync` en 1 query, ventana de historial,
-llamadas a prueba de todo (FGS mic/cam, full-screen entrante, cámara al aceptar,
-señal), S2 (responder · reacciones · editar/borrar · escribiendo… · búsqueda
-FTS4) y J0 (minijuego 2048 E2EE con récord de la pareja, D105-D111).
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.16.0 «Bien
+hechos»**: avatares 3D de calidad — escultura v2 del generador Blender con
+puerta de calidad VLM en bucle (ojos grandes con brillo blanco, boca U
+alegre, materiales vinilo, ropa con grosor real, orejas caídas + interior,
+cola rizo), rasters regenerados y editor con estudio 3-luces en vivo (D112).
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
@@ -467,3 +466,42 @@ llamadas — el toolchain se reconstruye SIEMPRE en FOREGROUND
 `curl -C -`). El AndroidKeyStore no existe en Robolectric: KeyVault expone
 `sealFn/unsealFn` inyectables solo para tests (patrón H5), restauradas en
 @AfterClass.
+
+## v0.16.0 — «Bien hechos» (escultura v2 + estudio en vivo, D112)
+
+El usuario probó los avatares 3D de v0.13/v0.15 y pidió «consígueme los
+avatares bien hechos que quiero» (con un plan externo: VRoid/three.ws/Sloyd/
+Meshy — ya verificado en AVATAR-3D-ANALISIS §9: la vía sigue siendo GLB
+propio + SceneView). El problema no era la arquitectura sino la CALIDAD de la
+escultura. Diagnóstico VLM de las capturas del usuario: expresión vacía, ropa
+'pintada', gorro flotando, proporciones 'muñeco de nieve'.
+
+- **Overhaul del generador** (`tools/avatares3d/build_avatars.py`) con **QA
+  visual ITERATIVO por VLM como puerta objetiva** (regla D83): 7 iteraciones
+  koala + 2 cerdita hasta APROBADO en ambas familias y en los rasters 384 px.
+- Cara: ojos 40% mayores con BRILLO blanco geométrico (`EyeHi`/`NoseHi`),
+  boca U ancha siguiendo la superficie (cadena de cilindros+esferas), rubor
+  mayor y más bajo, nariz koala brillante con 'nariz húmeda'.
+- Materiales vinilo: body rough 0.34 (era 0.55 mate); tinta 0.32. LECCIÓN
+  (medida con PIL, no a ojo): tinta a 0.12 + luz clave = sobre-especular →
+  LAVA los rasgos a gris (lum 125-175) y la cara leía 'neutra'.
+- Cuerpo: cuello, orejas caídas con interior rosa, cola 4 anillos = rizo,
+  brazos/pies más regordetes.
+- Ropa con GROSOR real (solidify 0.012-0.014): cuellos y puños acanalados un
+  tono abajo, dobladillo al borde de la falda, pañuelo del traje, suelas
+  oscuras. Holgura 1.16 (era 1.135 = pegada).
+- Gorro fiesta anclado a la superficie + banda de contacto (no levita).
+- QA con el estudio 3-luces + MUNDO PASTEL de D102: sin mundo no hay GI en
+  Cycles y los renders salían a 40/255 (casi negros).
+- App: `Avatar3DPreview` con estudio en vivo (fill cálido 30 klux + rim frío
+  20 klux sobre la main por defecto, `fillLightNode = null`, LightNode
+  DIRECTIONAL de SceneView 4.62).
+- 7 GLB regenerados (validate_glbs 16/16 prendas + 3 anims + skin) + 7 bases
+  y 34 sprites de rasters (`av_*.webp`, mismos nombres → cero cambios de wire
+  ni de app; determinismo Δ=0, composites 0.04-0.09% px distintos).
+- 91/91 tests. APK 39,8 MB (v0.14.0 era 37,5: +2,3 de GLB), firma idéntica
+  37b6d4… (versionCode 18).
+- Entorno (H22): el JDK del sandbox es JRE sin javac → compilar con
+  `JAVA_HOME=/home/z/toolchain/jdk-21` (Temurin); `bpy.ops.object.convert`
+  falla headless (poll) → sonrisa como cadena de primitivos;
+  `modifier_apply` en 4.2 usa el kwarg `modifier`.
