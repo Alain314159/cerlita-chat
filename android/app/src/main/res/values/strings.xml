@@ -6,4 +6,12 @@
     <string name="channel_service_desc">Mantiene la conexión para recibir mensajes con la app cerrada</string>
     <string name="service_notif_text">Conectado — los mensajes nuevos avisan al instante</string>
     <string name="notif_summary">%1$d mensajes nuevos en %2$d chats</string>
+    <string name="channel_calls">Llamadas</string>
+    <string name="channel_calls_desc">Avisos de llamadas entrantes</string>
+    <string name="call_notif_text">Llamada en curso</string>
+    <string name="incoming_call">Llamada entrante</string>
+    <string name="incoming_video_call">Videollamada entrante</string>
+    <string name="decline_call">Rechazar</string>
+    <string name="signal_weak">Señal débil</string>
+    <string name="signal_bad">Señal muy mala — puede cortarse</string>
 </resources>

@@ -160,6 +160,25 @@ fun CallScreenOverlay(app: ChatApp) {
                 color = if (s.phase == CallDispatcher.Phase.ACTIVE && s.video) Color.White.copy(alpha = 0.8f)
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            // S1/D107: nivel de señal en la llamada activa — «señal débil» en
+            // vez de «se cortó» cuando la red aprieta (RTT del candidate-pair)
+            if (s.phase == CallDispatcher.Phase.ACTIVE) {
+                val sig by CallDispatcher.signal.collectAsState()
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    SignalBars(level = sig, light = s.video)
+                    if (sig <= 1) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (sig == 0) "Señal muy mala — puede cortarse"
+                            else "Señal débil",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (s.video) Color.White.copy(alpha = 0.85f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
 
         // ── controles según fase ──
@@ -236,6 +255,30 @@ fun CallScreenOverlay(app: ChatApp) {
 }
 
 private val RoundedCorner8 = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+
+/**
+ * S1/D107: 3 barritas de señal (nivel 0/1/2) — la de la derecha solo se
+ * llena con señal buena; con 1 la llamada sigue pero avisa «débil».
+ */
+@Composable
+private fun SignalBars(level: Int, light: Boolean) {
+    val on = if (light) Color.White else MaterialTheme.colorScheme.primary
+    val off = if (light) Color.White.copy(alpha = 0.3f)
+    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        listOf(5.dp to 0, 8.dp to 1, 11.dp to 2).forEach { (h, need) ->
+            androidx.compose.foundation.layout.Box(
+                Modifier
+                    .width(3.dp)
+                    .height(h)
+                    .background(
+                        if (level >= need) on else off,
+                        androidx.compose.foundation.shape.RoundedCornerShape(1.dp),
+                    ),
+            )
+        }
+    }
+}
 
 /** Render WebRTC de una pista (remote o local). trackProvider se re-poll-ea. */
 @Composable

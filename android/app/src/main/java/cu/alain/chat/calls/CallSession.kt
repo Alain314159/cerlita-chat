@@ -5,7 +5,10 @@ import cu.alain.chat.ChatApp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
@@ -37,6 +40,16 @@ import kotlin.coroutines.resumeWithException
  *
  * - Audio SIEMPRE (micrófono → pista remota); vídeo si la llamada es de vídeo.
  * - Cámara frontal por defecto (cambiar con switchCamera).
+ * - S1/D107 (privacidad): en el RECEPTOR de una videollamada la cámara NO
+ *   arranca al sonar — solo al pulsar Aceptar. La PISTA se crea igual (la
+ *   negociación SDP la necesita) pero sin capturador: nada sale del teléfono
+ *   y el indicador de cámara permanece apagado hasta aceptar.
+ * - S1/D107 (calidad adaptativa): captura a 720p si la cámara lo soporta
+ *   (con fallback 640×480), bitrate tope 900 kbps y WebRTC adapta la
+ *   resolución/fps solo según el ancho de banda real (GCC/REMB) — en red
+ *   buena se ve mejor, en 2G degrada solo, sin cortar la llamada.
+ * - S1/D107 (señal): monitor getStats cada 3 s → nivel 0/1/2 para la UI
+ *   («señal débil» en vez de «se cortó»).
  * - ICE (v0.8.0, B6/R3): STUN + TURN servido por /turn — en NAT simétrico el
  *   relé es la única ruta; el media sigue E2EE (DTLS-SRTP).
  * - La señalización la hace [CallDispatcher]; esta clase solo negocia.
@@ -50,6 +63,8 @@ class CallSession(
     private val listener: Listener,
     /** ICE servers (STUN+TURN) — el dispatcher los trae de TurnConfig. */
     iceServers: List<PeerConnection.IceServer>? = null,
+    /** true = RECEPTOR: la cámara espera a [startCameraIfNeeded] (Aceptar). */
+    private val asCallee: Boolean = false,
 ) {
 
     interface Listener {
@@ -61,6 +76,9 @@ class CallSession(
 
         /** Fallo irrecuperable (sin ruta de red, cámara muerta…). */
         fun onFailed()
+
+        /** S1/D107: nivel de señal 0 (malo) · 1 (débil) · 2 (bueno). */
+        fun onSignal(level: Int)
     }
 
     companion object {
@@ -124,6 +142,9 @@ class CallSession(
 
     private var closed = false
     private var connectedNotified = false
+    private var captureStarted = false
+    private var camW = 640
+    private var camH = 480
 
     private val pcObserver = object : PeerConnection.Observer {
         override fun onIceCandidate(candidate: IceCandidate) {
@@ -134,8 +155,10 @@ class CallSession(
 
         override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
             when (newState) {
-                PeerConnection.PeerConnectionState.CONNECTED ->
+                PeerConnection.PeerConnectionState.CONNECTED -> {
                     if (!connectedNotified) { connectedNotified = true; listener.onConnected() }
+                    startStatsMonitor() // S1/D107: señal para la UI
+                }
                 PeerConnection.PeerConnectionState.FAILED ->
                     // D81: SIEMPRE termina (antes, si ya había conectado una vez,
                     // la llamada quedaba zombi sin forma de colgarla)
@@ -185,27 +208,66 @@ class CallSession(
         audioTrack = f.createAudioTrack("audio0", audioSource).also {
             pc.addTrack(it, listOf("stream0"))
         }
-        if (withVideo) startCamera(f)
+        if (withVideo) createVideoTrack(f, startCameraNow = !asCallee)
     }
 
-    private fun startCamera(f: PeerConnectionFactory) {
+    /**
+     * Crea la pista de vídeo y la añade al PC SIEMPRE (la negociación SDP lo
+     * exige); la CÁMARA solo arranca si toca. Resolución: 720p si la cámara
+     * lo soporta (suelo: 640×480) y bitrate tope 900 kbps — el codificador
+     * degrada solo según la red, la llamada nunca se corta por calidad.
+     */
+    private fun createVideoTrack(f: PeerConnectionFactory, startCameraNow: Boolean) {
         try {
             val enumerator = Camera2Enumerator(app)
             val front = enumerator.deviceNames.firstOrNull { enumerator.isFrontFacing(it) }
                 ?: enumerator.deviceNames.firstOrNull() ?: return
+            val formats = try { enumerator.getSupportedFormats(front) } catch (_: Exception) { null }
+            if (formats?.any { it.width >= 1280 && it.height >= 720 } == true) {
+                camW = 1280; camH = 720
+            }
             val capturer = enumerator.createCapturer(front, null) ?: return
             val source = f.createVideoSource(false)
             val helper = SurfaceTextureHelper.create("call-capture", egl().eglBaseContext)
             capturer.initialize(helper, app, source.capturerObserver)
-            capturer.startCapture(640, 480, 24)
             videoCapturer = capturer; videoSource = source; videoHelper = helper
             localVideoTrack = f.createVideoTrack("video0", source).also {
                 pc.addTrack(it, listOf("stream0"))
             }
+            // S1/D107: techo de 900 kbps — protege los datos en ETECSA; por
+            // debajo del techo WebRTC usa lo que la red deje (adaptativo).
+            try {
+                pc.senders.filter { it.track()?.kind() == "video" }.forEach { s ->
+                    val p = s.parameters
+                    p.encodings.firstOrNull()?.maxBitrateBps = 900_000
+                    s.parameters = p
+                }
+            } catch (_: Exception) {
+            }
+            if (startCameraNow) startCamera()
         } catch (_: Exception) {
             listener.onFailed()
         }
     }
+
+    private fun startCamera() {
+        val c = videoCapturer ?: return
+        if (captureStarted) return
+        try {
+            c.startCapture(camW, camH, 24)
+            captureStarted = true
+        } catch (_: Exception) {
+            try { // cámara sin 720p: suelo seguro de toda la vida
+                c.startCapture(640, 480, 24)
+                camW = 640; camH = 480
+                captureStarted = true
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** S1/D107: la cámara del receptor arranca AQUÍ (al pulsar Aceptar). */
+    fun startCameraIfNeeded() = startCamera()
 
     // ────────────────────────── llamante ──────────────────────────
 
@@ -304,7 +366,11 @@ class CallSession(
     fun setCam(on: Boolean) {
         localVideoTrack?.setEnabled(on)
         try {
-            if (on) videoCapturer?.startCapture(640, 480, 24) else videoCapturer?.stopCapture()
+            if (on) startCamera()
+            else if (captureStarted) {
+                videoCapturer?.stopCapture()
+                captureStarted = false
+            }
         } catch (_: Exception) {}
     }
 
@@ -315,12 +381,58 @@ class CallSession(
     fun close() {
         if (closed) return
         closed = true
+        statsJob?.cancel()
         try { videoCapturer?.stopCapture() } catch (_: Exception) {}
         try { videoCapturer?.dispose() } catch (_: Exception) {}
         try { videoHelper?.dispose() } catch (_: Exception) {}
         try { videoSource?.dispose() } catch (_: Exception) {}
         try { audioSource?.dispose() } catch (_: Exception) {}
         try { pc.dispose() } catch (_: Exception) {}
+    }
+
+    // ────────────────── señal (S1/D107): getStats → nivel 0/1/2 ──────────────────
+
+    private var statsJob: Job? = null
+
+    private fun startStatsMonitor() {
+        if (statsJob?.isActive == true) return
+        statsJob = scope.launch {
+            while (isActive && !closed) {
+                delay(3_000)
+                val lvl = computeSignalLevel()
+                if (lvl >= 0) listener.onSignal(lvl)
+            }
+        }
+    }
+
+    /** RTT del candidate-pair nominado: <250 ms bueno · <550 ms débil · malo. */
+    private suspend fun computeSignalLevel(): Int = try {
+        val report = suspendCancellableCoroutine<org.webrtc.RTCStatsReport?> { cont ->
+            try {
+                pc.getStats { r -> if (cont.isActive) cont.resume(r) }
+            } catch (_: Exception) {
+                if (cont.isActive) cont.resume(null)
+            }
+        } ?: return -1
+        var rtt = -1.0
+        for (s in report.statsMap.values) {
+            if (s.type != "candidate-pair") continue
+            val m = s.members
+            if (m["nominated"] == true && m["state"] == "succeeded" &&
+                m["currentRoundTripTime"] is Number
+            ) {
+                rtt = (m["currentRoundTripTime"] as Number).toDouble()
+                break
+            }
+        }
+        when {
+            rtt < 0 -> -1 // sin datos aún: no opinar
+            rtt < 0.25 -> 2
+            rtt < 0.55 -> 1
+            else -> 0
+        }
+    } catch (_: Exception) {
+        -1
     }
 
     // ────────────────────────── puentes suspend ──────────────────────────

@@ -10,6 +10,14 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- S1/D107: la llamada sobrevive a pantalla apagada/app en background.
+         Los tipos mic/cam exigen su runtime permission CONCEDIDO antes del
+         startForeground (lo garantiza el flujo de permisos de la UI). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <!-- S1/D107: llamada entrante con pantalla apagada/bloqueada → la
+         notificación full-screen prende la pantalla encima del bloqueo. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Timbre Realtime en segundo plano (D63/D64): servicio foreground tipo
          remoteMessaging (sin límite de 6 h de dataSync y permitido arrancar
          desde BOOT_COMPLETED) + receptor de arranque para revivirlo. -->
@@ -75,6 +83,19 @@
                 <action android:name="cu.alain.chat.action.MARK_READ" />
             </intent-filter>
         </receiver>
+
+        <!-- S1/D107: FGS de la llamada — micrófono + cámara vivos aunque la
+             pantalla se apague o la app pase a background. -->
+        <service
+            android:name=".calls.CallService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|camera" />
+
+        <!-- S1/D107: acción «Rechazar» de la notificación de llamada entrante -->
+        <receiver
+            android:name=".calls.CallActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
 
         <!-- S1/D105: 3ª capa de despertar — alarma que drena ntfy + /sync
              aunque el OEM mate el FGS del timbre. Se replanifica sola. -->

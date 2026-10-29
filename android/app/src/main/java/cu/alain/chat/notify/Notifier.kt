@@ -23,6 +23,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
 import cu.alain.chat.MainActivity
 import cu.alain.chat.R
+import cu.alain.chat.calls.CallActionReceiver
 import cu.alain.chat.db.AppDatabase
 import cu.alain.chat.engine.NewMsg
 import cu.alain.chat.profile.AttachmentMsg
@@ -52,9 +53,14 @@ object Notifier {
 
     const val SERVICE_CHANNEL = "service"
     private const val MESSAGES_CHANNEL = "messages"
+    const val CALLS_CHANNEL = "calls"
     private const val GROUP = "messages"
     private const val SUMMARY_ID = 1001
     private const val MAX_BUBBLES = 5
+    private const val INCOMING_CALL_ID = 2001
+
+    /** S1/D107: extra que marca el intent de la llamada entrante (FSI). */
+    const val EXTRA_INCOMING_CALL = "incoming_call"
 
     /** Acento del tema Cerlita (coral del mockup, D77). */
     private const val ACCENT = 0xFFD87884.toInt()
@@ -78,6 +84,94 @@ object Notifier {
                 NotificationManager.IMPORTANCE_MIN,
             ).apply { description = ctx.getString(R.string.channel_service_desc) },
         )
+        ensureCallsChannel(ctx)
+    }
+
+    /**
+     * S1/D107: canal de LLAMADAS (IMPORTANCE_HIGH: heads-up + sonido). Lo usa
+     * la notificación full-screen de llamada entrante.
+     */
+    private fun ensureCallsChannel(ctx: Context) {
+        if (Build.VERSION.SDK_INT < 26) return
+        val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CALLS_CHANNEL,
+                ctx.getString(R.string.channel_calls),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply {
+                description = ctx.getString(R.string.channel_calls_desc)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+            },
+        )
+    }
+
+    /**
+     * S1/D107 (§4.2-2 auditoría de llamadas): llamada ENTRANTE con pantalla
+     * apagada, bloqueada o dentro de otra app — antes la llamada «no
+     * existía» para el usuario: solo sonaba con la app visible.
+     *
+     * - fullScreenIntent: Android erva la pantalla de llamada a pantalla
+     *   completa por encima del bloqueo (permiso concedido por defecto en
+     *   apps de llamadas; en 14+ se comprueba y si no, cae a heads-up).
+     * - Acción «Rechazar» directa desde la notificación (CallActionReceiver).
+     * - La aceptación pasa por la pantalla: así se piden mic/cámara en su
+     *   sitio y el usuario ve quién llama antes de tocar nada.
+     */
+    fun showIncomingCall(ctx: Context, peerName: String, video: Boolean, roomId: String) {
+        if (!canNotify(ctx)) return
+        ensureCallsChannel(ctx)
+        val fullPi = PendingIntent.getActivity(
+            ctx, 2001,
+            Intent(ctx, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra(EXTRA_INCOMING_CALL, true)
+                putExtra(Doorbell.EXTRA_ROOM, roomId)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val declinePi = PendingIntent.getBroadcast(
+            ctx, 2002,
+            Intent(ctx, CallActionReceiver::class.java).apply {
+                action = CallActionReceiver.ACTION_DECLINE
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val canFull = if (Build.VERSION.SDK_INT >= 33)
+            ctx.getSystemService(NotificationManager::class.java)?.canUseFullScreenIntent() ?: true
+        else true
+        val n = NotificationCompat.Builder(ctx, CALLS_CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setContentTitle(peerName)
+            .setContentText(
+                if (video) ctx.getString(R.string.incoming_video_call)
+                else ctx.getString(R.string.incoming_call),
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX) // API 24-25: heads-up
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setFullScreenIntent(fullPi, canFull) // canFull=false → intent normal
+            .setContentIntent(fullPi)
+            .setOngoing(true)
+            .setColor(ACCENT)
+            .setAutoCancel(true)
+            .addAction(
+                NotificationCompat.Action.Builder(
+                    0, ctx.getString(R.string.decline_call), declinePi,
+                ).build(),
+            )
+            .build()
+        try {
+            NotificationManagerCompat.from(ctx).notify(INCOMING_CALL_ID, n)
+        } catch (_: SecurityException) {
+        }
+    }
+
+    /** La llamada se atendió/rechazó/terminó: fuera la notificación. */
+    fun cancelIncomingCall(ctx: Context) {
+        try {
+            NotificationManagerCompat.from(ctx).cancel(INCOMING_CALL_ID)
+        } catch (_: Exception) {
+        }
     }
 
     /** Canal por sala; recrearlo actualiza el nombre si la sala cambió. */

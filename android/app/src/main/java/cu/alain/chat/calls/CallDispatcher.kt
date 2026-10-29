@@ -56,6 +56,10 @@ object CallDispatcher {
     private val _state = MutableStateFlow<CallState?>(null)
     val state: StateFlow<CallState?> = _state
 
+    /** S1/D107: nivel de señal de la llamada (0 malo · 1 débil · 2 bueno). */
+    private val _signal = MutableStateFlow(2)
+    val signal: StateFlow<Int> = _signal
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var session: CallSession? = null
     private var appRef: ChatApp? = null
@@ -114,13 +118,15 @@ object CallDispatcher {
             )
         }
         audioMode(app, inCall = true, speakerOn = video) // D81: ruta de audio desde ya
+        CallService.start(app) // S1/D107: el FGS mic/cam evita que Android
+        // congele la llamada al apagar la pantalla o salir de la app
         // B6/R3: los ICE servers (STUN+TURN) se resuelven ANTES de crear la
         // sesión — la caché del login lo hace instantáneo casi siempre; si
         // hay que ir al servidor, 4 s tope y luego STUN (nunca se cancela
         // una llamada por esto).
         scope.launch {
             val ice = TurnConfig.ensure(app)
-            val s = CallSession(app, room.roomId, video, listener, ice)
+            val s = CallSession(app, room.roomId, video, listener, ice, asCallee = false)
             session = s
             s.start { sdp -> // offer listo → señalizar; los ICE esperan su turno (D81)
                 scope.launch {
@@ -185,10 +191,19 @@ object CallDispatcher {
                     )
                 }
                 ring(app)
+                // S1/D107 (§4.2-2): con la app en background/pantalla apagada la
+                // llamada «no existía» — notificación full-screen que prende la
+                // pantalla por encima del bloqueo (si el sistema lo permite).
+                if (!app.inForeground) {
+                    cu.alain.chat.notify.Notifier.showIncomingCall(
+                        app, sig.fromName, sig.video, sig.roomId,
+                    )
+                }
                 // B6/R3: resolver ICE (STUN+TURN) antes de crear la sesión
                 scope.launch {
                     val ice = TurnConfig.ensure(app)
-                    val pending = CallSession(app, sig.roomId, sig.video, listener, ice)
+                    // asCallee=true (D107): la cámara NO arranca hasta Aceptar
+                    val pending = CallSession(app, sig.roomId, sig.video, listener, ice, asCallee = true)
                     pending.prepareAsCallee(sig.sdp)
                     session = pending
                 }
@@ -234,7 +249,10 @@ object CallDispatcher {
         val roomId = cur.roomId
         cancelTimeout()
         stopRing()
+        cu.alain.chat.notify.Notifier.cancelIncomingCall(app) // FSI cumplió
         audioMode(app, inCall = true, speakerOn = cur.video)
+        CallService.start(app) // S1/D107: mic/cám vivos aunque se apague la pantalla
+        session?.startCameraIfNeeded() // D107: la cámara del receptor vive AHORA
         // D81: CONNECTING hasta que el medio conecte (el cronómetro ya no
         // arranca «de mentira» al aceptar)
         _state.value = cur.copy(phase = Phase.CONNECTING)
@@ -259,6 +277,7 @@ object CallDispatcher {
         val cur = _state.value ?: return
         val myUid = app.engine.session?.uid ?: return
         suppressUntil = System.currentTimeMillis() + 5_000
+        cu.alain.chat.notify.Notifier.cancelIncomingCall(app)
         scope.launch {
             broadcastSig(app, cur.roomId, cur.callId,
                 CallSignals.encodeBye(cur.callId, myUid, "declined"))
@@ -340,6 +359,8 @@ object CallDispatcher {
             // WebRTC murió (sin ruta de red p.ej.) → colgar todo
             appRef?.let { hangup(it) }
         }
+
+        override fun onSignal(level: Int) { _signal.value = level } // S1/D107
     }
 
     private fun bye(app: ChatApp, reason: String) {
@@ -362,6 +383,9 @@ object CallDispatcher {
         resetSignalingOrder()
         session?.close()
         session = null
+        _signal.value = 2 // S1/D107: reset para la próxima
+        cu.alain.chat.notify.Notifier.cancelIncomingCall(app)
+        CallService.stop(app) // S1/D107: fuera el FGS de la llamada
         val cur = _state.value
         _state.value = cur?.copy(phase = Phase.ENDED)
         audioMode(app, inCall = false, speakerOn = false)

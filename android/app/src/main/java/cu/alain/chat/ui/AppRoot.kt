@@ -115,6 +115,56 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
             // Llamada en curso (D75): overlay a pantalla completa ENCIMA de todo
             // (la UI sigue compuesta: la pila de navegación no se pierde)
             val callState by CallDispatcher.state.collectAsState()
+
+            // S1/D107: permisos ANTES de marcar — el FGS mic/cam de Android 14
+            // los exige concedidos y una llamada saliente sin micrófono no
+            // tiene sentido. (Las entrantes ya los pedían al aceptar.)
+            var pendingOutgoing by remember { mutableStateOf<Pair<Room, Boolean>?>(null) }
+            val outPerms = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions(),
+            ) { grants ->
+                val p = pendingOutgoing
+                pendingOutgoing = null
+                if (p != null && grants[Manifest.permission.RECORD_AUDIO] == true) {
+                    launchOutgoingCall(app, p.first, p.second)
+                }
+            }
+
+            fun beginCall(room: Room, video: Boolean) {
+                val needed = if (video) arrayOf(
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.CAMERA,
+                ) else arrayOf(Manifest.permission.RECORD_AUDIO)
+                val ok = needed.all {
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        ctx, it,
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                }
+                if (ok) launchOutgoingCall(app, room, video)
+                else {
+                    pendingOutgoing = room to video
+                    outPerms.launch(needed)
+                }
+            }
+
+            // S1/D107: la pantalla de llamada vive SOBRE el bloqueo (viene de la
+            // notificación full-screen con la pantalla apagada) y en videollamada
+            // activa la pantalla no se apaga. Al terminar, todo a su sitio.
+            // (Flags clásicos: Window.setShowWhenLocked fue REMOVIDO del SDK 37 —
+            //  los flags siguen presentes y funcionan de API 24 a 37.)
+            LaunchedEffect(callState) {
+                val w = (ctx as? android.app.Activity)?.window ?: return@LaunchedEffect
+                val on = callState != null
+                @Suppress("DEPRECATION")
+                val wake = android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                if (on) w.addFlags(wake) else w.clearFlags(wake)
+                val keep = callState?.phase == CallDispatcher.Phase.ACTIVE &&
+                    callState?.video == true
+                if (keep) w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else w.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+
             Box(Modifier.fillMaxSize()) {
 
                 // Botón ATRÁS del teléfono (v0.6.0): navega hacia atrás en vez de
@@ -238,10 +288,10 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                     is Screen.Chat -> {
                                         // llamadas (D75): solo en chats directos
                                         if (current.room.kind == cu.alain.chat.core.C.ROOM_DM) {
-                                            IconButton(onClick = { startCall(app, current.room, video = false) }) {
+                                            IconButton(onClick = { beginCall(current.room, video = false) }) {
                                                 Icon(Icons.Default.Call, "Llamada de voz")
                                             }
-                                            IconButton(onClick = { startCall(app, current.room, video = true) }) {
+                                            IconButton(onClick = { beginCall(current.room, video = true) }) {
                                                 Icon(Icons.Default.Videocam, "Videollamada")
                                             }
                                         }
@@ -435,7 +485,7 @@ fun NicknameDialog(
 }
 
 /** Arranca una llamada con el par del chat directo (nombre de su perfil). */
-private fun startCall(app: ChatApp, room: Room, video: Boolean) {
+private fun launchOutgoingCall(app: ChatApp, room: Room, video: Boolean) {
     val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
     scope.launch {
         val peerName = app.db.profileDao().get(room.peerUid ?: "")?.displayName
