@@ -369,6 +369,10 @@ interface MetaDao {
 
     @Query("DELETE FROM meta WHERE k LIKE :prefix || '%'")
     suspend fun deleteByPrefix(prefix: String)
+
+    /** J0/D111: récords E2EE de juegos («gm_<room>_<game>_r» → "score|holder"). */
+    @Query("SELECT k, v FROM meta WHERE k LIKE 'gm_%'")
+    suspend fun gameMetas(): List<MetaRow>
 }
 
 // ───────────── DAOs v3 (perfiles) ─────────────

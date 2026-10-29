@@ -17,6 +17,7 @@ import cu.alain.chat.net.DmPickup
 import cu.alain.chat.net.SyncRow
 import cu.alain.chat.profile.AttachmentMsg
 import cu.alain.chat.profile.ChatMsgs
+import cu.alain.chat.profile.GameMsg
 import cu.alain.chat.profile.Photos
 import cu.alain.chat.profile.ProfileMsg
 import cu.alain.chat.profile.ReadReceipt
@@ -145,6 +146,7 @@ class ChatEngine(
         scope.launch {
             uploadDevicePub() // D74: la pública del teléfono siempre fresca en el servidor
             recoverOrphanUploads() // D76: subidas interrumpidas → fallidas
+            loadGameRecords() // D111: récords E2EE de los juegos
             syncRoomsFromServer()
             drainPending()
         }
@@ -913,6 +915,62 @@ class ChatEngine(
         typing.value = typing.value + (roomId.lowercase() to (name to System.currentTimeMillis() + 4_000))
     }
 
+    // ────────────────── J0/D111: minijuegos de la pareja ──────────────────
+
+    /** Récord E2EE de la pareja: "roomId|gameId" → (score, quién). */
+    data class GameRecord(val score: Long, val holder: String)
+
+    private val _gameRecords = MutableStateFlow<Map<String, GameRecord>>(emptyMap())
+
+    /** Récords vivos (la burbuja del juego los lee en tiempo real). */
+    val gameRecords: StateFlow<Map<String, GameRecord>> = _gameRecords
+
+    fun gameRecord(roomId: String, gameId: String): GameRecord? =
+        _gameRecords.value["${roomId.lowercase()}|$gameId"]
+
+    /** Carga los récords del meta al arrancar (lo llama onProcessStart). */
+    private suspend fun loadGameRecords() {
+        try {
+            val rows = db.metaDao().gameMetas()
+            _gameRecords.value = rows.mapNotNull { row ->
+                val key = row.k.removePrefix("gm_").removeSuffix("_r")
+                val parts = row.v.split("|")
+                val score = parts.getOrNull(0)?.toLongOrNull() ?: return@mapNotNull null
+                key to GameRecord(score, parts.getOrElse(1) { "" })
+            }.toMap()
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Aplica un récord si es mayor; devuelve true si lo BATIÓ. */
+    private suspend fun applyGameScore(roomId: String, gameId: String, score: Long, holder: String): Boolean {
+        val key = "${roomId.lowercase()}|$gameId"
+        val cur = _gameRecords.value[key]
+        if (cur != null && score <= cur.score) return false
+        _gameRecords.value = _gameRecords.value + (key to GameRecord(score, holder))
+        db.metaDao().set(cu.alain.chat.db.MetaRow("gm_${roomId.lowercase()}_${gameId}_r", "$score|$holder"))
+        return true
+    }
+
+    /**
+     * Envía la BURBUJA de juego (mensaje visible con botón «Jugar», como el
+     * sendGame de Telegram pero E2EE: el cuerpo \u0000G viaja cifrado).
+     */
+    suspend fun sendGameBubble(roomId: String, gameId: String): Result<String> =
+        send(roomId, GameMsg.encode(gameId, 0))
+
+    /**
+     * Envía una puntuación como control E2EE invisible (kind=KIND_GAME_SCORE).
+     * Devuelve true si batió el récord de la pareja.
+     */
+    suspend fun submitScore(roomId: String, gameId: String, score: Long): Boolean {
+        val s = store.session ?: return false
+        val name = db.profileDao().get(s.uid)?.displayName ?: s.uname
+        val beaten = applyGameScore(roomId, gameId, score, name)
+        if (sendControl(roomId, GameMsg.encode(gameId, score), C.KIND_GAME_SCORE, "")) poke()
+        return beaten
+    }
+
     /**
      * Envia un ADJUNTO (v0.7.0, D76): el archivo se cifra con una fileKey
      * aleatoria propia, sube CIFRADO directo a Storage y la clave viaja E2EE
@@ -1408,6 +1466,22 @@ class ChatEngine(
                         } catch (_: Exception) {}
                         return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_REACTION, row.senderId)
                     }
+                }
+                // J0/D111: puntuación de juego → récord E2EE de la pareja
+                // (score>0 = control invisible; score=0 = burbuja «Jugar» visible)
+                if (GameMsg.isGame(body)) {
+                    val p = GameMsg.parse(body)
+                    if (p != null && p.score > 0) {
+                        if (!mine) {
+                            val holder = try {
+                                db.profileDao().get(row.senderId)?.displayName ?: row.senderUname
+                            } catch (_: Exception) { row.senderUname }
+                            try { applyGameScore(row.roomId, p.gameId, p.score, holder) } catch (_: Exception) {}
+                        }
+                        return Message(row.msgId, row.roomId, row.senderUname, mine, "", row.ts, C.ST_RECEIVED, dbSeq, C.KIND_GAME_SCORE, row.senderId)
+                    }
+                    // score=0: la invitación cae al fallback kind=0 con el body
+                    // \u0000G crudo — la burbuja lo reconoce y pinta «Jugar»
                 }
                 Message(row.msgId, row.roomId, row.senderUname, mine, body, row.ts, C.ST_RECEIVED, dbSeq, C.KIND_TEXT, row.senderId)
             }

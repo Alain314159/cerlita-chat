@@ -41,7 +41,9 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.VideogameAsset
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -86,6 +88,7 @@ import cu.alain.chat.db.Reaction
 import cu.alain.chat.db.Profile
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.profile.AttachmentMsg
+import cu.alain.chat.profile.GameMsg
 import cu.alain.chat.ui.AvatarView
 import cu.alain.chat.ui.theme.LocalChatPalette
 import cu.alain.chat.ui.attachments.AudioBubble
@@ -104,7 +107,7 @@ import kotlinx.coroutines.withContext
  * (fotos, notas de voz, archivos) + composer con grabadora. Offline-first.
  */
 @Composable
-fun ChatScreen(app: ChatApp, roomId: String) {
+fun ChatScreen(app: ChatApp, roomId: String, onOpenGame: (String) -> Unit = {}) {
 
     val ctx = LocalContext.current
     // S0'/D108 (U2): ventana del historial — el Flow SOLO emite los últimos
@@ -365,6 +368,7 @@ fun ChatScreen(app: ChatApp, roomId: String) {
                         }
                     },
                     onOpenImage = { viewerBitmap = it },
+                    onOpenGame = onOpenGame,
                     onSaveDoc = { att, file -> saveDoc = att to file; saveLauncher.launch(att.name) },
                 )
             }
@@ -568,6 +572,19 @@ fun ChatScreen(app: ChatApp, roomId: String) {
             leadingIcon = { Icon(Icons.Default.AttachFile, null) },
             onClick = { showAttachMenu = false; pickFile.launch(arrayOf("*/*")) },
         )
+        // J0/D111: minijuego de la pareja — burbuja con botón Jugar (E2EE)
+        DropdownMenuItem(
+            text = { Text("Juego 🎮 2048") },
+            leadingIcon = { Icon(Icons.Default.VideogameAsset, null) },
+            onClick = {
+                showAttachMenu = false
+                scope.launch {
+                    app.engine.sendGameBubble(roomId, GameMsg.GAME_2048)
+                        .onSuccess { WorkSync.kickOutbox(app); app.engine.poke() }
+                        .onFailure { e -> sendError = e.message }
+                }
+            },
+        )
     }
 
     // ── visor de imagen a pantalla completa ──
@@ -677,6 +694,7 @@ private fun MessageBubble(
     onDelete: (String) -> Unit,
     onReact: (String, String) -> Unit,
     onRetry: (String) -> Unit,
+    onOpenGame: (String) -> Unit,
     onOpenImage: (Bitmap) -> Unit,
     onSaveDoc: (AttachmentMsg.Parsed, java.io.File) -> Unit,
 ) {
@@ -685,6 +703,7 @@ private fun MessageBubble(
     val haptic = LocalHapticFeedback.current
     val clipboard = LocalClipboardManager.current
     val att = remember(m.msgId) { AttachmentMsg.parse(m.body) }
+    val game = remember(m.msgId) { GameMsg.parse(m.body) } // J0/D111
     var menu by remember { mutableStateOf(false) }
     val palette = LocalChatPalette.current // D77: burbujas pastel + texto oscuro en Cerlita
     val deleted = m.state == C.ST_DELETED // S2/D110: tumba de «borrado para todos»
@@ -764,6 +783,7 @@ private fun MessageBubble(
                             QuotedStrip(quoted(m.replyTo), profiles, mine, palette)
                         }
                         when {
+                            game != null -> GameBubble(app, m, game, onOpenGame) // J0/D111
                             att?.type == AttachmentMsg.TYPE_IMAGE ->
                                 ImageBubble(app, m.msgId, att, onOpenImage)
                             att?.type == AttachmentMsg.TYPE_AUDIO ->
@@ -962,7 +982,9 @@ private fun QuotedStrip(
                 fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
                 color = if (mine) palette.onSentBubble else palette.accent,
             )
-            val body = q?.let { AttachmentMsg.preview(it.body) ?: it.body } ?: "Mensaje original"
+            val body = q?.let {
+                AttachmentMsg.preview(it.body) ?: GameMsg.preview(it.body) ?: it.body
+            } ?: "Mensaje original"
             Text(
                 body.ifEmpty { "Mensaje" },
                 style = MaterialTheme.typography.bodySmall,
@@ -971,6 +993,57 @@ private fun QuotedStrip(
                 color = if (mine) palette.onSentBubble.copy(alpha = 0.8f)
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/**
+ * J0/D111: burbuja de JUEGO — el mensaje con botón «Jugar» estilo Telegram,
+ * pero E2EE y offline. El récord de la pareja (vivo, vía engine.gameRecords)
+ * se pinta debajo del título; se actualiza solo cuando alguien bate la marca.
+ */
+@Composable
+private fun GameBubble(
+    app: ChatApp,
+    m: Message,
+    game: GameMsg.Parsed,
+    onOpenGame: (String) -> Unit,
+) {
+    val records by app.engine.gameRecords.collectAsState()
+    val rec = records["${m.roomId.lowercase()}|${game.gameId}"]
+    val palette = LocalChatPalette.current
+    androidx.compose.material3.Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = palette.accent.copy(alpha = 0.14f),
+        modifier = Modifier.width(230.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(
+                "🎮 ${GameMsg.name(game.gameId)}",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                color = palette.accent,
+            )
+            Text(
+                "A ver quién llega más lejos 💗",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (rec != null && rec.score > 0) {
+                Text(
+                    "🏆 Récord de la pareja: ${rec.score} · ${rec.holder}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { onOpenGame(game.gameId) },
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Text("Jugar")
+            }
         }
     }
 }

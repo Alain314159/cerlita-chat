@@ -77,6 +77,7 @@ private sealed interface Screen {
     data class Profile(val firstRun: Boolean) : Screen
     data class RoomSettings(val roomId: String) : Screen
     data object Search : Screen // S2/D110: búsqueda global FTS
+    data class Game(val roomId: String, val gameId: String) : Screen // J0/D111
 }
 
 /**
@@ -275,6 +276,7 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                         Text(if (c.firstRun) "Tu perfil" else "Editar perfil")
                                     is Screen.RoomSettings -> Text("Ajustes de la sala")
                                     Screen.Search -> Text("Buscar")
+                                    is Screen.Game -> Text("Juego")
                                 }
                             },
                             navigationIcon = {
@@ -343,7 +345,18 @@ fun AppRoot(state: AppState, app: ChatApp, onForeground: (Boolean) -> Unit) {
                                     stack.add(Screen.Chat(room))
                                 },
                             )
-                            is Screen.Chat -> ChatScreen(app, c.room.roomId)
+                            is Screen.Chat -> ChatScreen(
+                                app = app,
+                                roomId = c.room.roomId,
+                                // J0/D111: abrir el juego sobre la pila (el atrás vuelve al chat)
+                                onOpenGame = { gameId -> stack.add(Screen.Game(c.room.roomId, gameId)) },
+                            )
+                            is Screen.Game -> cu.alain.chat.games.GameScreen(
+                                app = app,
+                                roomId = c.roomId,
+                                gameId = c.gameId,
+                                onClose = { stack.removeAt(stack.lastIndex) },
+                            )
                             is Screen.Profile -> ProfileScreen(
                                 app = app,
                                 firstRun = c.firstRun,

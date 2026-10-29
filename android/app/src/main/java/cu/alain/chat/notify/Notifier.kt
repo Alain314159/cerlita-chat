@@ -259,7 +259,9 @@ object Notifier {
                     .apply { avatar?.let { a -> setIcon(IconCompat.createWithBitmap(a)) } }
                     .build()
                 // adjuntos (D76): el sobre E2EE no se muestra — sí su resumen
-                val shown = AttachmentMsg.preview(m.body) ?: m.body
+                val shown = AttachmentMsg.preview(m.body)
+                    ?: cu.alain.chat.profile.GameMsg.preview(m.body)
+                    ?: m.body
                 style.addMessage(shown, m.ts, person)
             }
 
@@ -305,7 +307,11 @@ object Notifier {
                 .setSmallIcon(R.drawable.ic_launcher_monochrome)
                 .setStyle(style)
                 .setContentTitle(title)
-                .setContentText(AttachmentMsg.preview(roomMsgs.last().body) ?: roomMsgs.last().body)
+                .setContentText(
+                    AttachmentMsg.preview(roomMsgs.last().body)
+                        ?: cu.alain.chat.profile.GameMsg.preview(roomMsgs.last().body)
+                        ?: roomMsgs.last().body
+                )
                 .setNumber(roomMsgs.size)
                 .setWhen(roomMsgs.last().ts)
                 .setShowWhen(true)
