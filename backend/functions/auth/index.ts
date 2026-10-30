@@ -27,6 +27,26 @@
 //       el wrap guardado PARA MÍ (si existe) para que pueda intentar
 //       desenveloparlo ahora.
 //   {a:"dm_ack", r}            — el wrap de esa sala ya fue recogido.
+//
+// Multi-dispositivo (v0.19.0, D119 — Fase I del informe 1.0, brecha 3):
+//   {a:"pk", pk, …}            — AHORA registra la clave en user_keys (un
+//       conjunto de hasta 5 por usuario) en vez de reemplazar users.pub;
+//       users.pub queda como espejo de la ÚLTIMA para clientes v0.18.
+//       Devuelve kid: el id de la clave de este teléfono.
+//   {a:"search", q}            — además de la pub heredada (elemento 2),
+//       el elemento 3 trae TODAS las claves activas: [[kid, pubB64], …].
+//   {a:"dm_new", r, peer, w?, ws?, fk?}
+//       ws = [[kid, wrapB64], …]: un wrap POR clave activa del par.
+//       fk = kid de MI clave con la que envolví (para que /sync sirva
+//       la pública correcta si yo roto claves después).
+//   {a:"dm_stuck", r}          — este teléfono no puede abrir sus wraps de
+//       esa sala (teléfono nuevo): marca needs_rewrap_at y consume los
+//       wraps pendientes. El /sync del PAR lo verá (campo rr).
+//   {a:"dm_wraps", r, ws, fk?} — re-emparejamiento: yo SÍ tengo la roomKey
+//       y re-envuelvo para las claves activas del par; limpia su aviso.
+//   {a:"rooms"}                — ahora [[room_id, owner, kind, pending]]:
+//       kind 1=chat directo; pending 1=tengo wraps sin consumir (el sync
+//       los traerá: no es caso de recuperación).
 import postgres from "npm:postgres@3.4.9";
 import { argon2id } from "@noble/hashes/argon2.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -45,6 +65,8 @@ const MAX_ROOM_MEMBERS = 6;     // A, B, bot, + margen
 const MAX_DMS_PER_USER = 12;    // chats directos por usuario (D74)
 const PUB_LEN = 32;             // X25519 pública: 32 bytes exactos
 const WRAP_MAX = 256;           // blob envuelto: 50 B payload + tag + margen
+const MAX_USER_KEYS = 5;        // D119: dispositivos activos por usuario
+const MAX_WRAPS = 16;           // D119: wraps por llamada a dm_new/dm_wraps
 
 const enc = new TextEncoder();
 const DEBUG = Deno.env.get("DEBUG") === "1";
@@ -121,8 +143,9 @@ async function register(body: any) {
   const phc = `$argon2id$v=19$m=${ARGON.m},t=${ARGON.t},p=${ARGON.p}$${b64(salt)}$${b64(hash)}`;
   try {
     const [row] = await sql`insert into users (username, pass_hash, pub) values (${u}, ${phc}, ${pk}) returning id`;
+    const kid = await upsertUserKey(String(row.id), pk);
     const s = await newSession(row.id, d);
-    return json(201, { uid: row.id, u, tok: s.tok, exp: s.exp });
+    return json(201, { uid: row.id, u, tok: s.tok, exp: s.exp, kid });
   } catch (e: any) {
     if (String(e?.code) === "23505") return json(409, { e: "username_taken" });
     throw e;
@@ -136,6 +159,43 @@ function parsePub(raw: any): Uint8Array | null {
     const b = unb64(raw);
     return b.length === PUB_LEN ? b : null;
   } catch { return null; }
+}
+
+/**
+ * D119: registra (o refresca) la clave pública de este teléfono en
+ * user_keys — el CONJUNTO de dispositivos del usuario. Cap MAX_USER_KEYS:
+ * al llegar la 6ª se retira la de last_seen más viejo. users.pub queda
+ * como espejo de la última (clientes v0.18 solo ven/envuelven esa).
+ * Devuelve el kid (id de la clave) o null si pk venía mal.
+ */
+async function upsertUserKey(uid: string, pk: Uint8Array | null): Promise<string | null> {
+  if (!pk) return null;
+  const [row] = await sql`
+    insert into user_keys (user_id, pub)
+    values (${uid}::uuid, ${pk})
+    on conflict (user_id, pub) do update set last_seen = now()
+    returning key_id`;
+  if (!row) return null;
+  // cap de dispositivos: retirar la más vieja si excedemos el conjunto
+  await sql`
+    update user_keys set revoked_at = now()
+    where user_id = ${uid}::uuid and revoked_at is null
+      and key_id not in (
+        select key_id from user_keys
+        where user_id = ${uid}::uuid and revoked_at is null
+        order by last_seen desc limit ${MAX_USER_KEYS})`;
+  // espejo legado (D74) para clientes v0.18: la última escrita gana
+  await sql`update users set pub = ${pk} where id = ${uid}::uuid`;
+  return String(row.key_id);
+}
+
+/** D119: [[kid, pubB64], …] de las claves ACTIVAS del usuario. */
+async function activeKeys(uid: string): Promise<string[][]> {
+  const rows = await sql`
+    select key_id, pub from user_keys
+    where user_id = ${uid}::uuid and revoked_at is null
+    order by created_at limit ${MAX_USER_KEYS}`;
+  return rows.map((x: any) => [String(x.key_id), b64(new Uint8Array(x.pub))]);
 }
 
 // ---------- login ----------
@@ -181,11 +241,12 @@ async function login(body: any) {
   }
 
   await sql`update users set failed_logins = 0, locked_until = null where id = ${row.id}`;
-  // (re)sube la pública del teléfono (D74): best-effort, no rompe el login
-  const pk = parsePub(body?.pk);
-  if (pk) await sql`update users set pub = ${pk} where id = ${row.id}`;
+  // D119: registra la pública del teléfono en el CONJUNTO user_keys (ya no
+  // reemplaza: el teléfono viejo sigue pudiendo recibir wraps). Best-effort.
+  let kid: string | null = null;
+  try { kid = await upsertUserKey(String(row.id), parsePub(body?.pk)); } catch (_e) {}
   const s = await newSession(row.id, d);
-  return json(200, { uid: row.id, u, tok: s.tok, exp: s.exp });
+  return json(200, { uid: row.id, u, tok: s.tok, exp: s.exp, kid });
 }
 
 // ---------- logout ----------
@@ -266,19 +327,29 @@ async function roomLeave(me: any, body: any) {
 }
 
 // ---------- rooms: listar salas propias (para multi-dispositivo) ----------
-// Solo ids y flag de propietario. Sin roomKey no se descifra nada;
-// la roomKey se recupera con el código de invitación o el export cifrado.
+// Solo ids, flag de propietario, kind (D119) y pending: si tengo wraps sin
+// consumir en esa sala, el /sync los traerá — NO es caso de recuperación.
+// Sin roomKey no se descifra nada; la roomKey se recupera con el código de
+// invitación, el export cifrado o el re-emparejamiento guiado (D119).
 async function roomList(me: any) {
   const uid = String(me.uid);
   const rows = await sql`
-    select rm.room_id, (r.created_by = ${uid}::uuid) as owner
+    select rm.room_id, (r.created_by = ${uid}::uuid) as owner, r.kind,
+      exists (
+        select 1 from dm_keys k
+        where k.room_id = rm.room_id and k.for_user = ${uid}::uuid
+          and k.consumed_at is null) as pending
     from room_members rm join rooms r on r.room_id = rm.room_id
     where rm.user_id = ${uid}::uuid`;
-  return json(200, { rooms: rows.map((x: any) => [x.room_id, x.owner ? 1 : 0]) });
+  return json(200, {
+    rooms: rows.map((x: any) => [x.room_id, x.owner ? 1 : 0, Number(x.kind), x.pending ? 1 : 0]),
+  });
 }
 
-// ---------- search: buscar usuarios por @nombre (D74) ----------
+// ---------- search: buscar usuarios por @nombre (D74, D119) ----------
 // Solo prefijo sobre el username público; nunca devuelve mi propia fila.
+// Elemento 2 = pub heredada (clientes v0.18); elemento 3 = claves activas
+// [[kid, pubB64], …] para envolver una POR dispositivo (D119).
 async function userSearch(me: any, body: any) {
   let q = typeof body?.q === "string" ? body.q.trim().toLowerCase() : "";
   q = q.replace(/[^a-z0-9_]/g, ""); // el username solo tiene estos caracteres
@@ -287,30 +358,59 @@ async function userSearch(me: any, body: any) {
     select id, username, pub from users
     where username like ${q + "%"} and id <> ${me.uid}::uuid
     order by username limit 10`;
-  return json(200, { r: rows.map((x: any) => [x.id, x.username, x.pub ? b64(new Uint8Array(x.pub)) : null]) });
+  const out: any[][] = [];
+  for (const x of rows) {
+    const keys = await activeKeys(String(x.id));
+    out.push([x.id, x.username, x.pub ? b64(new Uint8Array(x.pub)) : null, keys]);
+  }
+  return json(200, { r: out });
 }
 
-// ---------- pk: (re)subir mi clave pública X25519 (D74) ----------
+// ---------- pk: registrar la pública X25519 de este teléfono (D74/D119) ----------
 async function uploadPub(me: any, body: any) {
   const pk = parsePub(body?.pk);
   if (!pk) return json(400, { e: "bad_pk" });
-  await sql`update users set pub = ${pk} where id = ${me.uid}::uuid`;
-  return json(200, { ok: true });
+  const kid = await upsertUserKey(String(me.uid), pk);
+  return json(200, { ok: true, kid });
 }
 
-// ---------- dm_new: crear el chat directo de la pareja (D74, idempotente) ----------
+// ---------- dm_new: crear el chat directo de la pareja (D74+D119, idempotente) ----------
 // r = roomId derivado por el CLIENTE de la roomKey nueva (HKDF, igual que
-// room_new). w = roomKey+salt ENVUELTOS para el par (X25519(privA, pubB) →
-// HKDF → ChaCha20-Poly1305) — el servidor ve un blob opaco de ≤256 B.
+// room_new). Wraps para el par (X25519(privA, pubB_k) → HKDF → ChaCha20-
+// Poly1305) — el servidor ve blobs opacos de ≤256 B:
+//   w  = wrap legado (D74): hecho para users.pub del par (clientes v0.18).
+//   ws = [[kid, wrapB64], …]: un wrap POR clave activa del par (D119).
+//   fk = kid de MI clave con la que envolví (el /sync sirve ESA pública).
 // dm_pair = least(a, b): índice UNIQUE → una sola conversación por pareja.
 async function dmNew(me: any, body: any) {
   const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
   const peer = typeof body?.peer === "string" ? body.peer.trim().toLowerCase() : "";
-  const wrapB64 = typeof body?.w === "string" ? body.w : "";
   if (!UUID_RE.test(r) || !USERNAME_RE.test(peer)) return json(400, { e: "bad_request" });
-  let wrapped: Uint8Array;
-  try { wrapped = unb64(wrapB64); } catch { return json(400, { e: "bad_wrap" }); }
-  if (wrapped.length < 16 || wrapped.length > WRAP_MAX) return json(400, { e: "bad_wrap" });
+
+  // valida el wrap legado w (opcional ahora)
+  let legacyWrap: Uint8Array | null = null;
+  if (typeof body?.w === "string" && body.w.length > 0) {
+    try {
+      const b = unb64(body.w);
+      if (b.length >= 16 && b.length <= WRAP_MAX) legacyWrap = b;
+    } catch { legacyWrap = null; }
+    if (!legacyWrap) return json(400, { e: "bad_wrap" });
+  }
+  // valida ws: [[kid, wrapB64], …] — cada kid debe ser clave ACTIVA del par
+  const wsRaw: [string, string][] = [];
+  if (body?.ws != null) {
+    if (!Array.isArray(body.ws) || body.ws.length > MAX_WRAPS) return json(400, { e: "bad_wrap" });
+    for (const e of body.ws) {
+      if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "string" || typeof e[1] !== "string") {
+        return json(400, { e: "bad_wrap" });
+      }
+      let b: Uint8Array;
+      try { b = unb64(e[1]); } catch { return json(400, { e: "bad_wrap" }); }
+      if (b.length < 16 || b.length > WRAP_MAX) return json(400, { e: "bad_wrap" });
+      wsRaw.push([e[0], e[1]]);
+    }
+  }
+  if (!legacyWrap && wsRaw.length === 0) return json(400, { e: "bad_wrap" });
 
   const uid = String(me.uid);
   const [peerRow] = await sql`select id, pub from users where username = ${peer} limit 1`;
@@ -318,19 +418,54 @@ async function dmNew(me: any, body: any) {
   if (String(peerRow.id) === uid) return json(400, { e: "self_dm" });
   if (!peerRow.pub) return json(409, { e: "peer_no_key" }); // aún no actualiza la app
 
+  // fk: MI clave con la que envolví (validada como mía y activa)
+  const fk = typeof body?.fk === "string" && UUID_RE.test(body.fk) ? body.fk : null;
+  let fromKey: string | null = null;
+  if (fk) {
+    const [mk] = await sql`
+      select key_id from user_keys
+      where key_id = ${fk}::uuid and user_id = ${uid}::uuid and revoked_at is null
+      limit 1`;
+    fromKey = mk ? String(mk.key_id) : null;
+  }
+
+  // D119: valida TODOS los kids ANTES de crear nada — un kid ajeno no debe
+  // dejar salas huérfanas por el camino (lección del propio e2e).
+  if (wsRaw.length > 0) {
+    const peerKeys = await sql`
+      select key_id from user_keys
+      where user_id = ${peerRow.id}::uuid and revoked_at is null`;
+    const valid = new Set(peerKeys.map((x: any) => String(x.key_id)));
+    for (const [kid] of wsRaw) {
+      if (!UUID_RE.test(kid) || !valid.has(kid)) return json(400, { e: "bad_wrap" });
+    }
+  }
+
   // ¿ya existe el chat de la pareja? → idempotente
   const [existing] = await sql`
     select room_id, (created_by = ${uid}::uuid) as mine from rooms
     where dm_pair = least(${uid}::uuid, ${peerRow.id}::uuid) limit 1`;
   if (existing) {
-    // wrap guardado PARA MÍ (creado por el par): lo devuelvo para intentar
-    // desenveloparlo YA (si mi keypair no cambió, recupero el acceso aquí).
-    const [myWrap] = await sql`
-      select wrapped from dm_keys
-      where room_id = ${existing.room_id}::uuid and for_user = ${uid}::uuid
-        and from_user = ${peerRow.id}::uuid limit 1`;
+    // wraps guardados PARA MÍ (creados por el par): se devuelven TODOS con
+    // la pública que los hizo — el cliente intenta desenvelopar cada uno.
+    const myWraps = await sql`
+      select k.wrapped as w, k.for_key as fkid,
+             coalesce(fk.pub, fu.pub) as fpub
+      from dm_keys k
+      join users fu on fu.id = k.from_user
+      left join user_keys fk on fk.key_id = k.from_key
+      where k.room_id = ${existing.room_id}::uuid and k.for_user = ${uid}::uuid
+        and k.consumed_at is null
+      order by k.id limit ${MAX_WRAPS}`;
+    const ws = myWraps.map((x: any) => [
+      b64(new Uint8Array(x.fpub)),
+      b64(new Uint8Array(x.w)),
+    ]);
     const payload: Record<string, unknown> = { ok: true, room: existing.room_id, exists: 1 };
-    if (myWrap) payload.w = b64(new Uint8Array(myWrap.wrapped));
+    if (ws.length > 0) {
+      payload.ws = ws;
+      payload.w = ws[0][1]; // legado: el primero
+    }
     return json(200, payload);
   }
 
@@ -352,12 +487,28 @@ async function dmNew(me: any, body: any) {
   await sql`
     insert into room_members (room_id, user_id) values (${r}::uuid, ${uid}::uuid), (${r}::uuid, ${peerRow.id}::uuid)
     on conflict do nothing`;
-  // wrap para el par (idempotente: reintento con otro roomId no puede pasar
-  // porque dm_pair ya existiría → llegamos arriba; aquí solo reintentos de red)
-  await sql`
-    insert into dm_keys (room_id, for_user, from_user, wrapped)
-    values (${r}::uuid, ${peerRow.id}::uuid, ${uid}::uuid, ${wrapped})
-    on conflict (room_id, for_user) do update set wrapped = excluded.wrapped, consumed_at = null`;
+
+  // wrap legado w: para_key = la clave del par que coincide con users.pub
+  // (la que ve un cliente v0.18); si no coincide, fila legado sin kid.
+  if (legacyWrap) {
+    await sql`
+      insert into dm_keys (room_id, for_user, from_user, wrapped, for_key, from_key)
+      values (${r}::uuid, ${peerRow.id}::uuid, ${uid}::uuid, ${legacyWrap},
+              (select key_id from user_keys
+                where user_id = ${peerRow.id}::uuid and pub = ${peerRow.pub}
+                  and revoked_at is null limit 1),
+              ${fromKey}::uuid)
+      on conflict (room_id, for_user, for_key) do update
+        set wrapped = excluded.wrapped, consumed_at = null`;
+  }
+  // wraps multi-dispositivo: uno POR clave activa del par (D119)
+  for (const [kid, wrapB64] of wsRaw) {
+    await sql`
+      insert into dm_keys (room_id, for_user, from_user, wrapped, for_key, from_key)
+      values (${r}::uuid, ${peerRow.id}::uuid, ${uid}::uuid, ${unb64(wrapB64)}, ${kid}::uuid, ${fromKey}::uuid)
+      on conflict (room_id, for_user, for_key) do update
+        set wrapped = excluded.wrapped, consumed_at = null`;
+  }
 
   // despertar al par si está en línea (topic personal, hallazgo 10: sin prefijo)
   try {
@@ -375,6 +526,87 @@ async function dmNew(me: any, body: any) {
   } catch (_e) { /* best-effort: el sync periódico lo trae igual */ }
 
   return json(201, { ok: true, room: r, exists: 0 });
+}
+
+// ---------- dm_stuck: este teléfono no puede abrir sus wraps (D119) ----------
+// Marca needs_rewrap_at en MI membresía de la sala (aviso que el /sync del
+// par devuelve como rr) y consume mis wraps pendientes (dejan de servirse:
+// ya sabemos que no abren). Idempotente.
+async function dmStuck(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_request" });
+  await sql`
+    update room_members set needs_rewrap_at = now()
+    where room_id = ${r}::uuid and user_id = ${me.uid}::uuid`;
+  await sql`
+    update dm_keys set consumed_at = now()
+    where room_id = ${r}::uuid and for_user = ${me.uid}::uuid and consumed_at is null`;
+  return json(200, { ok: true });
+}
+
+// ---------- dm_wraps: re-emparejamiento — yo re-envuelvo para el par (D119) ----------
+// La respuesta al aviso: tengo la roomKey de la sala y envuelvo para las
+// claves ACTIVAS del otro miembro. Capabilidad = ser miembro; los wraps son
+// opacos (sin la roomKey no se puede fabricar uno útil). Limpia el aviso.
+async function dmWraps(me: any, body: any) {
+  const r = typeof body?.r === "string" ? body.r.trim().toLowerCase() : "";
+  if (!UUID_RE.test(r)) return json(400, { e: "bad_request" });
+  const wsRaw: [string, string][] = [];
+  if (!Array.isArray(body?.ws) || body.ws.length === 0 || body.ws.length > MAX_WRAPS) {
+    return json(400, { e: "bad_wrap" });
+  }
+  for (const e of body.ws) {
+    if (!Array.isArray(e) || e.length !== 2 || typeof e[0] !== "string" || typeof e[1] !== "string") {
+      return json(400, { e: "bad_wrap" });
+    }
+    let b: Uint8Array;
+    try { b = unb64(e[1]); } catch { return json(400, { e: "bad_wrap" }); }
+    if (b.length < 16 || b.length > WRAP_MAX) return json(400, { e: "bad_wrap" });
+    wsRaw.push([e[0], e[1]]);
+  }
+  const uid = String(me.uid);
+  // debo ser miembro de la sala
+  const [memb] = await sql`
+    select 1 as ok from room_members
+    where room_id = ${r}::uuid and user_id = ${uid}::uuid limit 1`;
+  if (!memb) return json(403, { e: "not_member" });
+
+  const fk = typeof body?.fk === "string" && UUID_RE.test(body.fk) ? body.fk : null;
+  let fromKey: string | null = null;
+  if (fk) {
+    const [mk] = await sql`
+      select key_id from user_keys
+      where key_id = ${fk}::uuid and user_id = ${uid}::uuid and revoked_at is null
+      limit 1`;
+    fromKey = mk ? String(mk.key_id) : null;
+  }
+
+  // valida TODOS los kids ANTES de insertar nada: deben ser claves activas
+  // de OTROS miembros de la sala (el par del DM)
+  const othersKeys = await sql`
+    select uk.key_id from user_keys uk
+    join room_members rm on rm.room_id = ${r}::uuid and rm.user_id = uk.user_id
+    where uk.revoked_at is null and rm.user_id <> ${uid}::uuid`;
+  const valid = new Set(othersKeys.map((x: any) => String(x.key_id)));
+  for (const [kid] of wsRaw) {
+    if (!UUID_RE.test(kid) || !valid.has(kid)) return json(400, { e: "bad_wrap" });
+  }
+
+  for (const [kid, wrapB64] of wsRaw) {
+    await sql`
+      insert into dm_keys (room_id, for_user, from_user, wrapped, for_key, from_key)
+      values (${r}::uuid,
+              (select user_id from user_keys where key_id = ${kid}::uuid),
+              ${uid}::uuid, ${unb64(wrapB64)}, ${kid}::uuid, ${fromKey}::uuid)
+      on conflict (room_id, for_user, for_key) do update
+        set wrapped = excluded.wrapped, consumed_at = null`;
+  }
+
+  // el aviso del par queda respondido
+  await sql`
+    update room_members set needs_rewrap_at = null
+    where room_id = ${r}::uuid and user_id <> ${uid}::uuid`;
+  return json(200, { ok: true });
 }
 
 // ---------- dm_ack: el wrap ya fue recogido y procesado (D74) ----------
@@ -415,6 +647,8 @@ Deno.serve(async (req) => {
     if (body.a === "pk") return await uploadPub(me, body);
     if (body.a === "dm_new") return await dmNew(me, body);
     if (body.a === "dm_ack") return await dmAck(me, body);
+    if (body.a === "dm_stuck") return await dmStuck(me, body); // D119
+    if (body.a === "dm_wraps") return await dmWraps(me, body); // D119
     return json(400, { e: "bad_action" });
   } catch (e) {
     console.error("auth error:", e);

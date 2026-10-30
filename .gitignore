@@ -14,6 +14,8 @@ keystore.properties
 **/keystore.properties
 ghp_*
 sbp_*
+secrets/
+**/secrets/
 
 # ============================================================
 # Backend — artefactos de build (el código fuente SÍ se commitea)

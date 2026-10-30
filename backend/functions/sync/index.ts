@@ -9,9 +9,16 @@
 //   bajaron → el cliente marca sus mensajes ✓✓ «entregado». Si no hay mensajes
 //   nuevos PERO sí entregas nuevas, se responde 200 con m: [].
 //   dm (v0.7.0, D74): wraps pendientes de chats directos — la roomKey ENVUELTA
-//   (X25519+HKDF+ChaCha, opaca aquí) + la pública del creador. Se sirve hasta
-//   que el cliente acusa (auth/dm_ack).
-// 204 si no hay nada nuevo NI entregas NI wraps (0 bytes de cuerpo)
+//   (X25519+HKDF+ChaCha, opaca aquí) + la pública que la hizo. Se sirve hasta
+//   que el cliente acusa (auth/dm_ack). D119: puede haber VARIOS por sala (uno
+//   por dispositivo del receptor); la pública servida es la de from_key (la
+//   clave CON la que el creador envolvió), no la actual del creador — si el
+//   creador rotó claves, el unwrap no debe morir por eso.
+//   rr (v0.19.0, D119): pedidos de re-emparejamiento — chats directos donde el
+//   OTRO miembro marcó que no puede abrir sus wraps (teléfono nuevo). Cada
+//   entrada trae las claves ACTIVAS de quien lo pide: [[roomId, peerUid,
+//   [[kid, pubB64], …]], …] para re-envolver SIN otra ida al servidor.
+// 204 si no hay nada nuevo NI entregas NI wraps NI pedidos (0 bytes de cuerpo)
 // gzip cuando el cuerpo supera 1 KB (OkHttp lo descomprime solo)
 // Membresía: solo mensajes de las rooms donde el usuario es miembro.
 //
@@ -149,12 +156,29 @@ Deno.serve(async (req) => {
       ),
       dmk as (
         select k.room_id as rid, k.from_user as fuid, fu.username as funame,
-               fu.pub as fpub, k.wrapped as w
-        from dm_keys k join users fu on fu.id = k.from_user
+               coalesce(fk.pub, fu.pub) as fpub, k.wrapped as w
+        from dm_keys k
+        join users fu on fu.id = k.from_user
+        left join user_keys fk on fk.key_id = k.from_key
         where k.for_user = (select uid from sess)
           and k.consumed_at is null
           and ${room}::uuid is null
-        order by k.id limit 20
+        order by k.id limit 64
+      ),
+      rrw as (
+        select distinct rm.room_id as rid, rm2.user_id as peer
+        from room_members rm
+        join room_members rm2
+          on rm2.room_id = rm.room_id and rm2.user_id <> rm.user_id
+          and rm2.needs_rewrap_at is not null
+        join rooms r on r.room_id = rm.room_id and r.kind = 1
+        where rm.user_id = (select uid from sess)
+          and ${room}::uuid is null
+      ),
+      rrk as (
+        select rr.rid as rid, uk.user_id as peer, uk.key_id as kid, uk.pub as kpub
+        from rrw rr
+        join user_keys uk on uk.user_id = rr.peer and uk.revoked_at is null
       )
       select (select uid from sess) as uid,
              (select count(*) from memb) as memb,
@@ -163,7 +187,11 @@ Deno.serve(async (req) => {
              (select coalesce(json_agg(json_build_array(rid, mx)), '[]'::json)
                 from rd) as rds,
              (select coalesce(json_agg(json_build_array(rid, fuid, funame, translate(encode(fpub, 'base64'), chr(10), ''), translate(encode(w, 'base64'), chr(10), ''))), '[]'::json)
-                from dmk) as dms`;
+                from dmk) as dms,
+             (select coalesce(json_agg(json_build_array(rid, peer)), '[]'::json)
+                from rrw) as rrs,
+             (select coalesce(json_agg(json_build_array(rid, peer, kid, translate(encode(kpub, 'base64'), chr(10), ''))), '[]'::json)
+                from rrk) as rrks`;
 
     if (!row || row.uid == null) return json(401, { e: "unauthorized" });
 
@@ -171,15 +199,27 @@ Deno.serve(async (req) => {
     const rd: any[][] = (row.rds ?? []).map((x: any[]) => [x[0], Number(x[1])]);
     const dm: any[][] = row.dms ?? [];
 
+    // D119: agrupa los pedidos de re-emparejamiento con las claves de quien pide
+    const rrMap = new Map<string, any[]>();
+    for (const k of (row.rrks ?? []) as any[][]) {
+      const rid = String(k[0]);
+      if (!rrMap.has(rid)) rrMap.set(rid, [rid, String(k[1]), [] as any[][]]);
+      (rrMap.get(rid)[2] as any[][]).push([String(k[2]), k[3]]);
+    }
+    const rr: any[][] = [...rrMap.values()];
+
     // modo sala: no miembro → 403 (membresía verificada en la misma query)
     if (room && Number(row.memb) === 0) return json(403, { e: "not_member" });
 
     if (msgs.length === 0) {
       if (room) return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
-      if (rd.length === 0 && dm.length === 0) {
+      if (rd.length === 0 && dm.length === 0 && rr.length === 0) {
         return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
       }
-      const empty = enc.encode(JSON.stringify({ n: since, m: [], ...(rd.length ? { rd } : {}), ...(dm.length ? { dm } : {}) }));
+      const empty = enc.encode(JSON.stringify({
+        n: since, m: [],
+        ...(rd.length ? { rd } : {}), ...(dm.length ? { dm } : {}), ...(rr.length ? { rr } : {}),
+      }));
       return new Response(empty as BodyInit, {
         status: 200,
         headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -190,6 +230,7 @@ Deno.serve(async (req) => {
     const payload: Record<string, unknown> = { n: nextSeq, m: msgs };
     if (!room && rd.length > 0) payload.rd = rd;   // modo sala: como siempre, sin rd
     if (!room && dm.length > 0) payload.dm = dm;
+    if (!room && rr.length > 0) payload.rr = rr;  // D119: re-emparejamiento
     const body = enc.encode(JSON.stringify(payload));
     const headers: Record<string, string> = {
       "content-type": "application/json",
