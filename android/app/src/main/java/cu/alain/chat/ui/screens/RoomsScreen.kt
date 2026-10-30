@@ -2,6 +2,7 @@ package cu.alain.chat.ui.screens
 
 import android.app.Application
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +50,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -185,50 +187,74 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
 
     val busy = vm.busy.value
 
+    // ── D119 (Fase I): aviso de re-emparejamiento + recordatorio de export ──
+    val recovery by app.engine.dmRecovery.collectAsState()
+    var exportDue by remember { mutableStateOf(false) }
+    var showQuickExport by remember { mutableStateOf(false) }
+    LaunchedEffect(recovery.needed) {
+        // el recordatorio se evalúa cuando cambia la lista (barato) y solo
+        // se anota al mostrarse: máximo 1 recordatorio por semana
+        if (!exportDue) {
+            exportDue = app.engine.exportReminderDue()
+            if (exportDue) app.engine.noteExportReminderShown()
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
-        if (items.isEmpty()) {
-            Column(
-                Modifier.fillMaxSize().padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    "Aún no tienes conversaciones",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Crea una sala y comparte el código de invitación\ncon la otra persona (en persona o por WhatsApp)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        Column(Modifier.fillMaxSize()) {
+            if (recovery.needed.isNotEmpty()) {
+                DmRecoveryBanner(
+                    waiting = recovery.waiting.isNotEmpty(),
+                    onRecover = { app.engine.requestDmRecovery() },
                 )
             }
-        } else {
-            LazyColumn(Modifier.fillMaxSize()) {
-                items(items, key = { it.roomId }) { item ->
-                    // keysVersion: leerlo aquí registra la dependencia → el candado
-                    // de la sala se refresca al cambiar el vault (join/restore/logout)
-                    val hasKey = keysVersion.let { app.engine.hasKey(item.roomId) }
-                    val room = Room(
-                        roomId = item.roomId, name = item.name, owner = item.owner,
-                        sas = item.sas, createdAt = item.createdAt,
-                        unread = item.unread, photo = item.roomPhoto,
-                        kind = item.kind, peerUid = item.peerUid,
+            if (exportDue) {
+                ExportReminderBanner(onExport = { showQuickExport = true })
+            }
+            if (items.isEmpty()) {
+                Column(
+                    Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        "Aún no tienes conversaciones",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    RoomRow(
-                        item = item, hasKey = hasKey,
-                        nickname = item.peerUid?.let { nicknames[it.lowercase()] },
-                        onClick = {
-                            if (hasKey) onOpenRoom(room)
-                            else { lockedRoom = room; restoreCode = ""; restoreError = null }
-                        },
-                        onMarkRead = { scope.launch { app.db.roomDao().resetUnread(item.roomId) } },
-                        onClear = { clearRoom = item },
-                        onDelete = { deleteRoom = item; deleteError = null },
-                        onRename = { renameItem = item },
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Crea una sala y comparte el código de invitación\ncon la otra persona (en persona o por WhatsApp)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     )
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize()) {
+                    items(items, key = { it.roomId }) { item ->
+                        // keysVersion: leerlo aquí registra la dependencia → el candado
+                        // de la sala se refresca al cambiar el vault (join/restore/logout)
+                        val hasKey = keysVersion.let { app.engine.hasKey(item.roomId) }
+                        val room = Room(
+                            roomId = item.roomId, name = item.name, owner = item.owner,
+                            sas = item.sas, createdAt = item.createdAt,
+                            unread = item.unread, photo = item.roomPhoto,
+                            kind = item.kind, peerUid = item.peerUid,
+                        )
+                        RoomRow(
+                            item = item, hasKey = hasKey,
+                            nickname = item.peerUid?.let { nicknames[it.lowercase()] },
+                            onClick = {
+                                if (hasKey) onOpenRoom(room)
+                                else { lockedRoom = room; restoreCode = ""; restoreError = null }
+                            },
+                            onMarkRead = { scope.launch { app.db.roomDao().resetUnread(item.roomId) } },
+                            onClear = { clearRoom = item },
+                            onDelete = { deleteRoom = item; deleteError = null },
+                            onRename = { renameItem = item },
+                        )
+                    }
                 }
             }
         }
@@ -242,6 +268,74 @@ fun RoomsScreen(app: ChatApp, onOpenRoom: (Room) -> Unit) {
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
         ) { Icon(Icons.Default.Add, "Nuevo chat") }
+    }
+
+    // ── D119: export rápido desde el recordatorio (un toque) ──
+    if (showQuickExport) {
+        var qePass by remember { mutableStateOf("") }
+        var qeBusy by remember { mutableStateOf(false) }
+        var qeErr by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { if (!qeBusy) showQuickExport = false },
+            title = { Text("Frase del export") },
+            text = {
+                Column {
+                    Text(
+                        "Elige una frase para cifrar el archivo (no uses la de tu cuenta). " +
+                            "Incluye historial y claves de salas: quien tenga el archivo Y la frase " +
+                            "lee todo. Guárdala aparte.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        modifier = Modifier.fillMaxWidth(), value = qePass,
+                        onValueChange = { qePass = it },
+                        label = { Text("Frase") },
+                        visualTransformation = PasswordVisualTransformation(),
+                        singleLine = true,
+                    )
+                    qeErr?.let {
+                        Spacer(Modifier.height(6.dp))
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = qePass.length >= 8 && !qeBusy,
+                    onClick = {
+                        qeBusy = true; qeErr = null
+                        scope.launch {
+                            val uri = try {
+                                cu.alain.chat.export.HistoryExport.export(
+                                    ctx, app.db, app.store,
+                                    app.engine.session?.uname ?: "?",
+                                    qePass.toCharArray(),
+                                )
+                            } catch (_: Exception) { null }
+                            qeBusy = false
+                            if (uri != null) {
+                                app.engine.noteExportDone() // D119: contador mensual a cero
+                                exportDue = false
+                                showQuickExport = false
+                                try {
+                                    ctx.startActivity(cu.alain.chat.export.HistoryExport.shareIntent(ctx, uri))
+                                } catch (_: Exception) {}
+                            } else {
+                                qeErr = "No hay mensajes o falló el export"
+                            }
+                        }
+                    },
+                ) {
+                    if (qeBusy) {
+                        CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Exportar")
+                }
+            },
+            dismissButton = { TextButton({ showQuickExport = false }) { Text("Cancelar") } },
+        )
     }
 
     // ── diálogo nuevo chat: directo / grupo / unirme (v0.7.0) ──
@@ -800,6 +894,68 @@ private fun RoomRow(
                 },
                 onClick = { menu = false; onDelete() },
             )
+        }
+    }
+}
+
+// ─────────────────── banners de la Fase I (D119) ───────────────────
+
+/** Aviso de re-emparejamiento: este teléfono no puede abrir chats directos
+ *  (cambiaste de teléfono / reinstalaste). Un toque pide al par que los
+ *  asegure de nuevo; el chat vuelve solo en cuanto el par abra la app. */
+@Composable
+fun DmRecoveryBanner(waiting: Boolean, onRecover: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Lock, null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Recupera tus chats directos",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    if (waiting) "Pedido enviado. En cuanto la otra persona abra la app, tus chats vuelven solos."
+                    else "Cambiaste de teléfono o reinstalaste: este teléfono no tiene la clave de esos chats. Toca para pedirla de nuevo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+            }
+            if (!waiting) {
+                TextButton(onClick = onRecover) { Text("Recuperar") }
+            }
+        }
+    }
+}
+
+/** Recordatorio mensual del respaldo cifrado (Fase I): un toque para exportar. */
+@Composable
+fun ExportReminderBanner(onExport: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Tu respaldo cifrado tiene más de un mes",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "Si pierdes el teléfono, el export es lo único que recupera el historial. Exportar cuesta un minuto.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onExport) { Text("Exportar") }
         }
     }
 }

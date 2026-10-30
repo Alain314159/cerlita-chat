@@ -14,6 +14,7 @@ import cu.alain.chat.db.Room
 import cu.alain.chat.db.RoomPeer
 import cu.alain.chat.net.ApiException
 import cu.alain.chat.net.DmPickup
+import cu.alain.chat.net.RewrapReq
 import cu.alain.chat.net.SyncRow
 import cu.alain.chat.profile.AttachmentMsg
 import cu.alain.chat.profile.ChatMsgs
@@ -49,6 +50,14 @@ data class RoomJoined(
     val room: Room,
     val inviteCode: String,   // solo al CREAR; "" al unirse (B ya lo tiene)
     val sas: String,
+)
+
+/** D119 (Fase I): estado del aviso de re-emparejamiento. needed = chats
+ *  directos que este teléfono no puede abrir (sin clave y sin wraps
+ *  pendientes); waiting = ya se pidió al par que re-envuelva (dm_stuck ok). */
+data class DmRecovery(
+    val needed: List<String> = emptyList(),
+    val waiting: Set<String> = emptySet(),
 )
 
 /**
@@ -106,6 +115,11 @@ class ChatEngine(
      *  claro en vez de dejar al usuario mirando una app muerta. */
     val sessionExpiredHint = MutableStateFlow(false)
 
+    /** D119: aviso de re-emparejamiento (Fase I) — la UI lo observa para el
+     *  banner «Recupera tus chats directos». */
+    private val _dmRecovery = MutableStateFlow(DmRecovery())
+    val dmRecovery: StateFlow<DmRecovery> = _dmRecovery
+
     private var pollJob: Job? = null
     private var pollInterval = C.POLL_ACTIVE_MS
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -152,12 +166,13 @@ class ChatEngine(
         }
     }
 
-    /** (Re)sube la pública X25519 de este teléfono (D74). Best-effort. */
+    /** (Re)sube la pública X25519 de este teléfono (D74) y guarda el kid que
+     *  le asigna el servidor en el conjunto user_keys (D119). Best-effort. */
     private suspend fun uploadDevicePub() {
         val s = store.session ?: return
         try {
             val (kp, _) = store.ensureDeviceKeyPair()
-            api.uploadPub(s.token, kp.pubB64)
+            api.uploadPub(s.token, kp.pubB64)?.let { store.setDeviceKeyId(it) }
         } catch (_: Exception) {
         }
     }
@@ -249,6 +264,8 @@ class ChatEngine(
      * Fusiona la lista de salas del servidor (multi-dispositivo). Las salas nuevas
      * aparecen con candado: sin roomKey no se descifra nada — el código de
      * invitación se vuelve a introducir para recuperar el acceso (E2EE).
+     * D119 (Fase I): los CHATS DIRECTOS sin clave y sin wraps pendientes
+     * alimentan el aviso de re-emparejamiento ([dmRecovery]).
      */
     suspend fun syncRoomsFromServer() {
         val s = store.session ?: return
@@ -262,9 +279,16 @@ class ChatEngine(
                     owner = it.owner,
                     sas = "",
                     createdAt = System.currentTimeMillis(),
+                    kind = it.kind, // D119: los DM aparecen como tales (aviso de recuperación)
                 )
             }
             if (missing.isNotEmpty()) db.roomDao().addMissing(missing)
+            // D119: DM sin clave local y sin wraps en camino → aviso
+            val need = server.filter { it.kind == C.ROOM_DM && !it.pending }
+                .map { it.roomId.lowercase() }
+                .filter { !hasKey(it) }
+            val cur = _dmRecovery.value
+            _dmRecovery.value = DmRecovery(need, cur.waiting.intersect(need.toSet()))
         } catch (_: Exception) {
             // sin red / sesión caída: las salas locales mandan, se reintenta al abrir
         }
@@ -372,11 +396,13 @@ class ChatEngine(
     /**
      * Crea el chat directo con @peer (o devuelve el que ya existe para la
      * pareja). La roomKey viaja al servidor ENVUELTA para el par
-     * (X25519+HKDF+ChaCha — [DmCrypto]); el servidor solo ve un blob opaco.
+     * (X25519+HKDF+ChaCha — [DmCrypto]); el servidor solo ve blobs opacos.
+     * D119: un wrap POR clave activa del par (cada dispositivo suyo).
      *
      * Result.success(Room) → la sala lista para abrir. Si la pareja ya tenía
-     * chat y ESTE teléfono no tiene la clave (keypair rotada), se devuelve
-     * failure con mensaje claro: recuperación por código de invitación.
+     * chat y ESTE teléfono no tiene la clave, se pide el re-emparejamiento
+     * (dm_stuck) y se devuelve failure con mensaje claro: en cuanto el par
+     * abra la app, el chat vuelve solo (aviso [dmRecovery]).
      */
     suspend fun createDm(peerUname: String): Result<Room> {
         val s = store.session ?: return Result.failure(IllegalStateException("sin sesión"))
@@ -385,7 +411,7 @@ class ChatEngine(
             return Result.failure(IllegalArgumentException("Nombre de usuario inválido"))
         }
         return try {
-            // 1. buscar al par (necesitamos su uid + pública)
+            // 1. buscar al par (necesitamos su uid + claves activas)
             val found = api.searchUsers(s.token, peer)
                 .firstOrNull { it.uname == peer }
                 ?: return Result.failure(ApiException(404, "no_user"))
@@ -398,31 +424,53 @@ class ChatEngine(
             val roomId = Crypto.roomId(roomKey, roomSalt)
             val sas = Crypto.sas6(roomKey, roomSalt)
 
-            // 3. envolver la clave para el par y pedir el chat al servidor
+            // 3. envolver la clave para CADA dispositivo activo del par (D119)
             val (myKp, _) = store.ensureDeviceKeyPair()
             val myPriv = Base64.decode(myKp.privB64, Base64.NO_WRAP)
-            val wrapped = DmCrypto.wrap(
-                myPriv, Base64.decode(peerPub, Base64.NO_WRAP),
-                roomId, found.uid, roomKey, roomSalt,
+            val peerPubBytes = Base64.decode(peerPub, Base64.NO_WRAP)
+            val legacyWrap = Base64.encodeToString(
+                DmCrypto.wrap(myPriv, peerPubBytes, roomId, found.uid, roomKey, roomSalt),
+                Base64.NO_WRAP,
             )
-            val resp = api.dmNew(s.token, roomId, peer, Base64.encodeToString(wrapped, Base64.NO_WRAP))
+            // dedup por pública (por si el espejo legado repite la última)
+            val seenPub = mutableSetOf<String>()
+            val wraps = found.keys.filter { (_, pub) -> seenPub.add(pub) }.map { (kid, pub) ->
+                kid to Base64.encodeToString(
+                    DmCrypto.wrap(myPriv, Base64.decode(pub, Base64.NO_WRAP), roomId, found.uid, roomKey, roomSalt),
+                    Base64.NO_WRAP,
+                )
+            }
+            val resp = api.dmNew(s.token, roomId, peer, legacyWrap, wraps, myKp.kid)
             Crypto.zero(myPriv)
 
-            // 4a. la pareja ya tenía chat → recuperar la clave del wrap que
-            //     dejó el par para mí (si mi keypair no cambió)
+            // 4a. la pareja ya tenía chat → intentar TODOS mis wraps pendientes
             if (resp.exists) {
                 val existing = db.roomDao().get(resp.roomId)
                 if (existing != null && hasKey(resp.roomId)) {
                     return Result.success(existing) // ya la tengo: abrir tal cual
                 }
-                val got = resp.wrappedForMeB64?.let {
-                    unwrapDm(s, resp.roomId, DmPickup(resp.roomId, found.uid, found.uname, peerPub, it))
+                for ((fromPub, wrapB64) in resp.wrapsForMe) {
+                    val got = unwrapDm(s, resp.roomId, DmPickup(resp.roomId, found.uid, found.uname, fromPub, wrapB64))
+                    if (got != null) {
+                        drainPendingForRoom(resp.roomId)
+                        clearDmRecovery(resp.roomId)
+                        return Result.success(got)
+                    }
                 }
-                return if (got != null) Result.success(got)
-                else Result.failure(IllegalStateException(
+                // legado: un solo wrap sin claves asociadas
+                resp.wrappedForMeB64?.let {
+                    unwrapDm(s, resp.roomId, DmPickup(resp.roomId, found.uid, found.uname, peerPub, it))
+                }?.let {
+                    drainPendingForRoom(resp.roomId)
+                    clearDmRecovery(resp.roomId)
+                    return Result.success(it)
+                }
+                // D119: este teléfono no puede abrir nada → pedir re-emparejamiento
+                markDmStuck(s, resp.roomId)
+                return Result.failure(IllegalStateException(
                     "Ya tienen un chat directo, pero este teléfono no tiene su clave " +
-                        "(cambió de teléfono o reinstaló). Pide a la otra persona el código de " +
-                        "invitación del chat (Ajustes del chat) y recupera el acceso.",
+                        "(cambiaste de teléfono o reinstalaste). Ya le pedimos a @${found.uname} " +
+                        "que lo recupere: en cuanto abra la app, el chat vuelve solo.",
                 ))
             }
 
@@ -489,20 +537,123 @@ class ChatEngine(
      * Procesa los chats directos pendientes que trajo el /sync (D74):
      * desenvelve, guarda y acusa. Si ya tengo la clave, solo acusa. Antes de
      * ingerir mensajes: sin esto no se descifraría nada del chat nuevo.
+     * D119: un wrap que no abre (clave de OTRO teléfono) YA no se acusa en
+     * silencio — marca el aviso de re-emparejamiento (dm_stuck).
      */
     private suspend fun ingestDms(s: cu.alain.chat.vault.Session, pickups: List<DmPickup>) {
         for (p in pickups) {
             try {
                 if (!hasKey(p.roomId)) {
+                    var opened = false
                     unwrapDm(s, p.roomId, p)?.let {
+                        opened = true
                         drainPendingForRoom(p.roomId) // mensajes que llegaron antes del wrap
+                        clearDmRecovery(p.roomId)      // D119: recuperado → fuera del aviso
                     }
+                    if (opened) {
+                        api.dmAck(s.token, p.roomId)
+                    } else {
+                        // D119: este teléfono no es el destinatario del wrap —
+                        // pedir al par que re-envuelva para las claves ACTUALES
+                        markDmStuck(s, p.roomId)
+                    }
+                } else {
+                    api.dmAck(s.token, p.roomId) // recogido: el servidor deja de servirlo
                 }
-                api.dmAck(s.token, p.roomId) // recogido (o inútil): el servidor deja de servirlo
             } catch (_: Exception) {
                 // sin red: el próximo sync lo vuelve a traer (no está ackeado)
             }
         }
+    }
+
+    // ────────────── re-emparejamiento guiado (D119, Fase I) ──────────────
+
+    /** Marca que este teléfono no puede abrir esa sala y pide al par que
+     *  re-envuelva. Alimenta el aviso de la UI ([dmRecovery]). */
+    private suspend fun markDmStuck(s: cu.alain.chat.vault.Session, roomId: String) {
+        val id = roomId.lowercase()
+        val cur = _dmRecovery.value
+        if (id !in cur.needed && id !in cur.waiting) {
+            _dmRecovery.value = DmRecovery(cur.needed + id, cur.waiting)
+        }
+        try { api.dmStuck(s.token, id) } catch (_: Exception) {}
+    }
+
+    /** El aviso cumplió su misión (wrap abierto): limpiar el estado. */
+    private fun clearDmRecovery(roomId: String) {
+        val id = roomId.lowercase()
+        val cur = _dmRecovery.value
+        if (id in cur.needed || id in cur.waiting) {
+            _dmRecovery.value = DmRecovery(cur.needed - id, cur.waiting - id)
+        }
+    }
+
+    /** Botón del aviso: pide el re-emparejamiento de todos los chats directos
+     *  que este teléfono no puede abrir. En cuanto el par abra su app, los
+     *  wraps llegan por el /sync normal. */
+    fun requestDmRecovery() {
+        val s = store.session ?: return
+        val needed = _dmRecovery.value.needed
+        if (needed.isEmpty()) return
+        scope.launch {
+            val ok = needed.filter { api.dmStuck(s.token, it) }.toSet()
+            if (ok.isNotEmpty()) {
+                val cur = _dmRecovery.value
+                _dmRecovery.value = DmRecovery(cur.needed, cur.waiting + ok)
+            }
+        }
+    }
+
+    /** D119: el par no puede abrir sus wraps de estas salas → yo SÍ tengo la
+     *  roomKey, así que re-envuelvo para cada clave activa suya. Silencioso:
+     *  su app recibe los wraps por el /sync y el chat vuelve sin tocar nada. */
+    private suspend fun handleRewrapRequests(s: cu.alain.chat.vault.Session, reqs: List<RewrapReq>) {
+        for (req in reqs) {
+            try {
+                val ks = keys[req.roomId.lowercase()] ?: continue // yo tampoco tengo la clave: no puedo ayudar
+                val (myKp, _) = store.ensureDeviceKeyPair()
+                val myPriv = Base64.decode(myKp.privB64, Base64.NO_WRAP)
+                val seenPub = mutableSetOf<String>()
+                val wraps = req.keys.filter { (_, pub) -> seenPub.add(pub) }.map { (kid, pub) ->
+                    kid to Base64.encodeToString(
+                        DmCrypto.wrap(myPriv, Base64.decode(pub, Base64.NO_WRAP), req.roomId, req.peerUid, ks.first, ks.second),
+                        Base64.NO_WRAP,
+                    )
+                }
+                Crypto.zero(myPriv)
+                if (wraps.isNotEmpty()) api.dmWraps(s.token, req.roomId, wraps, myKp.kid)
+            } catch (_: Exception) {
+                // best-effort: el próximo sync vuelve a traer el pedido
+            }
+        }
+    }
+
+    // ────────────── recordatorio de export cifrado (D119, Fase I) ──────────────
+
+    /** Llamar tras un export CIFRADO completado: reinicia el contador mensual. */
+    fun noteExportDone() {
+        scope.launch {
+            db.metaDao().setLong("last_export_ms", System.currentTimeMillis())
+        }
+    }
+
+    /** Llamar al MOSTRAR el recordatorio: no molestar más de 1 vez por semana. */
+    fun noteExportReminderShown() {
+        scope.launch {
+            db.metaDao().setLong("export_rem_shown_ms", System.currentTimeMillis())
+        }
+    }
+
+    /** Fase I: toca recordar el respaldo cifrado — hay salas, pasaron 30 días
+     *  del último export y 7 desde el último recordatorio mostrado. */
+    suspend fun exportReminderDue(): Boolean {
+        if (db.roomDao().all().isEmpty()) return false
+        val now = System.currentTimeMillis()
+        val last = db.metaDao().getLong("last_export_ms") ?: 0L
+        val shown = db.metaDao().getLong("export_rem_shown_ms") ?: 0L
+        val month = 30L * 24 * 3600 * 1000
+        val week = 7L * 24 * 3600 * 1000
+        return now - last > month && now - shown > week
     }
 
     // ────────────────────────── ajustes de sala (v0.6.0, D69/D70) ──────────────────────────
@@ -664,6 +815,7 @@ class ChatEngine(
         keys.values.forEach { Crypto.zero(it.first); Crypto.zero(it.second) }
         keys = emptyMap()
         _keysVersion.value += 1
+        _dmRecovery.value = DmRecovery() // D119: sin sesión no hay aviso que mostrar
         stopPolling()
         store.clearSession()
         store.clearRoomKeys()
@@ -1236,6 +1388,8 @@ class ChatEngine(
                 val resp = api.sync(s.token, lastSeq)
                 // chats directos pendientes (D74): PRIMERO las claves, luego mensajes
                 if (resp.dm.isNotEmpty()) ingestDms(s, resp.dm)
+                // pedidos de re-emparejamiento (D119): yo tengo la clave → re-envolver
+                if (resp.rr.isNotEmpty()) handleRewrapRequests(s, resp.rr)
                 // recibos de entrega (D68): lo que otros ya bajaron en mis salas.
                 // Se aplica en CADA página (también en la 200-vacía-con-rd).
                 resp.rd.forEach { (rid, seq) ->

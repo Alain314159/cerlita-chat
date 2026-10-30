@@ -25,10 +25,17 @@ data class RoomKeyMaterial(val roomId: String, val key: ByteArray, val salt: Byt
  * por Keystore (device_key.bin) y SOBREVIVE al logout — es la identidad
  * criptográfica de este teléfono: tras cerrar sesión y volver a entrar, los
  * wraps dirigidos a él siguen siendo descifrables. En un teléfono NUEVO se
- * genera otro par y los wraps viejos mueren (recuperación: código de
- * invitación, exactamente igual que las salas de grupo).
+ * genera otro par; desde D119 (Fase I) el servidor guarda un CONJUNTO de
+ * claves por usuario, el teléfono nuevo registra la suya y el par re-envuelve
+ * la roomKey para él (aviso de re-emparejamiento) — el código de invitación
+ * queda como camino manual, ya no como única salida.
  */
-data class DeviceKeyPair(val privB64: String, val pubB64: String)
+data class DeviceKeyPair(val privB64: String, val pubB64: String) {
+    /** D119: id de esta clave en el conjunto user_keys del servidor (null hasta
+     *  que el /auth lo asigna y lo guardamos). */
+    var kid: String? = null
+        internal set
+}
 
 /**
  * Almacén local. El token de sesión y las roomKeys van CIFRADOS en reposo por
@@ -128,7 +135,9 @@ class SessionStore(ctx: Context) {
         val plain = readSealed("device_key.bin", "device-key-v1") ?: return null
         return try {
             val j = JSONObject(String(plain, Charsets.UTF_8))
-            DeviceKeyPair(j.getString("priv"), j.getString("pub"))
+            DeviceKeyPair(j.getString("priv"), j.getString("pub")).also {
+                it.kid = j.optString("kid").takeIf { k -> k.isNotEmpty() && k != "null" }
+            }
         } catch (_: Exception) {
             null
         }
@@ -142,6 +151,16 @@ class SessionStore(ctx: Context) {
         val j = JSONObject().put("priv", pair.privB64).put("pub", pair.pubB64)
         writeSealed("device_key.bin", "device-key-v1", j.toString().toByteArray(Charsets.UTF_8))
         return pair to true
+    }
+
+    /** D119: guarda el kid que el servidor asignó a la clave de este teléfono
+     *  (respuesta de reg/in/pk). Reescribe el blob sellado. */
+    fun setDeviceKeyId(kid: String) {
+        val kp = deviceKeyPair() ?: return
+        if (kp.kid == kid) return
+        kp.kid = kid
+        val j = JSONObject().put("priv", kp.privB64).put("pub", kp.pubB64).put("kid", kid)
+        writeSealed("device_key.bin", "device-key-v1", j.toString().toByteArray(Charsets.UTF_8))
     }
 
     // ---------- helpers ----------

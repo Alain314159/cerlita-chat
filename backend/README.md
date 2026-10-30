@@ -56,9 +56,39 @@ curl -X POST .../auth -d '{"a":"room_new","r":"<room-uuid>"}' -H "Auth..."
 curl -X POST .../auth -d '{"a":"room_join","r":"<room-uuid>"}' -H "Auth..."
 → 200 {ok:true}   ·  404 no_room · 403 room_full (>6 miembros)
 
-# Listar mis salas (multi-dispositivo / reinstalación)
+# Listar mis salas (multi-dispositivo / reinstalación) — D119: kind y pending
+#   kind: 0=grupo · 1=chat directo · pending: 1=tengo wraps sin consumir (no es
+#   caso de recuperación: el /sync los traerá)
 curl -X POST .../auth -d '{"a":"rooms"}' -H "Auth..."
-→ 200 {"rooms":[["<room-uuid>",1 /*owner*/],...]}
+→ 200 {"rooms":[["<room-uuid>",1 /*owner*/,1 /*kind*/,0 /*pending*/],...]}
+
+# ── D119 (v0.19.0, Fase I): identidad multi-dispositivo ──
+
+# Registrar la pública del teléfono: se AÑADE al conjunto user_keys (hasta 5
+# activas; la 6ª retira la más vieja). users.pub queda como espejo de la última
+# (clientes v0.18). reg/in también aceptan pk y TODOS devuelven kid.
+curl -X POST .../auth -d '{"a":"pk","pk":"<b64 32B>"}' -H "Auth..."
+→ 200 {ok:true, kid:"<uuid>"}
+
+# Buscar por prefijo: elemento 2 = pub heredada, elemento 3 = claves ACTIVAS
+curl -X POST .../auth -d '{"a":"search","q":"amelia"}' -H "Auth..."
+→ 200 {"r":[["<uid>","amelia","<pub-heredada>",[["<kid>","<pub>"],...],...]]}
+
+# Crear chat directo: ws = un wrap POR clave activa del par (≤16), fk = MI kid
+# (el /sync sirve la pública de from_key — la que de verdad hizo el wrap).
+curl -X POST .../auth -d '{"a":"dm_new","r":"<room>","peer":"amelia",
+  "w":"<wrap-heredado>","ws":[["<kid-par>","<wrap>"],...],"fk":"<mi-kid>"}' -H "Auth..."
+→ 201 {ok,room,exists:0}  ·  exists=1 → 200 {room, exists:1, ws:[[pubQueLoHizo,wrap],...]}
+
+# Este teléfono no puede abrir sus wraps (teléfono nuevo): marcar el aviso.
+# Consume los wraps pendientes; el /sync del PAR lo devuelve como rr.
+curl -X POST .../auth -d '{"a":"dm_stuck","r":"<room>"}' -H "Auth..."
+→ 200 {ok:true}
+
+# Re-emparejamiento (lo envía el par que SÍ tiene la roomKey): un wrap por
+# clave activa del otro miembro. Limpia su needs_rewrap_at.
+curl -X POST .../auth -d '{"a":"dm_wraps","r":"<room>","ws":[["<kid-par>","<wrap>"],...],"fk":"<mi-kid>"}' -H "Auth..."
+→ 200 {ok:true}  ·  403 not_member · 400 bad_wrap (kid ajeno, validado ANTES de tocar nada)
 ```
 
 ### sync — recepción incremental
@@ -69,6 +99,12 @@ curl ".../sync?s=4821&l=100" -H "Authorization: Bearer <tok>"
         # sender_uname: nombre del emisor (SOLO para la UI — en modelo rooms no deriva
         #               convKey: el salt es roomId y la clave madre es roomKey, D41/D42)
         # ts_ms: coalesce(client_ts, created_at) epoch ms
+        # dm (D74/D119): [[roomId, fromUid, fromUname, fromPubB64, wrappedB64], ...]
+        #   wraps de chats directos pendientes — puede haber VARIOS por sala (uno
+        #   por dispositivo); fromPubB64 es la de from_key (la que hizo el wrap)
+        # rr (D119): [[roomId, peerUid, [[kid, pubB64], ...]], ...]
+        #   pedidos de re-emparejamiento: el OTRO miembro no puede abrir sus
+        #   wraps — vienen sus claves activas para re-envolver sin otra ida
         header x-next-seq: 4903 · gzip si > 1 KB (y Cloudflare comprime en tránsito
         siempre que el cliente envíe Accept-Encoding: gzip — OkHttp lo hace solo)
 → 204 sin cuerpo si no hay nada nuevo

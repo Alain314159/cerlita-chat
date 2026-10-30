@@ -566,6 +566,7 @@ fun SettingsScreen(app: ChatApp, onEditProfile: () -> Unit) {
                             if (uri != null) {
                                 exportUri = uri
                                 showExport = false
+                                app.engine.noteExportDone() // D119: reinicia el recordatorio mensual
                             } else {
                                 exportError = "No hay mensajes o falló el export"
                             }

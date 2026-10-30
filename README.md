@@ -3,15 +3,18 @@
 > Chat 1-a-1 con cifrado de extremo a extremo, historial offline y entrega fiable en redes
 > de bytes por segundo. Diseñado para el contexto cubano (ETECSA): cara, lenta, intermitente.
 
-**Estado**: app Android **v0.18.0 «Verificación»** — chat E2EE completo (rooms + DM +
+**Estado**: app Android **v0.19.0 «Identidad»** — chat E2EE completo (rooms + DM +
 adjuntos + llamadas + minijuego 2048 + avatares 2D cerdita/koala con accesorios o foto) con
-**4 capas de aviso** (timbre Realtime, ntfy con sobre cifrado, alarma exacta, SyncWorker)
-y, desde esta versión, **verificación de 1.0**: reporte de fallos propio (D114), **primera
-prueba instrumentada** ejecutando el flujo crítico en Android real desde CI (D115),
-cobertura con umbral publicado (D116 — crypto 75,1%), lint con base y cero avisos
-nuevos (D117) y la memoria institucional mudada al repo (D118). **Sin Firebase**.
-APK **18,6 MB** firmada (misma firma 37b6d4…, actualiza encima). 132/132 tests unitarios
-+ 4/4 instrumentados en CI.
+**4 capas de aviso** (timbre Realtime, ntfy con sobre cifrado, alarma exacta, SyncWorker),
+verificación de 1.0 (reporte de fallos D114, instrumentadas en CI D115, cobertura con
+umbral D116, lint con base D117) y, desde esta versión, **identidad multi-dispositivo**
+(D119 — Fase I del informe 1.0): hasta 5 claves por usuario, la roomKey de cada chat
+directo envuelta PARA CADA dispositivo, y el aviso de re-emparejamiento guiado —
+cambiar de teléfono o reinstalar ya no rompe los chats: se toca «Recuperar» y el
+chat vuelve solo cuando el par abre su app. Recordatorio mensual de export cifrado
+con export de un toque. **Sin Firebase**.
+APK **~19,5 MB** firmada (misma firma 37b6d4…, actualiza encima). 136/136 tests unitarios
++ instrumentadas en CI (flujo crítico + reinstalación).
 
 ## Documentación
 
@@ -21,7 +24,7 @@ APK **18,6 MB** firmada (misma firma 37b6d4…, actualiza encima). 132/132 tests
 | [docs/DECISIONES.md](docs/DECISIONES.md) | Log de decisiones: tomadas vs pendientes |
 | [docs/FASE-0-VALIDACION.md](docs/FASE-0-VALIDACION.md) | Checklist de supervivencia y resultados |
 | [backend/README.md](backend/README.md) | Backend desplegado: endpoints, deploy, hallazgos |
-| [android/README.md](android/README.md) | App v0.18.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares 2D (D113), QA de 1.0 (D114-D118), cripto, build, tests |
+| [android/README.md](android/README.md) | App v0.19.0: rooms, perfiles, timbre, ntfy (D104), recibos, llamadas, avatares 2D (D113), QA de 1.0 (D114-D118), identidad multi-dispositivo (D119), cripto, build, tests |
 | [docs/qa/COBERTURA.md](docs/qa/COBERTURA.md) | Suelos de cobertura publicados y números por paquete (D116) |
 | [docs/ENTORNO.md](docs/ENTORNO.md) | Receta de reconstrucción del entorno desde cero (D118) |
 | [docs/worklog.md](docs/worklog.md) | Registro de trabajo de cada sesión (D118) |

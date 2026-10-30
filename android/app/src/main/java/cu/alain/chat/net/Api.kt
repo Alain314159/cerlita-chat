@@ -18,6 +18,7 @@ data class SyncResp(
     val rows: List<SyncRow>,
     val rd: List<Pair<String, Long>> = emptyList(),
     val dm: List<DmPickup> = emptyList(),
+    val rr: List<RewrapReq> = emptyList(), // D119: pedidos de re-emparejamiento
 )
 
 /** Fila de /sync: [msg_id, room_id, sender_id, seq, nonce_b64, ct_b64, sender_uname, ts_ms]. */
@@ -41,6 +42,15 @@ data class DmPickup(
     val wrappedB64: String,
 )
 
+/** D119: pedido de re-emparejamiento — el par no puede abrir sus wraps de esa
+ *  sala (teléfono nuevo). keys = sus claves activas [[kid, pubB64], …] para
+ *  re-envolver la roomKey SIN otra ida al servidor. */
+data class RewrapReq(
+    val roomId: String,
+    val peerUid: String,
+    val keys: List<Pair<String, String>>,
+)
+
 /** Servidor ICE de /turn (B6/R3 auditoría): url + credenciales opcionales. */
 data class IceServerCfg(
     val url: String,
@@ -48,11 +58,24 @@ data class IceServerCfg(
     val password: String? = null,
 )
 
-/** Usuario encontrado por búsqueda (D74). */
-data class FoundUser(val uid: String, val uname: String, val pubB64: String?)
+/** Usuario encontrado por búsqueda (D74). keys (D119): claves activas
+ *  [[kid, pubB64], …] del usuario — una por dispositivo. */
+data class FoundUser(
+    val uid: String,
+    val uname: String,
+    val pubB64: String?,
+    val keys: List<Pair<String, String>> = emptyList(),
+)
 
-/** Respuesta de dm_new: el chat de la pareja (recién creado o el que ya existía). */
-data class DmResp(val roomId: String, val exists: Boolean, val wrappedForMeB64: String?)
+/** Respuesta de dm_new: el chat de la pareja (recién creado o el que ya existía).
+ *  wrapsForMe (D119): [públicaQueLoHizo, wrap] de TODOS mis wraps pendientes
+ *  en esa sala — el teléfono nuevo intenta desenvelopar cada uno. */
+data class DmResp(
+    val roomId: String,
+    val exists: Boolean,
+    val wrappedForMeB64: String?,
+    val wrapsForMe: List<Pair<String, String>> = emptyList(),
+)
 
 /** Error del API con código HTTP + código simbólico del servidor. */
 class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
@@ -76,6 +99,8 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
             "self_dm" -> "No puedes crear un chat contigo mismo"
             "peer_no_key" -> "Esa persona aún no actualiza a la nueva versión (chats directos)"
             "bad_pk" -> "Clave del teléfono inválida"
+            "bad_wrap" -> "Datos de emparejamiento inválidos"
+            "not_member" -> "No eres miembro de esa sala"
             "too_many" -> "Lote demasiado grande; inténtalo de nuevo"
             "rate_limited" -> "Demasiadas peticiones seguidas; espera un momento"
             "unauthorized" -> "Tu sesión expiró; inicia sesión de nuevo"
@@ -84,8 +109,15 @@ class ApiException(val http: Int, val code: String) : Exception("$http/$code") {
         }
 }
 
-/** Respuesta de login/registro. */
-data class AuthResp(val uid: String, val uname: String, val token: String, val exp: String)
+/** Respuesta de login/registro. kid (D119): id de la clave de ESTE teléfono
+ *  en el conjunto user_keys del servidor. */
+data class AuthResp(
+    val uid: String,
+    val uname: String,
+    val token: String,
+    val exp: String,
+    val kid: String? = null,
+)
 
 /** D93: ISO-8601 (con Z o +00:00, como lo devuelve Postgres) → epoch ms.
  *  null si no se puede parsear (campo vacío de un servidor viejo). */
@@ -93,8 +125,16 @@ fun parseIsoMs(iso: String): Long? = try {
     java.time.OffsetDateTime.parse(iso).toInstant().toEpochMilli()
 } catch (_: Exception) { null }
 
-/** Sala listada por el servidor: [room_id, owner(0/1)]. */
-data class ServerRoom(val roomId: String, val owner: Boolean)
+/** Sala listada por el servidor: [room_id, owner(0/1), kind, pending(0/1)].
+ *  kind/pending (D119): kind 1=chat directo; pending 1=tengo wraps sin
+ *  consumir (los traerá el sync — no es caso de recuperación). Con servidor
+ *  viejo llegan solo 2 elementos → defaults. */
+data class ServerRoom(
+    val roomId: String,
+    val owner: Boolean,
+    val kind: Int = 0,
+    val pending: Boolean = false,
+)
 
 /**
  * Cliente HTTP de las Edge Functions (D2: polling HTTP, nada de WebSocket).
@@ -150,7 +190,7 @@ class Api(private val baseUrl: () -> String) {
             pubB64?.let { body.put("pk", it) }
             val (code, j) = post("/auth", body)
             when (code) {
-                201 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
+                201 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"), j.optString("kid").takeIf { it.isNotEmpty() && it != "null" })
                 else -> throw ApiException(code, j.errOr("reg_failed"))
             }
         }
@@ -161,7 +201,7 @@ class Api(private val baseUrl: () -> String) {
             pubB64?.let { body.put("pk", it) }
             val (code, j) = post("/auth", body)
             when (code) {
-                200 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"))
+                200 -> AuthResp(j.getString("uid"), j.getString("u"), j.getString("tok"), j.optString("exp"), j.optString("kid").takeIf { it.isNotEmpty() && it != "null" })
                 else -> throw ApiException(code, j.errOr("login_failed"))
             }
         }
@@ -209,18 +249,28 @@ class Api(private val baseUrl: () -> String) {
         buildList {
             for (i in 0 until arr.length()) {
                 val r = arr.getJSONArray(i)
-                add(ServerRoom(r.getString(0), r.getInt(1) == 1))
+                add(
+                    ServerRoom(
+                        r.getString(0),
+                        r.getInt(1) == 1,
+                        if (r.length() > 2) r.optInt(2, 0) else 0,     // D119: kind
+                        if (r.length() > 3) r.optInt(3, 0) == 1 else false, // D119: pending
+                    ),
+                )
             }
         }
     }
 
     // ---------- chats directos (D74) ----------
 
-    /** (Re)sube la pública X25519 de este teléfono. Best-effort. */
-    suspend fun uploadPub(token: String, pubB64: String) = withContext(Dispatchers.IO) {
+    /** Registra la pública X25519 de este teléfono en el CONJUNTO de claves del
+     *  usuario (D119: ya no reemplaza). Best-effort; devuelve el kid. */
+    suspend fun uploadPub(token: String, pubB64: String): String? = withContext(Dispatchers.IO) {
         try {
-            post("/auth", JSONObject().put("a", "pk").put("pk", pubB64), token)
+            val (code, j) = post("/auth", JSONObject().put("a", "pk").put("pk", pubB64), token)
+            if (code == 200) j.optString("kid").takeIf { it.isNotEmpty() && it != "null" } else null
         } catch (_: Exception) {
+            null
         }
     }
 
@@ -232,25 +282,53 @@ class Api(private val baseUrl: () -> String) {
         buildList {
             for (i in 0 until arr.length()) {
                 val r = arr.getJSONArray(i)
-                add(FoundUser(r.getString(0), r.getString(1), r.optString(2).takeIf { it.isNotEmpty() && it != "null" }))
+                val keys = buildList {
+                    val ka = r.optJSONArray(3) // D119: [[kid, pubB64], …]
+                    if (ka != null) for (k in 0 until ka.length()) {
+                        val e = ka.getJSONArray(k)
+                        add(e.getString(0) to e.getString(1))
+                    }
+                }
+                add(FoundUser(r.getString(0), r.getString(1), r.optString(2).takeIf { it.isNotEmpty() && it != "null" }, keys))
             }
         }
     }
 
-    /** Crea el chat directo de la pareja (idempotente). wrappedB64 = roomKey envuelta para el par. */
-    suspend fun dmNew(token: String, roomId: String, peerUname: String, wrappedB64: String): DmResp =
-        withContext(Dispatchers.IO) {
-            val (code, j) = post(
-                "/auth",
-                JSONObject().put("a", "dm_new").put("r", roomId).put("peer", peerUname).put("w", wrappedB64),
-                token,
-            )
+    /** Crea el chat directo de la pareja (idempotente). wraps (D119): un wrap
+     *  POR clave activa del par [[kid, wrapB64]]; fromKid = MI kid (fk). */
+    suspend fun dmNew(
+        token: String,
+        roomId: String,
+        peerUname: String,
+        wrappedB64: String,
+        wraps: List<Pair<String, String>> = emptyList(),
+        fromKid: String? = null,
+    ): DmResp = withContext(Dispatchers.IO) {
+            val body = JSONObject()
+                .put("a", "dm_new").put("r", roomId).put("peer", peerUname).put("w", wrappedB64)
+            if (wraps.isNotEmpty()) {
+                val arr = JSONArray()
+                wraps.forEach { (kid, w) -> arr.put(JSONArray().put(kid).put(w)) }
+                body.put("ws", arr)
+            }
+            fromKid?.let { body.put("fk", it) }
+            val (code, j) = post("/auth", body, token)
             when (code) {
-                200, 201 -> DmResp(
-                    roomId = j.getString("room"),
-                    exists = j.optInt("exists", 0) == 1,
-                    wrappedForMeB64 = j.optString("w").takeIf { it.isNotEmpty() && it != "null" },
-                )
+                200, 201 -> {
+                    val wsArr = j.optJSONArray("ws") // D119: [[fromPubB64, wrapB64], …]
+                    val wrapsForMe = buildList {
+                        if (wsArr != null) for (i in 0 until wsArr.length()) {
+                            val e = wsArr.getJSONArray(i)
+                            add(e.getString(0) to e.getString(1))
+                        }
+                    }
+                    DmResp(
+                        roomId = j.getString("room"),
+                        exists = j.optInt("exists", 0) == 1,
+                        wrappedForMeB64 = j.optString("w").takeIf { it.isNotEmpty() && it != "null" },
+                        wrapsForMe = wrapsForMe,
+                    )
+                }
                 else -> throw ApiException(code, j.errOr("dm_failed"))
             }
         }
@@ -260,6 +338,37 @@ class Api(private val baseUrl: () -> String) {
         try {
             post("/auth", JSONObject().put("a", "dm_ack").put("r", roomId), token)
         } catch (_: Exception) {
+        }
+    }
+
+    /** D119: este teléfono no puede abrir sus wraps de esa sala (teléfono
+     *  nuevo/reinstalado) → marca el aviso que el /sync del par devuelve. */
+    suspend fun dmStuck(token: String, roomId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val (code, _) = post("/auth", JSONObject().put("a", "dm_stuck").put("r", roomId), token)
+            code == 200
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** D119: re-emparejamiento — re-envuelve la roomKey para las claves activas
+     *  del par. Sólo un miembro con acceso a la sala puede fabricar wraps útiles. */
+    suspend fun dmWraps(
+        token: String,
+        roomId: String,
+        wraps: List<Pair<String, String>>,
+        fromKid: String? = null,
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val arr = JSONArray()
+            wraps.forEach { (kid, w) -> arr.put(JSONArray().put(kid).put(w)) }
+            val body = JSONObject().put("a", "dm_wraps").put("r", roomId).put("ws", arr)
+            fromKid?.let { body.put("fk", it) }
+            val (code, _) = post("/auth", body, token)
+            code == 200
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -388,7 +497,23 @@ class Api(private val baseUrl: () -> String) {
                             )
                         }
                     } else emptyList()
-                    SyncResp(j.getLong("n"), rows, rd, dm)
+                    // rr (D119): [[roomId, peerUid, [[kid, pubB64], …]], …] — pedidos
+                    // de re-emparejamiento con las claves activas de quien los pide
+                    val rrArr = j.optJSONArray("rr")
+                    val rr = if (rrArr != null) buildList {
+                        for (i in 0 until rrArr.length()) {
+                            val r = rrArr.getJSONArray(i)
+                            val keys = buildList {
+                                val ka = r.optJSONArray(2)
+                                if (ka != null) for (k in 0 until ka.length()) {
+                                    val e = ka.getJSONArray(k)
+                                    add(e.getString(0) to e.getString(1))
+                                }
+                            }
+                            add(RewrapReq(r.getString(0), r.getString(1), keys))
+                        }
+                    } else emptyList()
+                    SyncResp(j.getLong("n"), rows, rd, dm, rr)
                 }
                 else -> {
                     val e = try { JSONObject(raw).optString("e") } catch (_: Exception) { "" }

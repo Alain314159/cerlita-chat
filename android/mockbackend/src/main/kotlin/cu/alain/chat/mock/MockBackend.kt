@@ -28,15 +28,25 @@ import java.util.concurrent.atomic.AtomicLong
  *    «new-msg» que despierta la app por el canal real del timbre.
  *  - Cualquier otra ruta (ntfy poll/publish, broadcast REST): 200 vacío.
  *
+ * D119 (Fase I — identidad multi-dispositivo): además del contrato viejo,
+ *  - reg/in/pk registran la clave del teléfono y devuelven kid (conjunto de
+ *    claves: userKeys, sin reemplazo);
+ *  - search devuelve el fakePeer configurable CON sus claves activas
+ *    [[kid, pubB64], …] (elemento 3);
+ *  - dm_new registra la sala como kind=1 y cuenta los wraps multi-dispositivo;
+ *  - rooms devuelve [roomId, owner, kind, pending];
+ *  - dm_stuck / dm_wraps / dm_ack quedan grabados para que el test afirme;
+ *  - deliverDm() permite al TEST fabricar wraps «del par» y servirlos por
+ *    /sync (campo dm), como haría el servidor real al re-emparejar.
+ *
  * Vive en sharedTest: MockBackendTest lo valida en JVM (sin emulador, en cada
- * `test` de CI) y FlujoCriticoTest lo usa en el dispositivo — mismo código,
+ * `test` de CI) y las instrumentadas lo usan en el dispositivo — mismo código,
  * dos mundos. Cero dependencias de Android.
  */
 class MockBackend {
 
     private val counter = AtomicLong(100)
     private val pendingRows = CopyOnWriteArrayList<JSONArray>()
-    private val knownRooms = LinkedHashSet<String>()
     private val openSockets = CopyOnWriteArrayList<WebSocket>()
 
     /** (uid, uname, token) de la última sesión aceptada — null tras a=out. */
@@ -46,6 +56,30 @@ class MockBackend {
 
     /** Acks de /outbox: (roomId, msgId). */
     val acked = CopyOnWriteArrayList<Pair<String, String>>()
+
+    // ── D119: identidad multi-dispositivo ──
+
+    /** Claves registradas por el usuario simulado: (kid, pubB64). */
+    val userKeys = CopyOnWriteArrayList<Pair<String, String>>()
+
+    /** El «par» que devuelve search: (uid, uname, claves activas (kid, pubB64)). */
+    @Volatile
+    var fakePeer: Triple<String, String, List<Pair<String, String>>>? = null
+
+    /** Salas de chat directo conocidas (rooms las lista con kind=1). */
+    val dmRooms = CopyOnWriteArrayList<String>()
+
+    /** Wraps pendientes de /sync (campo dm) — los fabrica el test como el par. */
+    private val pendingDms = CopyOnWriteArrayList<JSONArray>()
+
+    /** dm_stuck grabados: roomId. */
+    val stuckRooms = CopyOnWriteArrayList<String>()
+
+    /** dm_wraps grabados: (roomId, nº de wraps). */
+    val wrapUploads = CopyOnWriteArrayList<Pair<String, Int>>()
+
+    /** dm_ack grabados: roomId. */
+    val ackedDms = CopyOnWriteArrayList<String>()
 
     val server = MockWebServer()
 
@@ -79,6 +113,29 @@ class MockBackend {
     /** Encola una fila (cifrada por quien llama) para el próximo /sync. */
     fun deliverIncoming(row: JSONArray) {
         pendingRows.add(row)
+    }
+
+    /**
+     * D119: encola un wrap de chat directo PARA el usuario simulado, como
+     * haría el servidor real al servir los re-emparejamientos del par.
+     * fromPubB64 = pública del par CON la que se fabricó el wrap (el test
+     * la controla porque controla el keypair del par).
+     */
+    fun deliverDm(roomId: String, fromUid: String, fromUname: String, fromPubB64: String, wrappedB64: String) {
+        pendingDms.add(
+            JSONArray()
+                .put(roomId).put(fromUid).put(fromUname)
+                .put(fromPubB64).put(wrappedB64),
+        )
+    }
+
+    /** Registra (o refresca) la clave del teléfono → kid asignado (D119). */
+    private fun recordKey(pubB64: String?): String? {
+        if (pubB64.isNullOrEmpty()) return null
+        userKeys.firstOrNull { it.second == pubB64 }?.let { return it.first }
+        val kid = "k-${userKeys.size + 1}"
+        userKeys.add(kid to pubB64)
+        return kid
     }
 
     /**
@@ -128,7 +185,7 @@ class MockBackend {
                 path == "/sync" -> when {
                     // histórico por sala (B1): vacío — nada previo al join
                     query.contains("room=") -> MockResponse().setResponseCode(204)
-                    pendingRows.isEmpty() -> MockResponse().setResponseCode(204)
+                    pendingRows.isEmpty() && pendingDms.isEmpty() -> MockResponse().setResponseCode(204)
                     else -> {
                         val rows = JSONArray()
                         var maxSeq = counter.get()
@@ -138,10 +195,16 @@ class MockBackend {
                             if (s > maxSeq) maxSeq = s
                         }
                         pendingRows.clear()
+                        // D119: wraps de chats directos pendientes (forma de DmPickup)
+                        val dms = JSONArray()
+                        pendingDms.forEach { dms.put(it) }
+                        pendingDms.clear()
                         // n = cursor nuevo: ≥ seq de TODAS las filas entregadas
                         // (las filas pueden venir con seq externa) y ≥ lo ackeado
                         if (maxSeq > counter.get()) counter.set(maxSeq)
-                        ok(JSONObject().put("n", maxSeq).put("m", rows).toString())
+                        val j = JSONObject().put("n", maxSeq).put("m", rows)
+                        if (dms.length() > 0) j.put("dm", dms)
+                        ok(j.toString())
                     }
                 }
 
@@ -185,10 +248,12 @@ class MockBackend {
         return when (j.optString("a")) {
             "reg" -> {
                 currentUser = Triple("u-test0001", j.optString("u", "tester"), "tok-1")
+                recordKey(j.optString("pk")) // D119
                 sessionBody(201)
             }
             "in" -> {
                 if (currentUser == null) currentUser = Triple("u-test0001", j.optString("u", "tester"), "tok-2")
+                recordKey(j.optString("pk")) // D119
                 sessionBody(200)
             }
             "out" -> {
@@ -205,19 +270,77 @@ class MockBackend {
             }
             "rooms" -> {
                 val arr = JSONArray()
-                synchronized(knownRooms) { knownRooms.forEach { arr.put(JSONArray().put(it).put(1)) } }
+                synchronized(knownRooms) {
+                    knownRooms.forEach { r ->
+                        // D119: [roomId, owner, kind, pending] — pending = wraps sin consumir
+                        val kind = if (dmRooms.contains(r)) 1 else 0
+                        val pending = pendingDms.any { it.optString(0) == r }
+                        arr.put(JSONArray().put(r).put(1).put(kind).put(if (pending) 1 else 0))
+                    }
+                }
                 ok(JSONObject().put("rooms", arr).toString())
             }
-            else -> ok("{}") // pk, search, dm_new, dm_ack, room_leave…
+            // D119: search devuelve el par simulado con SUS claves activas
+            "search" -> {
+                val peer = fakePeer
+                    ?: return ok(JSONObject().put("r", JSONArray()).toString())
+                val keys = JSONArray()
+                peer.third.forEach { (kid, pub) -> keys.put(JSONArray().put(kid).put(pub)) }
+                val latest = peer.third.lastOrNull()?.second
+                ok(
+                    JSONObject().put(
+                        "r",
+                        JSONArray().put(
+                            JSONArray().put(peer.first).put(peer.second).put(latest ?: JSONObject.NULL).put(keys),
+                        ),
+                    ).toString(),
+                )
+            }
+            // D119: registra la clave del teléfono en el conjunto → kid
+            "pk" -> {
+                val kid = recordKey(j.optString("pk"))
+                if (kid == null) ok("""{"e":"bad_pk"}""", 400)
+                else ok(JSONObject().put("ok", true).put("kid", kid).toString())
+            }
+            // D119: crea el chat directo — registra sala kind=1 y cuenta wraps
+            "dm_new" -> {
+                val r = j.optString("r")
+                synchronized(knownRooms) { knownRooms.add(r) }
+                dmRooms.add(r)
+                val ws = j.optJSONArray("ws")
+                wrapUploads.add(r to (ws?.length() ?: 0))
+                ok(JSONObject().put("ok", true).put("room", r).put("exists", 0).toString(), 201)
+            }
+            "dm_ack" -> {
+                ackedDms.add(j.optString("r"))
+                ok("{}")
+            }
+            // D119: el teléfono no puede abrir → grabar (el test afiere)
+            "dm_stuck" -> {
+                stuckRooms.add(j.optString("r"))
+                ok("{}")
+            }
+            // D119: re-emparejamiento — grabar los wraps subidos
+            "dm_wraps" -> {
+                val ws = j.optJSONArray("ws")
+                wrapUploads.add(j.optString("r") to (ws?.length() ?: 0))
+                ok("{}")
+            }
+            else -> ok("{}")
         }
     }
 
+    private val knownRooms = LinkedHashSet<String>()
+
     private fun sessionBody(code: Int): MockResponse {
         val u = currentUser!!
+        val kid = userKeys.lastOrNull()?.first
         return ok(
             JSONObject()
                 .put("uid", u.first).put("u", u.second).put("tok", u.third)
-                .put("exp", EXP).toString(),
+                .put("exp", EXP)
+                .put("kid", kid ?: JSONObject.NULL) // D119
+                .toString(),
             code,
         )
     }

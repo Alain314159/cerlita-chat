@@ -90,8 +90,9 @@ class MockBackendTest {
         post("/auth", JSONObject().put("a", "rooms").toString()).use { r ->
             assertEquals(200, r.code)
             val rooms = JSONObject(r.body!!.string()).getJSONArray("rooms")
-            assertEquals("r-test-1", rooms.getJSONArray(0).getString(0))
-            assertEquals(1, rooms.getJSONArray(0).getInt(1))
+            // D119: otros tests añaden salas — buscar por id, no por índice
+            val row = (0 until rooms.length()).map { rooms.getJSONArray(it) }.first { it.getString(0) == "r-test-1" }
+            assertEquals(1, row.getInt(1))
         }
     }
 
@@ -172,5 +173,96 @@ class MockBackendTest {
 
         ws.close(1000, "fin")
         http.dispatcher.executorService.shutdown()
+    }
+
+    // ══════════ D119 (Fase I): identidad multi-dispositivo ══════════
+
+    @Test fun `pk registra la clave, devuelve kid y la 2a clave NO reemplaza`() {
+        post("/auth", JSONObject().put("a", "in").put("u", "tester").put("p", "x").put("d", "d").put("pk", "pub-AAA").toString())
+            .use { r ->
+                assertEquals(200, r.code)
+                val kid = JSONObject(r.body!!.string()).optString("kid")
+                assertTrue("login con pk devuelve kid", kid.isNotEmpty())
+            }
+        post("/auth", JSONObject().put("a", "pk").put("pk", "pub-BBB").toString()).use { r ->
+            assertEquals(200, r.code)
+            val j = JSONObject(r.body!!.string())
+            assertTrue(j.getString("kid").isNotEmpty())
+            assertTrue("kid distinto: el conjunto crece, no reemplaza", j.getString("kid") != backend.userKeys.first { it.second == "pub-AAA" }.first)
+        }
+        assertEquals("dos claves activas", 2, backend.userKeys.size)
+        // idempotente: la MISMA pública devuelve el MISMO kid
+        post("/auth", JSONObject().put("a", "pk").put("pk", "pub-BBB").toString()).use { r ->
+            assertEquals(200, r.code)
+        }
+        assertEquals("re-subir la misma no añade", 2, backend.userKeys.size)
+    }
+
+    @Test fun `search devuelve el par con sus claves activas kid-pub`() {
+        backend.fakePeer = Triple("u-par", "cerlita", listOf("k-1" to "pub-P1", "k-2" to "pub-P2"))
+        post("/auth", JSONObject().put("a", "search").put("q", "cer").toString()).use { r ->
+            assertEquals(200, r.code)
+            val rows = JSONObject(r.body!!.string()).getJSONArray("r")
+            assertEquals(1, rows.length())
+            val row = rows.getJSONArray(0)
+            assertEquals("u-par", row.getString(0))
+            assertEquals("cerlita", row.getString(1))
+            assertEquals("pub-P2", row.getString(2)) // espejo legado = la última
+            val keys = row.getJSONArray(3)            // D119: claves activas
+            assertEquals(2, keys.length())
+            assertEquals("k-1", keys.getJSONArray(0).getString(0))
+            assertEquals("pub-P1", keys.getJSONArray(0).getString(1))
+            assertEquals("pub-P2", keys.getJSONArray(1).getString(1))
+        }
+        backend.fakePeer = null // no contaminar otros tests
+    }
+
+    @Test fun `dm_new registra kind=1 y rooms trae kind y pending`() {
+        post("/auth", JSONObject().put("a", "dm_new").put("r", "r-dm-k1")
+            .put("peer", "cerlita").put("w", "wrap-legacy")
+            .put("ws", JSONArray().put(JSONArray().put("k-1").put("w1")).put(JSONArray().put("k-2").put("w2"))).toString())
+            .use { assertEquals(201, it.code) }
+        post("/auth", JSONObject().put("a", "rooms").toString()).use { r ->
+            val rooms = JSONObject(r.body!!.string()).getJSONArray("rooms")
+            val row = (0 until rooms.length()).map { rooms.getJSONArray(it) }.first { it.getString(0) == "r-dm-k1" }
+            assertEquals(4, row.length())          // D119: [roomId, owner, kind, pending]
+            assertEquals(1, row.getInt(2))          // kind=1 (chat directo)
+            assertEquals(0, row.getInt(3))          // sin wraps pendientes
+        }
+        // un wrap entregado → pending=1 (el sync lo traerá)
+        backend.deliverDm("r-dm-k1", "u-par", "cerlita", "pub-P1", "wrap-nuevo")
+        post("/auth", JSONObject().put("a", "rooms").toString()).use { r ->
+            val rooms = JSONObject(r.body!!.string()).getJSONArray("rooms")
+            val row = (0 until rooms.length()).map { rooms.getJSONArray(it) }.first { it.getString(0) == "r-dm-k1" }
+            assertEquals(1, row.getInt(3))
+        }
+        // y el sync lo sirve con la forma de 5 campos, UNA vez
+        get("/sync?s=0&l=200").use { r ->
+            assertEquals(200, r.code)
+            val j = JSONObject(r.body!!.string())
+            val dm = j.getJSONArray("dm")
+            assertEquals(1, dm.length())
+            assertEquals(5, dm.getJSONArray(0).length()) // forma de DmPickup
+            assertEquals("r-dm-k1", dm.getJSONArray(0).getString(0))
+            assertEquals("pub-P1", dm.getJSONArray(0).getString(3))
+            assertEquals("wrap-nuevo", dm.getJSONArray(0).getString(4))
+        }
+        get("/sync?s=0&l=200").use { assertEquals("consumido: vuelve a 204", 204, it.code) }
+    }
+
+    @Test fun `dm_stuck, dm_wraps y dm_ack quedan grabados para las aserciones`() {
+        post("/auth", JSONObject().put("a", "dm_stuck").put("r", "r-dm-s1").toString()).use {
+            assertEquals(200, it.code)
+        }
+        assertTrue(backend.stuckRooms.contains("r-dm-s1"))
+        val ws = JSONArray().put(JSONArray().put("k-9").put("wrap-x"))
+        post("/auth", JSONObject().put("a", "dm_wraps").put("r", "r-dm-s1").put("ws", ws).toString()).use {
+            assertEquals(200, it.code)
+        }
+        assertTrue(backend.wrapUploads.any { it.first == "r-dm-s1" && it.second == 1 })
+        post("/auth", JSONObject().put("a", "dm_ack").put("r", "r-dm-k1").toString()).use {
+            assertEquals(200, it.code)
+        }
+        assertTrue(backend.ackedDms.contains("r-dm-k1"))
     }
 }

@@ -306,3 +306,28 @@ Stage Summary:
 - Brechas 1, 2 y 5 del informe: CERRADAS. Brecha 3 (identidad multi-dispositivo) → Fase I v0.19.0. Brecha 4 (splash, cámara, contraste AA) → Fase P v1.0.0
 - Pendiente usuario: instalar en los 2 móviles; si la app se cierra alguna vez, tocará «Enviar informe» al reabrirla — ese es el primer reporte real que pide el criterio de salida
 - Pendiente futuro (hoja de ruta a 1.0): Fase I (multi-clave por usuario, aviso de re-emparejamiento, recordatorio de export), Fase P (splash Cerlita, botón cámara en el chat, contraste AA del texto secundario, semana de uso real ≥99,5% sin fallos)
+
+---
+Task ID: 1 (sesión v0.19.0)
+Agent: main (Z.ai)
+Task: v0.19.0 «Identidad» — Fase I del informe de preparación 1.0 (brecha 3): que cambiar de teléfono deje de ser un pequeño trauma. Multi-clave por usuario, roomKey envuelta para cada dispositivo, aviso de re-emparejamiento guiado y recordatorio mensual de export cifrado. El «Dale» del usuario tras la entrega de v0.18.0.
+
+Work Log:
+- El sandbox amaneció reciclado OTRA VEZ (4ª): sin toolchain, sin ~/.git-credentials, sin secrets, sin download/. Recuperación completa siguiendo ENTORNO.md §8: JDK 21.0.13 + cmdline-tools + android-37 (H19 con cp -r) reconstruidos; el PAT de GitHub y supabase.env RECUPERADOS del objeto del commit huérfano 65079af que sobrevivió en .git (script scripts/recupera_credenciales.py que valida candidatos contra la API sin imprimir jamás los valores); el Informe PDF de la 1.0 restaurado del mismo huérfano a download/
+- H31 (gitignore): secrets/ NO estaba ignorado — exactamente el agujero que dejó entrar el commit accidental de v0.18.0 (el push protection lo paró entonces). Cerrado: secrets/ y **/secrets/ al .gitignore
+- Migración 0006_multidevice.sql en producción (12/12): user_keys (conjunto de hasta 5 claves por usuario, UNIQUE(user_id,pub), backfill desde users.pub), dm_keys.for_key/from_key + índice UNIQUE (room,for_user,for_key) NULLS NOT DISTINCT (verificado con un bloque DO no destructivo que el ON CONFLICT acepta el árbitre con for_key NULL — el error era de FK, no 42P10, señal de que la planificación pasó), room_members.needs_rewrap_at
+- auth v84: upsertUserKey (cap 5: la 6ª retira la de last_seen más vieja; users.pub queda como espejo legado), kid en reg/in/pk, search con claves activas [[kid,pub]] como elemento 3 (el 2 sigue heredado — v0.18 no se rompe), dm_new con ws (wrap por clave, ≤16) + fk, NUEVOS dm_stuck/dm_wraps, rooms con kind+pending. Validación de kids UPFRONT (lección del propio e2e: un kid ajeno tras crear la sala dejaba huérfanas)
+- sync v84: dmk sirve coalesce(fk.pub, fu.pub) — la pública de from_key, cerrando el bug latente de D74 (rotar la clave del creador mataba el unwrap del receptor sano); campo rr agrupado en JS con las claves activas de quien pide
+- e2e_dm.py reescrito: 38 checks en verde contra producción, incluyendo EL FLUJO DE REINSTALACIÓN completo (3ª clave → rooms kind=1 pending=0 → dm_stuck → rr al par con sus 3 claves → dm_wraps → rr desaparece → wrap al teléfono nuevo → ack), cap de 5, y errores (kid ajeno 400, no-miembro 403)
+- App: Api.kt (kid, keys en FoundUser, wrapsForMe, ServerRoom kind/pending con fallback, rr, dmStuck/dmWraps), SessionStore (kid sellado junto al keypair + setDeviceKeyId), ChatEngine (createDm multi-wrap con dedup por pub, ingestDms SIN ack silencioso → markDmStuck, syncRoomsFromServer alimenta dmRecovery, requestDmRecovery, handleRewrapRequests silencioso, exportReminderDue/noteExportDone/noteExportReminderShown), RoomsScreen (banner «Recupera tus chats directos» con estado esperando + banner de export mensual + export de un toque), SettingsScreen anota noteExportDone
+- MockBackend: contrato D119 (recordKey con kid, fakePeer con claves, rooms kind/pending, deliverDm, dm_stuck/dm_wraps/dm_ack grabados) + 4 tests nuevos en MockBackendTest (133→136 total)
+- ReinstallTest (instrumentada): el CRITERIO DE SALIDA de la Fase I en un Android real — b1 alta+DM (el par es el test con su propio keypair), b2 reinstalación (logout + device_key.bin borrado = par X25519 nuevo; 2ª clave registrada; AVISO alzado), b3 tocar el aviso (dm_stuck), b4 el par re-envuelve (DmCrypto.wrap con la clave del teléfono nuevo) → el chat vuelve SOLO con la MISMA roomKey verificada bit a bit + mensaje con ✓
+- 136/136 unit (puerta D116: crypto 75,1% ≥ 70%, 136 ≥ 130), lint cero nuevos (71 congelados), androidTest compila, assembleRelease 19,5 MB (sin firmar: la firma canónica es CI, el keystore local no existe en este sandbox y los secrets del repo son write-only)
+- Docs: D119 en DECISIONES.md, READMEs (raíz, android con la sección v0.19.0, backend con los endpoints nuevos)
+
+Stage Summary:
+- Deliverable: tag v0.19.0 → CI firma y publica el APK en Releases (misma firma 37b6d4…, actualiza encima); copia local en download/ al terminar el run
+- Brecha 3 CERRADA con su criterio de salida ejecutado: reinstalar + segunda clave + recuperar los chats directos sin intervención manual más allá de tocar el aviso — ReinstallTest lo hace en verde en Android real
+- La ruta a 1.0 queda: Fase P (v1.0.0) — splash Cerlita, botón cámara en el chat, contraste AA del texto secundario y la semana de uso real ≥99,5% sin fallos
+- Pendiente usuario: instalar en los 2 móviles; probar el flujo real de cambio de teléfono si tienen uno viejo a mano (o reinstalar en uno: entrar de nuevo y tocar «Recuperar»); el recordatorio de export aparecerá a los 30 días del último export
+- Pendiente futuro: Fase P v1.0.0 (el informe §8.3), nada más — disciplina §8.4: no entrar en la tentación de funciones nuevas

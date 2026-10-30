@@ -1,28 +1,38 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.18.0
-«Verificación»**: la app aprende a delatarse cuando falla y el proyecto pasa
-de «confío» a «compruebo» (Fase V del informe de preparación 1.0, D114-D118):
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.19.0
+«Identidad»**: cambiar de teléfono o reinstalar deja de romper los chats
+directos (Fase I del informe de preparación 1.0, brecha 3 — D119):
 
-- **Reporte de fallos propio (D114)**: capturador fatal + no-fatal que escribe
-  traza, versión, teléfono, Android y pantalla activa a disco; bandeja al
-  arrancar (y en Ajustes → Soporte) que comparte el informe por el canal que
-  la pareja elija (Telegram/correo). Nada se envía solo. Cero dependencias.
-- **Primera prueba instrumentada del proyecto (D115)**: `FlujoCriticoTest`
-  ejecuta en Android REAL (ATD en CI) el flujo completo — alta → entrada →
-  envío con ✓ → recepción CON LA APP EN SEGUNDO PLANO (push del timbre por
-  WebSocket → /sync → descifrado → BD) — contra `:mockbackend`, un backend
-  simulado que corre en el propio dispositivo (127.0.0.1): producción intacta.
-- **Cobertura con umbral publicado (D116)**: `crypto` ≥ 70 % LINEA (medido
-  75,1 %) y ≥ 130 tests — la puerta `tools/qa/coverage_gate.py` rompe el build
-  en CI si se incumple. Números y límite Robolectric documentados en
-  `docs/qa/COBERTURA.md`.
-- **Lint con base (D117)**: 71 avisos congelados en `app/lint-baseline.xml`,
-  cualquier aviso NUEVO rompe el build.
-- **v0.17.0 «Ligera»** (previa): FUERA el 3D para siempre (D113) — el avatar
-  es 2D (cerdita y koala por capas con ropa, calzado y accesorios) o foto de
-  perfil. APK 39,8 → 18,6 MB, misma firma, actualiza encima.
+- **Conjunto de claves por usuario**: el servidor guarda hasta 5 claves
+  públicas X25519 (antes: «la última escrita gana»); login/registro/pk
+  añaden la del teléfono y devuelven su `kid` (sellado junto al keypair).
+  `users.pub` queda como espejo de la última → los clientes v0.18 siguen
+  funcionando sin saber nada del conjunto.
+- **Un wrap POR dispositivo**: al crear un chat directo, la roomKey viaja
+  envuelta para CADA clave activa del par (`dm_new` con `ws` + `fk`). El
+  wrap sabe `for_key` (a cuál clave del receptor va) y `from_key` (con cuál
+  del creador se hizo — cierra el bug latente de D74: rotar la clave del
+  creador mataba el unwrap del receptor sano).
+- **Aviso de re-emparejamiento guiado**: el teléfono que no puede abrir
+  marca `dm_stuck`; el /sync del par recibe el pedido (`rr`) CON sus claves
+  activas y re-envuelve (`dm_wraps`) sin tocar nada. En la app: banner
+  «Recupera tus chats directos» → un toque → «Esperando a la otra persona»
+  → el chat VUELVE SOLO (misma roomKey, verificada bit a bit en la prueba)
+  y el banner desaparece. La detección sale de rooms (kind/pending), de
+  los wraps que no abren (ya sin ack silencioso) y de createDm sobre un
+  chat existente sin clave (antes: «pide el código»; ahora: re-empareja).
+- **Recordatorio mensual de export cifrado**: banner en la lista de chats
+  tras 30 días sin export (máx. 1/semana) con export de UN TOQUE desde el
+  propio banner. El export de Ajustes también reinicia el contador.
+- **`ReinstallTest`** (instrumentada, criterio de salida de la Fase I):
+  reinstalación real (par X25519 nuevo), segunda clave registrada, aviso
+  alzado, toque, y el wrap del «par» (fabricado con el propio DmCrypto)
+  abre solo restaurando la roomKey original; luego envía un mensaje con ✓.
+- **v0.18.0 «Verificación»** (previa): reporte de fallos propio (D114),
+  primera instrumentada `FlujoCriticoTest` (D115), cobertura con umbral
+  (D116 — crypto 75,1 %), lint con base (D117), memoria al repo (D118).
 
 ## Qué hace (Fase 1 — MVP, modelo rooms D41-D61)
 
