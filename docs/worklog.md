@@ -351,3 +351,4 @@ Stage Summary:
 - Lo único que separa de proclamar la 1.0: su criterio de salida final — la semana de uso real de la pareja con el reporte de fallos activo, ≥99,5% de sesiones sin fallo (el reporte D114 es quien cuenta)
 - Pendiente usuario: instalar en los 2 móviles y USARLA una semana; probar splash (claro y noche), cámara, y el flujo de recuperación si reinstalan; si algo falla, el informe de fallo aparece solo al reabrir — eso es exactamente el tribunal que la 1.0 pide
 - Pendiente futuro: NADA del plan — solo lo que el uso real pida (§8.4: la lista de lo que NO entra es tan vinculante como la de lo que entra)
+- CI de v1.0.0 en SUCCESS (contraste gate + instrumentadas incluidas) y APK firmado 37b6d4… (19,6 MB) descargado a download/cerlita-chat-v1.0.0-release.apk, verificado con apksigner
