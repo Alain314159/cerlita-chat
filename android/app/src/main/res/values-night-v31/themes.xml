@@ -1,0 +1,10 @@
+<resources>
+    <!-- D120: splash del sistema en Android 12+ de noche (ciruela D108). -->
+    <style name="Theme.Chat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_cerlita_night</item>
+        <item name="android:statusBarColor">@color/splash_bg_night</item>
+        <item name="android:navigationBarColor">@color/splash_bg_night</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_bg_night</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+    </style>
+</resources>

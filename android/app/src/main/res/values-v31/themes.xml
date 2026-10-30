@@ -1,0 +1,13 @@
+<resources>
+    <!-- D120: en Android 12+ el sistema dibuja SU splash (siempre sale, no se
+         puede quitar): alinearlo con la identidad Cerlita — mismo fondo rosa
+         medido y el icono del launcher (por defecto ya lo usa el sistema).
+         De noche: values-night-v31. -->
+    <style name="Theme.Chat" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_cerlita</item>
+        <item name="android:statusBarColor">@color/splash_bg</item>
+        <item name="android:navigationBarColor">@color/splash_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/splash_bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+    </style>
+</resources>

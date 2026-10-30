@@ -79,6 +79,12 @@ jobs:
             app/build/reports/coverage/test/debug/report.xml \
             app/build/test-results/testDebugUnitTest
 
+      # D120 (Fase P): contraste del texto secundario ≥ 4,5:1 en los tres
+      # temas — medición WCAG real, no estimación (la auditoría falló su
+      # propio cálculo a ojo: H32).
+      - name: Contraste AA (umbral D120)
+        run: python3 tools/qa/contrast_gate.py
+
       # D117 (Fase V): lint con base — cero avisos NUEVOS (los 71 actuales
       # están congelados en app/lint-baseline.xml).
       - name: Lint (base D117, cero avisos nuevos)

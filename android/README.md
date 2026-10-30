@@ -1,9 +1,25 @@
 # App Android — Cerlita Chat (E2EE offline-first)
 
 Cliente del chat privado para Cuba (redes lentas/intermitentes). Package:
-`cu.alain.chat` (independiente del nombre visible — D18/P5). **v0.19.0
-«Identidad»**: cambiar de teléfono o reinstalar deja de romper los chats
-directos (Fase I del informe de preparación 1.0, brecha 3 — D119):
+`cu.alain.chat` (independiente del nombre visible — D18/P5). **v1.0.0
+«Cerlita»**: las cinco brechas del informe de preparación 1.0 CERRADAS —
+queda como criterio de salida final la semana de uso real ≥99,5% sin fallos:
+
+- **Splash Cerlita (D120)**: el rosa #F6D8D8 MEDIDO del mockup (D77) con el
+  icono cerdita+koala centrado (432 px, máscara circular) — día/noche
+  (ciruela D108 de noche) y pre-12/Android 12+ (`windowSplashScreen*`).
+  Antes: fondo navy heredado de la plantilla. Cero dependencias.
+- **Cámara en el chat (D120)**: primera opción del menú adjuntar —
+  `TakePicture` con URI del FileProvider al cache y el MISMO procesado de
+  la galería (reescala + JPEG + E2EE idéntico). El permiso solo se pide si
+  falta (las videollamadas ya lo gestionan). El temporal se autodestruye.
+- **Contraste AA medido (D120, H32)**: texto secundario del tema Cerlita
+  #7A6167 → **#594649** (4,7:1 burbuja · 5,3:1 fondo del chat · 6,6:1
+  listas). El tono que «calculó» la auditoría (#6B5157) NO llegaba a AA
+  (3,8:1) — medición WCAG real en `tools/qa/contrast_gate.py`, 15 pares,
+  puerta de CI igual que la cobertura: cambiar un color sin repensar el
+  contraste rompe el build.
+- **v0.19.0 «Identidad»** (previa) — Fase I, brecha 3 (D119):
 
 - **Conjunto de claves por usuario**: el servidor guarda hasta 5 claves
   públicas X25519 (antes: «la última escrita gana»); login/registro/pk

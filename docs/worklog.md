@@ -331,3 +331,23 @@ Stage Summary:
 - La ruta a 1.0 queda: Fase P (v1.0.0) — splash Cerlita, botón cámara en el chat, contraste AA del texto secundario y la semana de uso real ≥99,5% sin fallos
 - Pendiente usuario: instalar en los 2 móviles; probar el flujo real de cambio de teléfono si tienen uno viejo a mano (o reinstalar en uno: entrar de nuevo y tocar «Recuperar»); el recordatorio de export aparecerá a los 30 días del último export
 - Pendiente futuro: Fase P v1.0.0 (el informe §8.3), nada más — disciplina §8.4: no entrar en la tentación de funciones nuevas
+
+---
+Task ID: 2 (sesión v1.0.0)
+Agent: main (Z.ai)
+Task: v1.0.0 «Cerlita» — Fase P del informe de preparación 1.0 (brecha 4): que los primeros noventa segundos estén a la altura. Splash Cerlita, cámara para fotos en el chat y contraste AA del texto secundario. Continuación directa del «Dale» (mismo plan V-I-P, misma sesión).
+
+Work Log:
+- CI de v0.19.0 en SUCCESS (incluida ReinstallTest en el ATD) y APK firmado 37b6d4… descargado de la Release a download/cerlita-chat-v0.19.0-release.apk (verificado con apksigner)
+- Contraste AA (D120): H32 — el tono que la auditoría de octubre «calculó» (#6B5157, ~4,9:1) estaba MAL: medido con la fórmula WCAG real da 3,8:1 en burbuja y 4,3:1 en fondo del chat. El tono correcto en la misma familia ciruela (H350 S12 L31): #594649 (4,7/5,3/6,6:1). Noche y Oscuro ya cumplían — solo cambió la constante del tema Cerlita claro. Medición convertida en PUERTA: tools/qa/contrast_gate.py (15 pares espejados de Theme.kt) + paso «Contraste AA (umbral D120)» en CI — cambiar un color sin repensar el contraste rompe el build
+- Splash Cerlita (D120): windowBackground rosa medido #F6D8D8 + icono cerdita+koala 432 px con máscara circular (generado con PIL del arte del launcher — el PNG legado de 192 px quedaba blurring a 120dp en xxxhdpi); 4 variantes values/values-night/values-v31/values-night-v31 (en Android 12+ el splash del sistema alineado con windowSplashScreenBackground/AnimatedIcon; de noche ciruela #20191C). Cero dependencias
+- Cámara en el chat (D120): primera opción del menú adjuntar; TakePicture con URI del FileProvider (cache-path ya existía), MISMO Attach.processImage de la galería (envío E2EE idéntico), borrado del temporal tras procesar. Como el manifest declara CAMERA (videollamadas), el permiso se comprueba antes y solo se pide si falta. Bug propio cazado a tiempo: runCatching{asignación} devuelve Unit → launch(Unit) no compila; reestructurado con val uri explícito
+- 136/136 unit · lint cero nuevos · cripto 75,1% · contraste 15/15 ≥ 4,5:1 · assembleRelease 19,6 MB (firma de CI) · versionCode 22 / 1.0.0
+- Docs: D120 en DECISIONES.md, READMEs (raíz + android)
+
+Stage Summary:
+- Deliverable: tag v1.0.0 → CI firma y publica el APK en Releases (misma firma 37b6d4…, actualiza encima); copia local en download/ al terminar el run
+- LAS CINCO BRECHAS DEL INFORME 1.0 CERRADAS: 1 (D114) · 2 (D115) · 3 (D119) · 4 (D120) · 5 (D116/D117) — plan V-I-P completo
+- Lo único que separa de proclamar la 1.0: su criterio de salida final — la semana de uso real de la pareja con el reporte de fallos activo, ≥99,5% de sesiones sin fallo (el reporte D114 es quien cuenta)
+- Pendiente usuario: instalar en los 2 móviles y USARLA una semana; probar splash (claro y noche), cámara, y el flujo de recuperación si reinstalan; si algo falla, el informe de fallo aparece solo al reabrir — eso es exactamente el tribunal que la 1.0 pide
+- Pendiente futuro: NADA del plan — solo lo que el uso real pida (§8.4: la lista de lo que NO entra es tan vinculante como la de lo que entra)

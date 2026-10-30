@@ -79,7 +79,9 @@ private val CerlitaScheme = lightColorScheme(
     surface = Color(0xFFFBEAEA),          // tarjetas y barra inferior
     onSurface = Color(0xFF4A3D3F),
     surfaceVariant = Color(0xFFCCBABA),   // burbujas recibidas (gris malva del mockup)
-    onSurfaceVariant = Color(0xFF7A6167),
+    onSurfaceVariant = Color(0xFF594649), // D120: AA 4,7-5,3:1 (era #7A6167 → 3,0:1; el
+                                          // tono de la auditoría #6B5157 tampoco llegaba:
+                                          // 3,8:1 — medir, no estimar, tools/qa/contrast_gate.py)
     surfaceContainer = Color(0xFFFBE9E9),
     surfaceContainerLow = Color(0xFFFBEFEF),
     surfaceContainerHigh = Color(0xFFF8E2E4),

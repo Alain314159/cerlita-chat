@@ -538,3 +538,21 @@ Validación: `validate_glbs` 16/16 prendas + 3 anims + skin por GLB; rasters det
 **Lo que NO cambia**: el wire de mensajes, el E2EE (el servidor sigue viendo solo blobs opacos; los nuevos campos son metadatos de emparejamiento que ya existían implícitos), el código de invitación (sigue como camino manual para grupos y para DMs si el par también perdiera el acceso — caso export), y el modelo de amenaza (quien controla el servidor puede subir claves nuevas de un usuario, igual que antes podía reemplazar users.pub: la defensa sigue siendo el SAS/verificación por voz y el E2EE del contenido).
 
 **Cierre**: brecha 3 CERRADA con su criterio de salida ejecutado en verde. Queda la Fase P (v1.0.0): splash Cerlita, cámara en el chat, contraste AA y la semana de uso real.
+
+## D120 — Primera impresión de 1.0: splash Cerlita, cámara en el chat y contraste AA medido (v1.0.0)
+
+**Contexto.** Brecha 4 del informe de preparación 1.0 (§4.4, «primera impresión sin pulir»): «una 1.0 se juzga en los primeros noventa segundos, y hoy esos segundos tienen tres rozones» — pantalla de arranque con un fondo navy ajeno a la paleta, fotos que obligan a salir de la app para usar la cámara, y un texto secundario por debajo del umbral AA de accesibilidad (con el tono correcto ya «calculado» por la auditoría de octubre). Fase P, la última del plan V-I-P.
+
+**Decisión.** Los tres rozones, cerrados:
+
+1. **Splash Cerlita**: `windowBackground` con el rosa de las listas MEDIDO del mockup (#F6D8D8, D77) y el icono cerdita+koala centrado (`drawable-nodpi/splash_icon.png`, 432 px con máscara circular generada del arte del launcher — el PNG legado de 192 px quedaba blurring a 120dp en xxxhdpi). Cuatro variantes de recurso: día/noche × pre-31/API 31+ (en Android 12+ el sistema dibuja SU splash: `windowSplashScreenBackground` + `AnimatedIcon` alineados con la misma paleta; de noche, ciruela #20191C de D108 para no disparar un flash rosa en modo oscuro). Cero dependencias: XML + un PNG.
+
+2. **Cámara para fotos en el chat**: primera opción del menú adjuntar. `TakePicture` con URI propia del FileProvider al cache, y la captura pasa por el MISMO `Attach.processImage` de la galería (reescala + JPEG) — el envío es idéntico por dentro, E2EE incluido. Como el manifest DECLARA CAMERA (videollamadas), con EXTRA_OUTPUT el permiso debe estar concedido: se comprueba antes y solo se pide si falta (quien ya llamó por vídeo lo tiene). El temporal se borra tras procesarlo.
+
+3. **Contraste AA del texto secundario — H32**: el tono que la auditoría «calculó» (#6B5157, ~4,9:1 supuestamente) **estaba mal**: medido con la fórmula WCAG real da 3,8:1 sobre la burbuja recibida y 4,3:1 sobre el fondo del chat. El tono que cumple en todos los fondos realistas (misma familia ciruela H=350° S=12% L=31%) es **#594649**: 4,7:1 burbuja · 5,3:1 fondo del chat · 6,6:1 listas · 5,8:1 burbuja enviada. Noche y Oscuro ya cumplían (5,7-9,0:1) — solo cambió la constante del tema Cerlita claro. La medición quedó convertida en PUERTA de CI (`tools/qa/contrast_gate.py`, 15 pares texto/fondo espejados de Theme.kt): cambiar un color sin repensar el contraste rompe el build, igual que la cobertura D116 y el lint D117. Lección que repite D77 («medir píxeles > estimar VLM»): los tonos de accesibilidad también se calculan, no se estiman a ojo — ni siquiera los de la propia auditoría.
+
+**Descartes**: la librería `core-splashscreen` (la vía XML + v31 cubre minSdk 24→36 sin una dependencia nueva); un splash animado (no es el estándar de la pareja ni cabe en «primera impresión sobria»); videomensajes, catálogo de juegos y conecta-4 — TODO lo que el informe §8.4 prohíbe para la 1.0.
+
+**Validación**: 136/136 unit · instrumentadas (flujo crítico + reinstalación) en CI · lint cero nuevos · cripto 75,1% · contraste 15/15 pares ≥ 4,5:1 (puerta nueva) · APK 19,6 MB, misma firma.
+
+**Con esto el CÓDIGO de la 1.0 está completo**: las cinco brechas del informe cerradas (1 D114 · 2 D115 · 3 D119 · 4 D120 · 5 D116/D117). Lo único que separa de proclamar la 1.0 es su criterio de salida final: la semana de uso real de la pareja con el reporte de fallos activo, ≥99,5% de sesiones sin fallo — el tribunal que ninguna suite puede sustituir.

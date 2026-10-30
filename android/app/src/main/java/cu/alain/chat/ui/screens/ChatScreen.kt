@@ -3,8 +3,11 @@ package cu.alain.chat.ui.screens
 import android.Manifest
 import android.graphics.Bitmap
 import android.media.MediaRecorder
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -39,6 +42,7 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.VideogameAsset
@@ -207,6 +211,58 @@ fun ChatScreen(app: ChatApp, roomId: String, onOpenGame: (String) -> Unit = {}) 
     }
 
     // ── pickers de adjuntos ──
+    // D120 (Fase P): cámara para fotos en el chat — la fricción diaria de
+    // «salir de la app para hacer la foto y volver a entrar» (informe 1.0
+    // §4.4). La captura va al cache con URI propia del FileProvider y pasa
+    // por el MISMO Attach.processImage de la galería (reescala + JPEG): el
+    // envío es idéntico por dentro. Como el manifest DECLARA CAMERA (para
+    // las videollamadas), con EXTRA_OUTPUT hay que tenerlo concedido — se
+    // pide solo si falta (quien ya llamó por vídeo lo tiene).
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingCameraFile by remember { mutableStateOf<java.io.File?>(null) }
+    val takePicture = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { ok ->
+        val uri = cameraUri
+        cameraUri = null
+        if (ok && uri != null) {
+            scope.launch {
+                val processed = withContext(Dispatchers.IO) { Attach.processImage(ctx, uri) }
+                runCatching { ctx.contentResolver.delete(uri, null, null) } // temporal fuera
+                if (processed == null) { sendError = "No se pudo capturar esa foto"; return@launch }
+                val (bytes, w, h) = processed
+                app.engine.sendAttachment(
+                    roomId = roomId,
+                    type = AttachmentMsg.TYPE_IMAGE,
+                    name = "Foto",
+                    mime = "image/jpeg",
+                    ext = "jpg",
+                    originalSize = bytes.size.toLong(),
+                    bytes = bytes,
+                    width = w, height = h,
+                    onProgress = { id, f -> uploadProgress[id] = f },
+                ).onSuccess { WorkSync.kickOutbox(app); app.engine.poke(); uploadProgress.clear() }
+                    .onFailure { e -> sendError = e.message ?: "No se pudo enviar la foto" }
+            }
+        }
+    }
+    val launchCamera: (java.io.File) -> Unit = { f ->
+        val uri = runCatching {
+            FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
+        }.getOrNull()
+        if (uri != null) {
+            cameraUri = uri
+            takePicture.launch(uri)
+        }
+    }
+    val camPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { ok ->
+        val f = pendingCameraFile
+        pendingCameraFile = null
+        if (ok && f != null) launchCamera(f)
+        else if (!ok) sendError = "Sin permiso de cámara no hay fotos"
+    }
     val pickImage = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
@@ -558,6 +614,22 @@ fun ChatScreen(app: ChatApp, roomId: String, onOpenGame: (String) -> Unit = {}) 
 
     // ── menú adjuntar ──
     DropdownMenu(expanded = showAttachMenu, onDismissRequest = { showAttachMenu = false }) {
+        DropdownMenuItem(
+            text = { Text("Cámara") },
+            leadingIcon = { Icon(Icons.Default.PhotoCamera, null) },
+            onClick = {
+                showAttachMenu = false
+                val f = java.io.File(ctx.cacheDir, "camera_${System.currentTimeMillis()}.jpg")
+                if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    launchCamera(f)
+                } else {
+                    pendingCameraFile = f
+                    camPermission.launch(Manifest.permission.CAMERA)
+                }
+            },
+        )
         DropdownMenuItem(
             text = { Text("Foto") },
             leadingIcon = { Icon(Icons.Default.Image, null) },

@@ -1,9 +1,15 @@
 <resources>
+    <!-- D120 (Fase P): splash Cerlita — el rosa de las listas MEDIDO del
+         mockup (D77) con el icono cerdita+koala centrado. Antes: fondo navy
+         #0B1220 heredado de la plantilla, ajeno a la paleta (informe 1.0
+         §4.4 «primera impresión sin pulir»). De noche: values-night. -->
     <color name="bg">#0B1220</color>
+    <color name="splash_bg">#F6D8D8</color>
+    <color name="splash_bg_night">#20191C</color>
 
     <style name="Theme.Chat" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/bg</item>
-        <item name="android:statusBarColor">@color/bg</item>
-        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowBackground">@drawable/splash_cerlita</item>
+        <item name="android:statusBarColor">@color/splash_bg</item>
+        <item name="android:navigationBarColor">@color/splash_bg</item>
     </style>
 </resources>

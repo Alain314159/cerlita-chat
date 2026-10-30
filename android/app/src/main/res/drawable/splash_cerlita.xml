@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- D120 (Fase P): splash Cerlita — el rosa de las listas MEDIDO del mockup
+     (D77: #F6D8D8) con el icono cerdita+koala centrado. Antes: fondo navy
+     #0B1220 heredado de la plantilla, ajeno a la paleta (informe 1.0 §4.4). -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/splash_bg" />
+    <item
+        android:width="128dp"
+        android:height="128dp"
+        android:gravity="center"
+        android:drawable="@drawable/splash_icon" />
+</layer-list>
