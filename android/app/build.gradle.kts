@@ -5,6 +5,10 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+    // D121: Firebase — genera recursos desde google-services.json y sube el
+    // mapping de R8 a Crashlytics (de-obfuscación de trazas en la consola)
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.firebase.crashlytics)
 }
 
 // Firma release: android/keystore.properties (gitignored) apunta al keystore real.
@@ -133,6 +137,14 @@ dependencies {
     implementation(libs.argon2kt)
     implementation(libs.androidx.exifinterface) // rotación EXIF al comprimir fotos (D76)
     implementation(libs.stream.webrtc)         // llamadas audio/vídeo (D75): libwebrtc
+
+    // D121: Firebase — FCM como 5ª capa de despertar (el canal persistente de
+    // Google Play Services: cero batería extra) + Crashlytics en la nube.
+    // El BOM fija versiones coordinadas; sin Play Services la app degrada a
+    // las capas ya existentes (timbre WS / ntfy / alarma / worker).
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.firebase.crashlytics)
 
     testImplementation(kotlin("test")) // tests JVM puros de cripto (sin Android)
     testImplementation("junit:junit:4.13.2")

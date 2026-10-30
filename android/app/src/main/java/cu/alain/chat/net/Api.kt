@@ -210,6 +210,15 @@ class Api(private val baseUrl: () -> String) {
         try { post("/auth", JSONObject().put("a", "out"), token) } catch (_: Exception) { }
     }
 
+    /** D121: registra el token FCM de ESTA sesión (POST /push). Best-effort:
+     *  false sin red; el próximo arranque/login reintenta (ChatApp.registerFcmToken). */
+    suspend fun registerPush(token: String, fcm: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val (code, _) = post("/push", JSONObject().put("t", fcm), token)
+            code == 200
+        } catch (_: Exception) { false }
+    }
+
     /** D93: datos de la sesión actual (GET /auth) — alimenta el contador de
      *  días restantes de Ajustes. Best-effort: null sin red o sesión inválida. */
     suspend fun whoami(token: String): AuthResp? = withContext(Dispatchers.IO) {

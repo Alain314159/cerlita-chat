@@ -352,3 +352,21 @@ Stage Summary:
 - Pendiente usuario: instalar en los 2 móviles y USARLA una semana; probar splash (claro y noche), cámara, y el flujo de recuperación si reinstalan; si algo falla, el informe de fallo aparece solo al reabrir — eso es exactamente el tribunal que la 1.0 pide
 - Pendiente futuro: NADA del plan — solo lo que el uso real pida (§8.4: la lista de lo que NO entra es tan vinculante como la de lo que entra)
 - CI de v1.0.0 en SUCCESS (contraste gate + instrumentadas incluidas) y APK firmado 37b6d4… (19,6 MB) descargado a download/cerlita-chat-v1.0.0-release.apk, verificado con apksigner
+
+## Sesión 2026-10-30 (noche) — Firebase: FCM + Crashlytics + Test Lab preparado
+
+**Mandato del usuario**: tomar control del proyecto Firebase `cerlita-chat` (SA provista), añadir FCM ("al final es lo mejor"), añadir Crashlytics, y NO gastar las pruebas limitadas de Test Lab sin estar todo verificado. "La IA de Google está activada, úsala si sirve" (sondeo: Vertex no accesible con la SA — documentado en D121).
+
+**Hecho, en orden**:
+
+1. Llave SA asegurada (`~/.secrets/`, `upload/` añadido a .gitignore — no estaba). Proyecto: `cerlita-chat` (nº 529004303768).
+2. gcloud CLI instalado (tarball 94 MB) + SA autenticada. La SA (rol Firebase Admin) NO puede: listar/habilitar APIs, tocarse IAM a sí misma (correcto de Google). SÍ puede: Management API de Firebase (registró la app Android y bajó google-services.json) y enviar FCM.
+3. App `cu.alain.chat` registrada por REST (POST androidApps + getConfig base64). appId 1:529004303768:android:6495d8012f3bc0826ac7ed.
+4. SDK Android completo en sandbox: cmdline-tools 16111833 (el 11076708 de 2024 no conoce android-37 — la plataforma se llama `android-37.2` ahora, hallazgo), build-tools 37, platform-tools. JDK Temurin 21 portable (el del sistema es JRE sin javac).
+5. Código Android: BOM 35.1.0/google-services 4.5.0/crashlytics 3.0.8 (verificados en maven-metadata), `notify/FcmPush.kt` (CerlitaFcmService + ensureRegistered + handlePing al pipeline ntfy), manifest (servicio + canal), `Api.registerPush`, hook en `syncDoorbell` (único punto de decisión D72) + `Prefs.sentFcmToken`, puente no-fatales en CrashReporter (espejo, el disco local manda).
+6. Código backend: migración 0007 (sessions.fcm_token + índice parcial), función `push` (registro + dedup de token entre sesiones), outbox con `sendFcm` (JWT RS256 WebCrypto casero, access token cacheado 50 min, ping idéntico al de ntfy, ≤8 filas ≤3400 chars → despertador puro, auto-limpieza de tokens 404, `Promise.allSettled` best-effort), deploy_functions.py con "push" + secret opcional FCM_SA_JSON (degrada a "no-sa" sin él).
+7. Verificación completa ANTES de Test Lab (regla de la sesión): 136/136 tests JVM, lint cero nuevos (3 congelados en baseline), cobertura gate OK (cripto intacta, 136 ≥ 130), assembleDebug 68,9 MB + assembleRelease R8 20,1 MB, bundles bun outbox/push OK, y **OAuth+FCM contra Google real**: JWT casero → 200 access_token; send con token falso → 400 INVALID_ARGUMENT (permiso de envío confirmado).
+8. Test Lab: **bloqueado** — testing/toolresults devuelven 404 (APIs no habilitadas) y falta rol testAdmin para la SA. Solo el dueño puede: quedan 2 clics documentados para el usuario. La primera matriz (instrumentación, 1 físico) está lista para lanzar apenas habilite.
+9. IA de Google: Vertex inaccesible con la SA (404/403) — pendiente opcional vía AI Studio API key si algún día se quiere IA en la app (D121 lo deja anotado).
+
+**Estado**: todo commiteado (ver abajo). El despliegue del backend (migration 0007 + funciones push/outbox con FCM_SA_JSON) requiere el SUPA_TOKEN del usuario o que lo corra él: comando único documentado.

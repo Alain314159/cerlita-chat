@@ -33,6 +33,148 @@ function toHex(b: Uint8Array): string {
 }
 const fail = (e: unknown) => DEBUG ? { e: "internal", d: String(e) } : { e: "internal" };
 
+// ── FCM v1 (D121): JWT RS256 de la service account con WebCrypto ──────────
+// Mismo contrato que el resto del backend: best-effort, nunca lanza, y sin
+// FCM_SA_JSON en el entorno simplemente no hay 5ª capa (todo sigue igual).
+interface FcmSa {
+  client_email: string;
+  private_key: string;
+  project_id: string;
+}
+
+/** Base64url de ASCII (solo header/claims del JWT — sin Unicode). */
+function b64url(s: string): string {
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** PEM PKCS8 → DER para importKey. */
+function pemToDer(pem: string): Uint8Array {
+  const body = pem.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, "").replace(/\s+/g, "");
+  return unb64(body);
+}
+
+/** Access token OAuth2 firmado con la SA (cacheado ~50 min en el proceso). */
+async function fcmAccessToken(sa: FcmSa): Promise<string> {
+  const g = globalThis as { __fcmTok?: { tok: string; exp: number } };
+  if (g.__fcmTok && g.__fcmTok.exp > Date.now()) return g.__fcmTok.tok;
+  const now = Math.floor(Date.now() / 1000);
+  const header = { alg: "RS256", typ: "JWT" };
+  const claims = {
+    iss: sa.client_email,
+    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  };
+  const unsigned = b64url(JSON.stringify(header)) + "." + b64url(JSON.stringify(claims));
+  const key = await crypto.subtle.importKey(
+    "pkcs8", pemToDer(sa.private_key),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, enc.encode(unsigned)));
+  const jwt = unsigned + "." .concat(Array.from(sig, (c) => String.fromCharCode(c)).join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const r = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }),
+  });
+  if (!r.ok) throw new Error("oauth " + r.status);
+  const j = await r.json();
+  g.__fcmTok = { tok: j.access_token, exp: Date.now() + 50 * 60 * 1000 };
+  return j.access_token;
+}
+
+/** ByteA → base64 para armar las filas del ping (espejo de Ntfy.buildPing). */
+function u8ToB64(b: Uint8Array): string {
+  let s = "";
+  for (const x of b) s += String.fromCharCode(x);
+  return btoa(s);
+}
+
+const FCM_PING_MAX = 3400; // == C.NTFY_PING_MAX: data message FCM admite 4 KB
+const FCM_PING_ROWS = 8;   // == C.NTFY_PING_ROWS
+
+/**
+ * 5ª capa de despertar (D121): ping FCM a las sesiones CON token de los
+ * demás miembros (mis OTROS dispositivos incluidos — multi-dispositivo D119).
+ * El payload es EXACTAMENTE el mismo formato del ping ntfy, así el receptor
+ * reutiliza parser, ingest y /sync de confirmación: cero código nuevo ahí.
+ * Devuelve un string de diagnóstico (solo se ve con DEBUG=1).
+ */
+async function sendFcm(
+  room: string,
+  senderUid: string,
+  senderDevice: string,
+  insertedIds: string[],
+): Promise<string> {
+  const saRaw = Deno.env.get("FCM_SA_JSON");
+  if (!saRaw) return "no-sa"; // despliegue sin FCM configurado: capa apagada
+  const sa: FcmSa = JSON.parse(saRaw);
+
+  // Destinatarios: sesiones vivas con token, miembros de la sala, excluida
+  // SOLO la sesión emisora (uid+device). SELECT DISTINCT: varias sesiones del
+  // mismo user+device (re-login) no duplican si registraron el mismo token
+  // (la función push ya lo limpia, pero DISTINCT es la red de seguridad).
+  const dests = await sql`
+    select distinct s.fcm_token as tok from sessions s
+    join room_members rm on rm.user_id = s.user_id
+    where rm.room_id = ${room}::uuid
+      and s.revoked_at is null and s.expires_at > now()
+      and s.fcm_token is not null
+      and (s.user_id <> ${senderUid}::uuid or s.device_id <> ${senderDevice})`;
+  if (dests.length === 0) return "no-dest";
+
+  // Filas del ping: los recién insertados con el MISMO orden posicional que
+  // /sync ([msgId, uid, seq=0, nonce, ct, uname, ts_ms]) — seq la llena el
+  // /sync del receptor, igual que en ntfy.
+  const [sender] = await sql`select username from users where id = ${senderUid}::uuid limit 1`;
+  const uname = String(sender?.username ?? "");
+  const rows = await sql`
+    select m.msg_id as mid, encode(m.nonce, 'base64') as nb,
+           encode(m.ciphertext, 'base64') as cb,
+           (extract(epoch from coalesce(m.client_ts, m.created_at)) * 1000)::bigint as ts
+    from messages m
+    where m.msg_id = any(${insertedIds}::uuid[])
+    order by coalesce(m.client_ts, m.created_at) asc`;
+
+  let ping = `{"v":1,"r":"${room}"}`; // despertador puro (fallback)
+  const build = (n: number) => {
+    const m = rows.slice(-n).map((r: Record<string, unknown>) =>
+      `["${r.mid}","${senderUid}",0,"${r.nb}","${r.cb}","${uname}",${r.ts ?? 0}]`);
+    return `{"v":1,"r":"${room}","m":[${m.join(",")}]}`;
+  };
+  for (const n of [FCM_PING_ROWS, 1]) {
+    if (rows.length === 0) break;
+    const cand = build(n);
+    if (cand.length <= FCM_PING_MAX) { ping = cand; break; }
+  }
+
+  const tok = await fcmAccessToken(sa);
+  const results = await Promise.allSettled(dests.map(async (d: { tok: string }) => {
+    const r = await fetch(`https://fcm.googleapis.com/v1/projects/${sa.project_id}/messages:send`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${tok}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        message: {
+          token: d.tok,
+          android: { priority: "HIGH" }, // data message: despierta hasta con la app muerta
+          data: { p: ping },
+        },
+      }),
+    });
+    if (r.status === 404 || r.status === 400) {
+      // Token muerto (uninstall/rotado): auto-limpieza para no volver a intentar
+      await sql`update sessions set fcm_token = null where fcm_token = ${d.tok}`;
+    }
+    return r.status;
+  }));
+  const ok = results.filter((x) => x.status === "fulfilled" && x.value < 300).length;
+  return `sent ${ok}/${dests.length} (${ping.length}B)`;
+}
+
 Deno.serve(async (req) => {
   try {
     if (req.method !== "POST") return json(405, { e: "method" });
@@ -106,6 +248,7 @@ Deno.serve(async (req) => {
     //      del broadcast (la sb_secret_ nueva da 401/403 en Realtime; el canal
     //      es inadivinable: roomId = HKDF(roomKey) de 128 bits).
     let bell = "skip"; // diagnóstico solo con DEBUG=1
+    let fcm = "skip";
     if (inserted.length > 0) {
       try {
         const surl = (Deno.env.get("SUPABASE_URL") ?? "").replace(/\/$/, "");
@@ -137,10 +280,20 @@ Deno.serve(async (req) => {
         // timbre caído ≠ mensaje perdido: el sync programado lo trae igual
       }
     }
-    if (DEBUG) console.log("doorbell:", bell, "inserted:", inserted.length);
+    // D121: 5ª capa — FCM a los demás dispositivos con Play Services. Igual
+    // que el timbre: best-effort, un fallo aquí NUNCA rompe el ack del lote.
+    if (inserted.length > 0) {
+      try {
+        fcm = await sendFcm(room, uid, String(me.did), inserted.map((r: { msg_id: string }) => r.msg_id));
+      } catch (e) {
+        fcm = "err " + String(e).slice(0, 120);
+        // FCM caído ≠ mensaje perdido: timbre/ntfy/alarma/worker lo cubren
+      }
+    }
+    if (DEBUG) console.log("doorbell:", bell, "fcm:", fcm, "inserted:", inserted.length);
 
     return json(200, DEBUG
-      ? { a: acked.map((r) => r.msg_id), bell, n_ins: inserted.length }
+      ? { a: acked.map((r) => r.msg_id), bell, fcm, n_ins: inserted.length }
       : { a: acked.map((r) => r.msg_id) });
   } catch (e) {
     console.error("outbox error:", e);

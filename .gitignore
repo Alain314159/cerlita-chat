@@ -47,3 +47,6 @@ captures/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Credenciales subidas por el usuario (nunca al repo)
+upload/

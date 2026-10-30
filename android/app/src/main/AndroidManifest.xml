@@ -105,6 +105,24 @@
             android:enabled="true"
             android:exported="false" />
 
+        <!-- D121: 5ª capa de despertar — FCM (data messages de alta prioridad;
+             con la app muerta el sistema arranca el proceso y el ping cifrado
+             entra por el mismo pipeline del receptor ntfy). Solo existe donde
+             hay Play Services: en el resto de teléfonos las otras 4 capas
+             cubren igual que siempre. -->
+        <service
+            android:name=".notify.CerlitaFcmService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+        <!-- Canal por defecto si llegara un notification message puro (no
+             esperado: usamos data messages, pero por si acaso). == Notifier.MESSAGES_CHANNEL -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="messages" />
+
         <!-- Compartir el export cifrado del historial -->
         <provider
             android:name="androidx.core.content.FileProvider"

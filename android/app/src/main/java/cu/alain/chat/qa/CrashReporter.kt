@@ -31,6 +31,13 @@ import java.util.Locale
  * de fuga de metadatos que el modelo E2EE no necesita). El informe lleva
  * traza, versión, modelo, Android, pantalla activa y cola de logcat propia —
  * exactamente lo que pide el criterio de salida de la Fase V.
+ *
+ * D121: Firebase Crashlytics se añade como ESPEJO en la nube del mismo fallo
+ * (fatales: automáticos del SDK; no fatales: reenviados aquí). El informe
+ * local NO se toca: sigue siendo la copia privada de la pareja, entregada
+ * solo si ella quiere. Lo que viaja a Google es la traza de stack — nunca
+ * contenido de mensajes ni claves (el código E2EE no las pone en excepciones).
+ * Sin Play Services la llamada degrada en silencio y el disco local manda.
  */
 object CrashReporter {
 
@@ -85,11 +92,18 @@ object CrashReporter {
         prune()
     }
 
-    /** Fallo no fatal (CoroutineExceptionHandler del scope de la app). */
+    /** Fallo no fatal (CoroutineExceptionHandler del scope de la app).
+     *  D121: además lo refleja en Crashlytics (best-effort, sin Play Services: no-op). */
     fun reportNonFatal(e: Throwable) {
         try {
             write(fatal = false, thread = Thread.currentThread(), e = e)
         } catch (_: Throwable) {
+        }
+        try {
+            com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance()
+                .recordException(e)
+        } catch (_: Throwable) {
+            // sin Firebase/Play Services en este teléfono: solo quedó el disco local
         }
     }
 

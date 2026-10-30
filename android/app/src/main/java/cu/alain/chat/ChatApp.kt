@@ -11,6 +11,7 @@ import cu.alain.chat.net.Api
 import cu.alain.chat.net.Ntfy
 import cu.alain.chat.notify.Doorbell
 import cu.alain.chat.notify.DoorbellService
+import cu.alain.chat.notify.FcmPush
 import cu.alain.chat.notify.Notifier
 import cu.alain.chat.notify.NtfyChannel
 import cu.alain.chat.notify.RealtimeDoorbell
@@ -190,6 +191,20 @@ class ChatApp : Application(), Configuration.Provider {
         // vivo es redundante y barata; con FGS muerto por el OEM es la que
         // acota el daño a ≤ 6 min). Sin sesión: nada que despertar.
         if (hasSession) SyncAlarm.schedule(this) else SyncAlarm.cancel(this)
+        // D121: 5ª capa — FCM por el canal persistente de Play Services.
+        // Sin sesión se olvida el token enviado: el próximo login re-registra
+        // contra la fila de sesión NUEVA (la vieja queda revocada en el servidor).
+        if (hasSession) FcmPush.ensureRegistered(this) else prefs.sentFcmToken = null
+    }
+
+    /** D121: registra el token FCM de esta sesión en el servidor (best-effort:
+     *  falló la red → lo reintenta el próximo arranque/login; nunca rompe nada). */
+    fun registerFcmToken(token: String) {
+        val s = store.session ?: return
+        appScope.launch {
+            val ok = try { api.registerPush(s.token, token) } catch (_: Exception) { false }
+            if (ok) prefs.sentFcmToken = token
+        }
     }
 
     private fun startAppDoorbell() {
@@ -305,6 +320,13 @@ class Prefs(ctx: Context) {
             }
             return d
         }
+
+    /** D121: último token FCM YA registrado en la sesión del servidor (null =
+     *  pendiente: lo re-envía el próximo ensureRegistered). Solo tiene sentido
+     *  con Play Services; en el resto de teléfonos queda null para siempre. */
+    var sentFcmToken: String?
+        get() = sp.getString(FcmPush.PREF_SENT, null)
+        set(v) = sp.edit().putString(FcmPush.PREF_SENT, v).apply()
 
     var askedNotifPermission: Boolean
         get() = sp.getBoolean("asked_notif", false)

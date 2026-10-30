@@ -768,4 +768,46 @@
             column="25"/>
     </issue>
 
-</issues>
+<issue
+        id="NewerVersionAvailable"
+        severity="Warning"
+        message="A newer version of org.json:json than 20240303 is available: 20260814"
+        category="Correctness"
+        priority="4"
+        summary="Newer Library Versions Available"
+        explanation="This detector checks with a central repository to see if there are newer versions available for the dependencies used by this project. This is similar to the `GradleDependency` check, which checks for newer versions available in the Android SDK tools and libraries, but this works with any MavenCentral dependency, and connects to the library every time, which makes it more flexible but also **much** slower."
+        errorLine1="    testImplementation(&quot;org.json:json:20240303&quot;) // JSONObject/JSONArray reales en JVM (import/export)"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="/home/z/my-project/android/app/build.gradle.kts"
+            line="151"
+            column="24"/>
+    </issue><issue
+        id="UnusedResources"
+        severity="Warning"
+        message="The resource `R.color.bg` appears to be unused"
+        category="Performance"
+        priority="3"
+        summary="Unused resources"
+        explanation="Unused resources make applications larger and slow down builds.&#xA;&#xA;&#xA;The unused resource check can ignore tests. If you want to include resources that are only referenced from tests, consider packaging them in a test source set instead.&#xA;&#xA;You can include test sources in the unused resource check by setting the system property lint.unused-resources.include-tests =true, and to exclude them (usually for performance reasons), use lint.unused-resources.exclude-tests =true.&#xA;,"
+        errorLine1="    &lt;color name=&quot;bg&quot;>#0B1220&lt;/color>"
+        errorLine2="           ~~~~~~~~~">
+        <location
+            file="/home/z/my-project/android/app/src/main/res/values/themes.xml"
+            line="6"
+            column="12"/>
+    </issue><issue
+        id="UseKtx"
+        severity="Warning"
+        message="Use the KTX extension function `SharedPreferences.edit` instead?"
+        category="Productivity"
+        priority="6"
+        summary="Use KTX extension function"
+        explanation="The Android KTX libraries decorates the Android platform SDK as well as various libraries with more convenient extension functions available from Kotlin, allowing you to use default parameters, named parameters, and more."
+        errorLine1="        else sp.edit().putString(k, v).apply()"
+        errorLine2="             ~~~~~~~~~">
+        <location
+            file="/home/z/my-project/android/app/src/main/java/cu/alain/chat/ChatApp.kt"
+            line="373"
+            column="14"/>
+    </issue></issues>

@@ -33,7 +33,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import api  # noqa: E402
 
-FUNCTIONS = ["auth", "sync", "outbox", "heartbeat", "files", "turn"]
+FUNCTIONS = ["auth", "sync", "outbox", "heartbeat", "files", "turn", "push"]
 BACKEND = Path(__file__).resolve().parents[1]
 BUILD = BACKEND / "build"
 
@@ -152,6 +152,21 @@ def set_secrets(debug: str) -> bool:
         {"name": "TURN_USER", "value": turn_user},
         {"name": "TURN_PASS", "value": turn_pass},
     ]
+
+    # D121: FCM — el JSON COMPLETO de la service account de Firebase como secret.
+    # Opcional: sin él, el outbox se despliega igual y la 5ª capa queda apagada
+    # ("no-sa" en diagnóstico). Fuentes (en orden): env FCM_SA_JSON, o el
+    # archivo secrets/fcm-sa.json (nunca al repo).
+    fcm_sa = os.environ.get("FCM_SA_JSON")
+    if not fcm_sa:
+        sa_file = BACKEND.parent / "secrets" / "fcm-sa.json"
+        if sa_file.exists():
+            fcm_sa = sa_file.read_text(encoding="utf-8").strip()
+    if fcm_sa and '"client_email"' in fcm_sa:
+        secret_sets.append({"name": "FCM_SA_JSON", "value": fcm_sa})
+        print("FCM_SA_JSON: incluido (5ª capa de despertar activa)")
+    else:
+        print("AVISO: sin FCM_SA_JSON (env o secrets/fcm-sa.json) — FCM queda apagado")
     for body in (secret_sets, {"secrets": secret_sets}):
         st, res = api.call("POST", f"/v1/projects/{api.ref()}/secrets", body)
         if st in api.OK:
