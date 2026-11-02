@@ -16,6 +16,8 @@ ghp_*
 sbp_*
 secrets/
 **/secrets/
+download/fcm-sa.json
+download/*firebase*.json
 
 # ============================================================
 # Backend — artefactos de build (el código fuente SÍ se commitea)
