@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "529004303768",
+    "project_id": "cerlita-chat",
+    "storage_bucket": "cerlita-chat.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:529004303768:android:6495d8012f3bc0826ac7ed",
+        "android_client_info": {
+          "package_name": "cu.alain.chat"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD6GEGfrbAekcyS-HmxY0iceh6ftAdlz_g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
