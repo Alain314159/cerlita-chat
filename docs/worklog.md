@@ -370,3 +370,21 @@ Stage Summary:
 9. IA de Google: Vertex inaccesible con la SA (404/403) — pendiente opcional vía AI Studio API key si algún día se quiere IA en la app (D121 lo deja anotado).
 
 **Estado**: todo commiteado (ver abajo). El despliegue del backend (migration 0007 + funciones push/outbox con FCM_SA_JSON) requiere el SUPA_TOKEN del usuario o que lo corra él: comando único documentado.
+
+## Sesión 2026-11-02 — Recuperación tras reciclado del sandbox + Test Lab (2ª parte)
+
+**Contexto**: el sandbox se recicló (home limpio, /home/z/my-project persistió). GitHub era la fuente de verdad: el push de la sesión anterior nunca llegó a hacerse — el trabajo FCM (95402fe) vivía solo en local.
+
+**Hecho, en orden**:
+
+1. **Auditoría**: SDK Android, Gradle (cachés), gcloud-tarball y `download/fcm-sa.json` sobrevivieron. Perdidos: `~/.secrets/`, JDK, gcloud instalado, `local.properties`, `google-services.json` (gitignored) y los APKs compilados.
+2. **Llave re-asegurada** en `~/.secrets/fcm-sa.json` + backup `/tmp`. Nunca se imprimió.
+3. **Cirugía git crítica**: un auto-snapshot del sandbox (`c7a68fe`) había commiteado `download/fcm-sa.json` — la llave SA estaba en el historial local. `git reset --soft` la eliminó ANTES de cualquier push; `.gitignore` blindado ahora (`download/fcm-sa.json`, `download/*firebase*.json`). La llave NUNCA llegó a GitHub (verificado tras push: el remoto solo tiene dd63405..bd08489).
+4. **Push a GitHub**: `dd63405..bd08489` (trabajo FCM completo + blindaje). GitHub ahora SÍ es la fuente de verdad con todo el código D121.
+5. **google-services.json recuperado por API**: JWT RS256 casero con la SA → Management API → `androidApps/{id}/config` (campo `configFileContents`, base64 — el nombre de campo difiere de la doc). App `cu.alain.chat` seguía ACTIVE. Script: `scripts/fetch_google_services.py`.
+6. **Entorno rehecho**: JDK Temurin 21 y gcloud 591 reinstalados bajo `/home/z/my-project/` (persistente). `local.properties` recreado.
+7. **Recompilación**: assembleDebug 68,9 MB + assembleDebugAndroidTest OK. Manifest mergeado verificado: `CerlitaFcmService` + FirebaseInitProvider + receptor de instance-id presentes. **Los 8 tests instrumentados confirmados por dexdump** (a1–a4 FlujoCritico + b1–b4 Reinstall, nombres exactos en el dex).
+8. **Tests JVM 136/136 en verde** — con incidente: la primera corrida dio 5 fallos que NO eran del código (Robolectric llenó `/tmp` → "No space left on device" + UnsatisfiedLinkError de SQLite nativo). Limpieza de temporales → re-ejecución → BUILD SUCCESSFUL. Lección anotada: con disco al 92% los tests de Robolectric mienten.
+9. **Test Lab sigue bloqueado**: `testing.googleapis.com` y `toolresults.googleapis.com` devuelven 404-HTML (deshabilitadas) — verificado por curl directo y contraste con firebase.googleapis.com (401 JSON = habilitada). La SA no puede habilitarlas (sin serviceusage.services.enable). Los roles IAM tampoco constan aplicados (getIamPolicy denegado, gcloud models list 403). Pendiente del dueño en consola.
+
+**Estado**: bd08489 en main (GitHub). APK fresco `download/Cerlita-Chat-v1.0.1-fcm-debug.apk`. Script `scripts/lanzar_testlab.sh` listo (verifica precondiciones y lanza Pixel 7 / API 34 / es al detectar las APIs activas).
