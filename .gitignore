@@ -78,5 +78,23 @@ scripts/recupera_credenciales.py
 # (duplicado de docs/), copia no-secreto de config en download/, y las fuentes
 # vendored de tink/argon2 (material de referencia de cripto, nunca del proyecto)
 /worklog.md
-download/google-services.json
 scripts/vendor/
+
+# ============================================================
+# 3er auto-snapshot colado (fe745f2, 3-nov 19:27): 76 artefactos
+# de trabajo de sesiones anteriores (generadores, logs, PDFs, PNGs,
+# JSONs de QA con VLM, informe v1) subidos sin curar. Regla dura:
+# TODO lo que entre en scripts/ queda fuera salvo whitelist; los
+# scripts curados que SÍ son del proyecto se listan abajo. Un script
+# nuevo que merezca el repo: añadirlo a la whitelist a conciencia.
+# download/ completo: entregables para el usuario, nunca repo.
+# ============================================================
+download/
+scripts/*
+!scripts/diagnostico_testlab.py
+!scripts/e2e_fcm.py
+!scripts/fetch_google_services.py
+!scripts/fetch_supa_keys.py
+!scripts/lanzar_testlab.sh
+!scripts/probe_permiso_matriz.py
+!scripts/reinstala_toolchain.sh
