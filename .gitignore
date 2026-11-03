@@ -73,3 +73,9 @@ gcloud-sdk/
 cmdtools.zip
 # Mapa de dónde viven credenciales del sandbox — utilidad local, no pública
 scripts/recupera_credenciales.py
+# Últimos sueltos tras la auditoría del 3-nov: worklog.md obsoleto en raíz
+# (duplicado de docs/), copia no-secreto de config en download/, y las fuentes
+# vendored de tink/argon2 (material de referencia de cripto, nunca del proyecto)
+/worklog.md
+download/google-services.json
+scripts/vendor/
