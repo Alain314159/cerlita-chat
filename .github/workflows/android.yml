@@ -183,8 +183,24 @@ jobs:
         run: |
           # KVM del runner (virt anidada) — sanity check antes de quemar minutos
           ls -l /dev/kvm || true
-          cd android && ./gradlew :app:pixelAtdDebugAndroidTest --stacktrace \
-            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=768m"
+          # Reintento x1: el arranque del ATD en el runner efímero es lo más
+          # frágil del pipeline (3-nov: ZipException al descargar el emulador
+          # y EmulatorStartFailed «Unable to find device serial» — ambos puros
+          # flakes de infra que pasan al reintentar; el estado del código no
+          # cambia entre intentos).
+          cd android
+          for i in 1 2; do
+            if ./gradlew :app:pixelAtdDebugAndroidTest --stacktrace \
+                 -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=768m"; then
+              exit 0
+            fi
+            echo "::warning::intento $i del ATD falló — limpiando y reintentando"
+            ./gradlew --stop || true
+            rm -rf ~/.android/avd/Pixel_6_API_34.atd.avd || true
+            rm -rf android/app/build/outputs/managed-device || true
+            sleep 10
+          done
+          exit 1
 
       - name: Subir resultados si falla
         if: failure()
