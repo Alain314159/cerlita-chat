@@ -54,3 +54,22 @@ Thumbs.db
 
 # Credenciales subidas por el usuario (nunca al repo)
 upload/
+
+# ============================================================
+# Entorno del sandbox — NUNCA al repo. Los auto-snapshots del
+# reciclado hacen git add -A y colaron 1070 archivos de skills/
+# vía 796c629. Blindo todo antes del próximo reciclado.
+# ============================================================
+skills/
+tool-results/
+.workspace-backup/
+.secrets/
+.config/
+jdk*/
+android-sdk/
+gradle-dist/
+gradle-home/
+gcloud-sdk/
+cmdtools.zip
+# Mapa de dónde viven credenciales del sandbox — utilidad local, no pública
+scripts/recupera_credenciales.py

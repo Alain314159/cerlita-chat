@@ -388,3 +388,18 @@ Stage Summary:
 9. **Test Lab sigue bloqueado**: `testing.googleapis.com` y `toolresults.googleapis.com` devuelven 404-HTML (deshabilitadas) — verificado por curl directo y contraste con firebase.googleapis.com (401 JSON = habilitada). La SA no puede habilitarlas (sin serviceusage.services.enable). Los roles IAM tampoco constan aplicados (getIamPolicy denegado, gcloud models list 403). Pendiente del dueño en consola.
 
 **Estado**: bd08489 en main (GitHub). APK fresco `download/Cerlita-Chat-v1.0.1-fcm-debug.apk`. Script `scripts/lanzar_testlab.sh` listo (verifica precondiciones y lanza Pixel 7 / API 34 / es al detectar las APIs activas).
+
+## Sesión 2026-11-03 — 3er reciclado: snapshot auditado, CI en verde verificado, Test Lab a UN clic
+
+**Contexto**: sandbox reciclado de nuevo (hoy 17:38). El HEAD local era una restauración parcial VIEJA (pre-bd08489) más un auto-commit contaminado encima. La API de GitHub llegó rate-limited desde el sandbox → CI verificado por la página pública del repo.
+
+**Hecho, en orden**:
+
+1. **Auditoría antes de tocar nada**: el HEAD local (c7a68fe, auto-snapshot) traía `download/fcm-sa.json` en su árbol — la llave SA en historial local. Descartado con `git reset --hard origin/main` ANTES de cualquier push. Verificado después por tres vías (árbol actual del remoto, `--diff-filter=A` sobre toda la historia, árbol de 796c629): **la llave SA NUNCA llegó a GitHub** — c7a68fe jamás fue empujado.
+2. **Hallazgo en el remoto**: el auto-snapshot 796c629 SÍ está en la historia pública — la sesión del 2-nov lo empujó dentro del lote dd63405..bd08489 sin notarlo. Subió 1070 archivos de `skills/` del entorno y `scripts/recupera_credenciales.py` (un mapa de dónde viven credenciales en el sandbox: el archivo subido por el usuario, el skill del token, un commit huérfano). Scan de secretos en todo el árbol del remoto: limpio — solo placeholders AKIA de plantillas HTML y el `google-services.json` ya documentado. Este commit retira la contaminación (los archivos quedan en disco, fuera del repo) y blinda `.gitignore` contra el próximo auto-snapshot (`tool-results/`, `.workspace-backup/`, `skills/`, SDKs del sandbox, `.secrets/`, `.config/`).
+3. **CI verificado en verde** (página pública): corridas #48 (eeae9f2) y #49 (b691765) SUCCESS — 136 tests JVM + umbral de cobertura + contraste WCAG + lint base-cero + APK release firmado como artefacto (retención 30 días) + 8/8 instrumentadas en emulador ATD con KVM. PR #1 (avatares D83) ya fusionado el 28-oct. El plan «corrámolos solo en CI» queda COMPLETO.
+4. **Test Lab a un clic**: las APIs testing y toolresults ya responden 200 (el 2-nov daban 404-HTML) — habilitadas. El preflight sin cuota da 403 PERMISSION_DENIED: SOLO falta el rol IAM en la SA. Clic del dueño: consola IAM → `firebase-adminsdk-fbsvc` → «Editor», o el par «Firebase Test Lab Admin» + «Firebase Analytics Viewer». `scripts/lanzar_testlab.sh` hace el resto solo (precondiciones + preflight sin gastar cuota antes de lanzar).
+5. **Entorno**: los JDK quedaron root-owned e ilegibles tras el reciclado (dirs vacíos — eliminados; no hizo falta reinstalar, esta sesión no compila nada). gcloud, SDK Android y cachés de Gradle intactos. Nueva convención: copia de trabajo de la llave SA en `.secrets/` del proyecto (excluida vía `.git/info/exclude`, sobrevive reciclados, a diferencia de `~/.secrets/`) y las herramientas se corren con `HOME=/home/z/my-project`.
+6. **Pendiente del dueño**: (a) el clic del rol IAM, (b) revocar el PAT que quedó expuesto en el chat, (c) cuando quiera FCM en producción: deploy del backend (migración 0007 + secret FCM_SA_JSON) — comando único documentado en la sesión del 2-nov.
+
+**Estado**: este commit (limpieza + este worklog). main vuelve a contener SOLO el proyecto.
