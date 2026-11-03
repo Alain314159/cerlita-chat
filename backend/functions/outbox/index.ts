@@ -72,7 +72,11 @@ async function fcmAccessToken(sa: FcmSa): Promise<string> {
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
   );
   const sig = new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, enc.encode(unsigned)));
-  const jwt = unsigned + "." .concat(Array.from(sig, (c) => String.fromCharCode(c)).join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // Firma → base64 → base64url. El binario crudo NO es base64: sin el btoa
+  // Google recibía bytes crudos en la firma y respondía oauth 400 (bug del
+  // primer ejercicio real de este camino — antes siempre degradaba a no-sa).
+  const sigB64 = u8ToB64(sig).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const jwt = `${unsigned}.${sigB64}`;
   const r = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },

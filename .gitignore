@@ -27,6 +27,7 @@ download/*firebase*.json
 # ============================================================
 backend/node_modules/
 backend/build/
+__pycache__/
 
 # ============================================================
 # Android / Gradle (preparado para Fase 1)

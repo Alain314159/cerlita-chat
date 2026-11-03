@@ -404,3 +404,20 @@ Stage Summary:
 7. **Flake en CI (lección)**: el job `instrumented` de la corrida del commit de limpieza falló con `ZipException: Archive is not a ZIP archive` al instalar el paquete «Android Emulator» — descarga corrupta EN el runner de GitHub, no el código (el job `build` pasó completo: 136 tests + cobertura + lint + APK). Remedio: re-run del job (vía `POST /actions/jobs/{id}/rerun`; `runs/rerun-failed-jobs` da 404 con este token). Commit final de blindaje: `/worklog.md` en raíz (prefijo exacto de docs/, eliminado), `download/google-services.json` (copia del no-secreto ya trackeado) y `scripts/vendor/` (jars/fuentes tink+argon2 de referencia) fuera del repo.
 
 **Estado**: dos commits hoy — limpieza de la contaminación del auto-snapshot + blindaje final del .gitignore. main vuelve a contener SOLO el proyecto.
+
+## Sesión 2026-11-03 (noche) — FCM a producción: deploy + DOS bugs cazados en el primer ejercicio real
+
+**Mandato**: el usuario entregó el SUPA_TOKEN que faltaba → ejecutar el deploy pendiente (migración 0007 + funciones + secret FCM_SA_JSON).
+
+**Hecho, en orden**:
+
+1. **Secrets reconstruidos** (el reciclado se llevó `secrets/`): `secrets/supabase.env` (token usuario + REF + URL + invite) chmod 600, SA copiada de `upload/` a `secrets/fcm-sa.json`. Anon + service-role JWT clásicas recuperadas vía Management API con `scripts/fetch_supa_keys.py` (nuevo — jamás imprime valores, solo formato/longitud). `secrets/` confirmado gitignored.
+2. **Migración 0007**: 3/3 OK (`sessions.fcm_token` + índice parcial — idempotente).
+3. **Deploy v1** de las 7 funciones (push estrenaba): smoke 36/37 — único FAIL por `user_cap`: 7 usuarios reales + 4 de prueba > tope 10. `MAX_USERS` 10→12 (margen para el smoke). Redeploy → **37/37 PASS**.
+4. **E2E FCM nuevo** (`scripts/e2e_fcm.py`): registro + sala + token FCM falso vía `/push` + mensaje vía `/outbox` + verificación en BD + limpieza. **CAZÓ DOS BUGS REALES** del código D121 que jamás se habían ejercitado (sin SA el outbox siempre degradó a "no-sa" y /push nunca llegó a producción):
+   - `/push`: `select session_id` — la columna no existe (es `id`). 500 en TODA llamada. Fix + redeploy (v7).
+   - `outbox` `fcmAccessToken`: la firma RS256 se concatenaba como **binario crudo** sin pasar por base64 → Google respondía `oauth 400` SIEMPRE. Fix con el helper `u8ToB64` existente. La verificación OAuth del 30-oct fue con un script Python aparte — el camino Deno desplegado quedó muerto sin que nadie lo supiera. Lección: probar en producción el CAMINO DESPLEGADO, no un equivalente local.
+5. **Verificación E2E final**: `/push` 200 → outbox diag `fcm: sent 0/1 (248B)` con token falso (0 entregas esperadas) → **OAuth contra Google OK, envío intentado, auto-limpieza del token muerto confirmada en BD** (Google 404 → `fcm_token = NULL`). El canal completo funciona; solo una entrega real requiere teléfono físico.
+6. **Producción**: `--debug-off` + smoke final **37/37 PASS con DEBUG=0**.
+
+**Estado**: FCM ACTIVO en producción (5ª capa de despertar, D121). Commit: fix push/outbox + MAX_USERS 12 + scripts e2e_fcm/fetch_supa_keys + `__pycache__/` al gitignore. Pendiente del dueño sin cambio: clic del rol IAM (Test Lab), revocar PATs expuestos (GitHub y AHORA también este SUPA_TOKEN del chat).

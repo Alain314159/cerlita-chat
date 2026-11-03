@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
     const hash = toHex(sha256(enc.encode(h.slice(7))));
 
     const [me] = await sql`
-      select session_id from sessions
+      select id from sessions
       where token_hash = ${hash} and revoked_at is null and expires_at > now()
       limit 1`;
     if (!me) return json(401, { e: "unauthorized" });
