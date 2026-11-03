@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "```json\n{\n  \"boca\": \"Línea ondulada/texturizada tipo gusanito. No lee como sonrisa ω, parece más un bigote o expresión neutral/confundida.\",\n  \"veredicto\": \"ITERAR\",\n  \"notas\": [\n    \"Necesitamos la forma de boca 'cat mouth' (ω o U ancha) para lograr la expresión kawaii alegre solicitada.\",\n    \"La textura de 'gusanito' es creativa pero funciona mejor como detalle decorativo, no como forma principal de sonrisa.\"\n  ]\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793300370,
+  "id": "20261030025927ee8cb0e131924527",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261030025927ee8cb0e131924527",
+  "usage": {
+    "completion_tokens": 132,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1420,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 1552
+  }
+}

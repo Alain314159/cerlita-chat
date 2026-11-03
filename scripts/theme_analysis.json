@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Basándome en el análisis detallado del mockup, aquí tienes la **paleta de colores exacta** (en código HEX) y la descripción de los elementos de interfaz:\n\n---\n\n### 🎨 PALETA DE COLORES EXACTA (HEX)\n\n| Elemento | Color HEX | Descripción visual |\n|----------|-----------|-------------------|\n| **1. Barra superior/Header** | `#F8E8E8` o `#F5E0E0` | Rosa muy pálido, casi blanco con tinte rosado suave |\n| **2. Fondo de pantallas** | `#FDF2F2` a `#FAEEEE` | Blanco rosado cálido (ligeramente más claro que el header) |\n| **3. Burbuja mensaje ENVIADO** | `#FFB6C1` (LightPink) | Rosa pastel intenso, suave pero distinguible |\n| **4. Burbuja mensaje RECIBIDO** | `#E8E0E0` o `#DDD5D5` | Gris rosado muy claro (casi beige grisáceo) |\n| **5. Botón principal/Acento (FAB)** | `#E57373` o `#EF9A9A` | Salmon/rosa medio (botón circular del micrófono) |\n| **6. Texto principal** | `#4A4A4A` o `#3D3D3D` | Gris oscuro (no es negro puro) |\n| **7. Texto secundario/metadata** | `#9E9E9E` o `#BDBDBD` | Gris medio (para horas y subtítulos) |\n| **8. Barra navegación inferior** | `#FFFFFF` o `#FEFEFE` | Blanco puro con borde superior sutil |\n| **9. Iconos NO seleccionados** | `#B0A9A9` | Gris rosado apagado |\n| **10. Iconos SELECCIONADOS/Activos** | `#E57373` | Rosa salmón (coincide con botón principal) |\n| **11. Corazones y corazones rellenos** | `#FF8FAB` o `#F06292` | Rosa neón/coral brillante |\n| **12. Badges (notificaciones)** | `#EF5350` o `#E57373` | Rojo coral (números \"2\" y \"1\" en chats) |\n| **13. FAB (Botón flotante)** | `#EC407A` o `#E91E63` | Rosa fuerte para el botón de acción principal |\n| **14. Botón \"Rechazar\" (llamada)** | `#EF5350` | Rojo coral |\n| **15. Botón \"Aceptar\" (llamada)** | `#66BB6A` | Verde menta suave (estilo WhatsApp pero más pastel) |\n\n---\n\n### 📱 DESCRIPCIÓN DE ELEMENTOS DE INTERFAZ\n\n#### **Barra de Navegación Inferior**\nTiene **4 pestañas (tabs)** principales:\n1. **Chats** (icono de burbuja de diálogo) - *Seleccionada en la pantalla principal*\n2. **Estados** (icono de corazón/círculo)\n3. **Llamadas** (icono de teléfono/teléfono clásico)\n4. **Ajustes** (icono de engranaje)\n\n*Nota: Los iconos tienen un estilo \"línea fina\" (outline) cuando no están activos, y se rellenan con color rosa cuando están seleccionados.*\n\n#### **Pantalla de Llamada Entrante (Incoming Call)**\nEs una pantalla **fullscreen inmersiva** con estas características:\n- **Fondo**: Rosa muy pálido (`#FCE4EC`) con pequeños corazones flotantes decorativos (algunos rellenos, otros solo contorno)\n- **Avatar central**: Círculo grande con la imagen del cerdito y koala abrazados\n- **Nombre**: \"Amor\" con un pequeño corazón después (❤️)\n- **Subtítulo**: \"Llamada de WhatsApp\"\n- **Botones inferiores**:\n  - **Izquierda**: Círculo rojo coral con icono de teléfono colgado → Texto \"Rechazar\"\n  - **Derecha**: Círculo verde menta con icono de teléfono → Texto \"Aceptar\"\n- **Decoración**: Corazones pequeños dispersos por la pantalla (algunos `#FF8FAB`, otros solo contorno gris)\n\n#### **Elementos Distintivos Adicionales**\n- **Stickers/Emojis**: Fondo blanco con pegatinas del cerdito (rosa) y koala (gris) en diversas poses (abrazando, con corazones, dormido)\n- **Indicador \"En línea\"**: Punto verde pequeño (`#4CAF50`) junto al nombre\n- **Iconos de verificación**: Check dobles en color rosa (`#E91E63`) en mensajes enviados\n- **Separadores**: Líneas muy sutiles en `#F0E0E0`\n- **Campos de búsqueda**: Fondo `#F5E6E6` con texto placeholder en gris claro\n\n---\n\n### 💡 TIPS PARA RECREAR EL TEMA\n1. **Gradientes sutiles**: El fondo no es plano, tiene un degradado muy sutil de arriba (`#F8E8E8`) a abajo (`#FFFFFF`)\n2. **Sombras**: Las burbujas de chat tienen sombra proyectada muy suave (`rgba(255,182,193,0.3)`)\n3. **Tipografía**: Usa una sans-serif redondeada (como **Nunito**, **Quicksand** o **SF Pro Rounded**) para mantener la estética \"kawaii\"\n4. **Bordes redondeados**: Todo tiene bordes muy redondeados (border-radius: 20px+ para burbujas, 50% para círculos)\n\n¿Necesitas que profundice en algún componente específico como el CSS de las burbujas de chat o la estructura exacta de la barra de navegación?",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793131896,
+  "id": "20261028041115ba42dc184b744354",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261028041115ba42dc184b744354",
+  "usage": {
+    "completion_tokens": 1382,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1788,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 3170
+  }
+}

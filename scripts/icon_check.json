@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "APROBADO. Ambos animales se ven completos dentro del círculo sin cortes, aunque la cola del cerdito y las orejas del koala rozan el borde, mantienen su integridad visual.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793132181,
+  "id": "202610280416204053781d4ef6420a",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "202610280416204053781d4ef6420a",
+  "usage": {
+    "completion_tokens": 49,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 205,
+    "prompt_tokens_details": {
+      "cached_tokens": 2
+    },
+    "total_tokens": 254
+  }
+}

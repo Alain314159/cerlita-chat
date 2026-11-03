@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "**Análisis de la Cara (Iteración 4):**\n\n*   **Ojos:** Ojos grandes, ovalados y de color marrón grisáceo (o azul grisáceo en la imagen completa), con un brillo blanco circular pequeño y definido en la parte superior derecha. Están cubiertos por unas gafas redondas con montura marrón.\n*   **Nariz:** Grande, ovalada y prominente, de color marrón sólido mate. Tiene un pequeño punto de luz (specular) en la parte superior derecha que le da volumen.\n*   **Boca/Sonrisa:** Forma de una cápsula horizontal alargada y plana, de color marrón más oscuro que el pelaje. Es una boca neutra o ligeramente sorprendida, **no es una sonrisa clara**.\n*   **Rubor:** Dos óvalos suaves de color rosa pastel situados simétricamente en las mejillas, justo debajo de los ojos.\n\n```json\n{\n  \"sonrisa_clara\": \"no\",\n  \"gorro\": \"apoya\",\n  \"veredicto\": \"ITERAR\",\n  \"notas\": [\n    \"Cambiar la boca por una sonrisa curva tipo 'cat mouth' para aumentar la expresión kawaii.\",\n    \"Aumentar ligeramente el tamaño del rubor para acentuar la ternura facial.\"\n  ]\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793299972,
+  "id": "2026103002524791e5d9257cea4c0e",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "2026103002524791e5d9257cea4c0e",
+  "usage": {
+    "completion_tokens": 313,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1461,
+    "prompt_tokens_details": {
+      "cached_tokens": 2
+    },
+    "total_tokens": 1774
+  }
+}

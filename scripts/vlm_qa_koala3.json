@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "```json\n{\n  \"calidad_general\": \"Estética de vinilo suave y limpio, con buen volumen chibi, aunque la expresión es neutra.\",\n  \"sonrisa\": \"no\",\n  \"ojos\": \"sí\",\n  \"gorro_fiesta\": \"flota\",\n  \"camiseta\": \"lee como tela (cuello y puños definidos)\",\n  \"veredicto\": \"ITERAR\",\n  \"notas\": [\n    \"La expresión facial es demasiado neutra/seria para una app romántica; necesita una sonrisa clara y alegre para conectar emocionalmente.\",\n    \"El gorro de fiesta no tiene física de colisión y flota sobre las orejas; debe ajustarse para que parezca que lleva puesto el accesorio.\"\n  ]\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793299544,
+  "id": "20261030024540ba0f8b2458d64ee6",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261030024540ba0f8b2458d64ee6",
+  "usage": {
+    "completion_tokens": 179,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 3532,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 3711
+  }
+}

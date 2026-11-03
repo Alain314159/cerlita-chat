@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700;900&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <style>
+    @page { size: 794px 1123px; margin: 0; }
+    :root {
+      --c-bg: #f4f3f3;
+      --c-accent: #8b7226;
+      --c-text: #1d1c1a;
+      --c-muted: #838079;
+      --c-mid: #685d3b;
+      --c-surface: #e8e6e3;
+    }
+    html, body {
+      margin: 0; padding: 0;
+      width: 794px; height: 1123px;
+      background: var(--c-bg);
+      color: var(--c-text);
+      font-family: 'Inter', 'Noto Sans SC', sans-serif;
+    }
+    @media screen {
+      html { height: auto; display: flex; justify-content: center; min-height: 100vh; background: var(--c-bg); }
+      body { transform-origin: top center; scale: min(1, calc(100vw / 794), calc(100vh / 1123)); margin: 0 auto; box-shadow: 0 0 60px rgba(0,0,0,0.12); }
+    }
+    .cover { width: 794px; height: 1123px; position: relative; }
+
+    /* Layer 1 — fondo: rejilla al 2% (clipeada SOLO aquí) */
+    .layer1 { position: absolute; inset: 0; overflow: hidden; z-index: 1; }
+    .grid {
+      position: absolute; inset: 0;
+      background-image:
+        repeating-linear-gradient(0deg, rgba(29,28,26,0.02) 0, rgba(29,28,26,0.02) 0.5px, transparent 0.5px, transparent 50px),
+        repeating-linear-gradient(90deg, rgba(29,28,26,0.02) 0, rgba(29,28,26,0.02) 0.5px, transparent 0.5px, transparent 50px);
+    }
+
+    /* Layer 2 — estructura: línea de anclaje vertical gruesa */
+    .layer2 { position: absolute; inset: 0; z-index: 2; }
+    .anchor {
+      position: absolute;
+      left: 95px;               /* 0.12 * W */
+      top: 112px;               /* 0.10 * H */
+      bottom: 112px;            /* hasta 0.90 * H */
+      width: 8px;               /* 6pt */
+      background: var(--c-accent);
+    }
+
+    /* Layer 3 — contenido: X = 0.12*W + 30pt */
+    .layer3 { position: absolute; inset: 0; z-index: 3; }
+    .kicker {
+      position: absolute; left: 148px; top: 168px;   /* 0.15 * H */
+      font-size: 15pt; font-weight: 400;
+      letter-spacing: 4pt; text-transform: uppercase;
+      color: var(--c-mid); opacity: 0.62;
+      max-width: 560px;
+    }
+    .hero {
+      position: absolute; left: 148px; top: 300px;   /* zona B ~0.30 * H */
+      font-size: 56pt; font-weight: 900; line-height: 1.12;
+      color: var(--c-text); letter-spacing: 1px;
+      max-width: 580px;
+    }
+    .hero .thin { font-weight: 300; color: var(--c-mid); }
+    .summary {
+      position: absolute; left: 148px; top: 585px;   /* zona C ~0.52 * H */
+      font-size: 13.5pt; font-weight: 400; line-height: 1.65;
+      color: var(--c-text); opacity: 0.85;
+      max-width: 476px;                               /* <= 0.6 * W */
+    }
+    .meta {
+      position: absolute; left: 148px; top: 842px;   /* zona D 0.75 * H */
+      font-size: 12.5pt; font-weight: 500; line-height: 1.9;
+      color: var(--c-text);
+    }
+    .meta .lbl { color: var(--c-muted); font-weight: 300; }
+    .footer {
+      position: absolute; left: 148px; bottom: 64px;
+      font-size: 9.5pt; font-weight: 400; letter-spacing: 2.5pt;
+      text-transform: uppercase; color: var(--c-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="cover">
+    <div class="layer1"><div class="grid"></div></div>
+    <div class="layer2"><div class="anchor"></div></div>
+    <div class="layer3">
+      <div class="kicker">Informe de preparación para lanzamiento · Versión 1.0</div>
+      <div class="hero">CERLITA<br>CHAT</div>
+      <div class="summary">
+        Análisis implacable de brechas de lanzamiento sobre la v0.17.0: qué está
+        ganado, qué falta y en qué orden cerrarlo. El producto ya es de 1.0;
+        la verificación todavía no.
+      </div>
+      <div class="meta">
+        <span class="lbl">Versión auditada&nbsp;&nbsp;</span>v0.17.0 «Ligera» · versionCode 19<br>
+        <span class="lbl">Método&nbsp;&nbsp;</span>Lectura de código, compilación firmada, 122/122 pruebas<br>
+        <span class="lbl">Fecha&nbsp;&nbsp;</span>30 de octubre de 2026
+      </div>
+      <div class="footer">Auditoría técnica · Confidencial para la pareja</div>
+    </div>
+  </div>
+</body>
+</html>

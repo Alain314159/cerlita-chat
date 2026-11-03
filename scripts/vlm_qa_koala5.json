@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "```json\n{\n  \"boca\": \"Línea recta horizontal con extremos redondeados, expresión neutra o ligeramente seria, no lee como sonrisa\",\n  \"rubor\": \"ok\",\n  \"conjunto\": \"Avatar de calidad tipo Memoji/Nendoroid con acabado suave y proporciones kawaii excelentes\",\n  \"veredicto\": \"ITERAR\",\n  \"notas\": [\n    \"Cambiar la boca por una curva tipo 'ω' o arco sonriente para lograr la expresión alegre kawaii definitiva\",\n    \"La versión base (sin accesorios) es la más fuerte; mantener esa limpieza para el modelo final\"\n  ]\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793300038,
+  "id": "20261030025355a2a3a298fe8c4f83",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261030025355a2a3a298fe8c4f83",
+  "usage": {
+    "completion_tokens": 154,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 2136,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 2290
+  }
+}

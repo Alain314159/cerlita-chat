@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Esta captura muestra la **pantalla de chat (conversación)** de una aplicación de mensajería (aparentemente una app de citas o chat temática con el nombre \"cerdita\").\n\n**Aspecto del avatar:**\n*   **Estilo:** Es un avatar **2D plano y kawaii** (estilo dibujo animado cute), no 3D. Tiene un diseño simple, redondeado y con colores pastel suaves.\n*   **Apariencia:** Representa a un **cerdito o cochinito** rosado, con mejillas sonrojadas, ojos cerrados como si sonriera y orejas pequeñas. No lleva ropa ni accesorios visibles; es solo el personaje animal en su forma básica.\n\n**Estado del editor de avatar:**\nEl editor de avatar **no está activo ni visible** en esta pantalla. Lo que se observa es:\n1.  El avatar funcionando como **foto de perfil** tanto en la cabecera del chat (junto al nombre \"cerdita\") como junto al mensaje de la usuaria \"amelia\".\n2.  Una **imagen adjunta/collage** que parece ser una captura de pantalla promocional de la misma aplicación, mostrando varias de sus interfaces (pantallas de inicio, listas de contactos, galería de stickers/emojis y llamadas), donde se ven múltiples variaciones de este mismo estilo de avatares 2D de animales.\n\nEn resumen: es una vista normal de conversación donde el avatar 2D del cerdito se usa como identidad visual, pero no se está editando en ese momento.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793216491,
+  "id": "20261029034125360033472aa641eb",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261029034125360033472aa641eb",
+  "usage": {
+    "completion_tokens": 352,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 3416,
+    "prompt_tokens_details": {
+      "cached_tokens": 2
+    },
+    "total_tokens": 3768
+  }
+}

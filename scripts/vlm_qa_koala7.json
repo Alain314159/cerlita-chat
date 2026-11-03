@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "```json\n{\n  \"boca\": \"Línea curva con textura de cuentas, sonrisa alegre y clara\",\n  \"cara_total\": \"Expresión tierna y amigable, con ojos brillantes, nariz prominente y rubor suave que transmite calidez\",\n  \"veredicto\": \"APROBADO\",\n  \"notas\": \"Excelente proporción y estilo kawaii\"\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793300713,
+  "id": "20261030030510274f5c0431b8477f",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261030030510274f5c0431b8477f",
+  "usage": {
+    "completion_tokens": 97,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 1443,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 1540
+  }
+}

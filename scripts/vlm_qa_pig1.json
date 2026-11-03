@@ -1,0 +1,28 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "```json\n{\n  \"cara\": \"Ojos con brillo y hocico correctos. La sonrisa es una línea curva en lugar de la forma 'U' solicitada, aunque el rubor está bien definido.\",\n  \"orejas\": \"Las orejas están erguidas en lugar de caídas. No se aprecia el interior rosa solicitado desde este ángulo.\",\n  \"cola\": \"La cola tiene forma de 'C' o gancho pequeño, pero falta la forma de espiral (o 'cork-screw') característica del estilo kawaii.\",\n  \"vestido\": \"Vestido con dobladillo ancho presente y bien modelado. El volumen es adecuado para el estilo chibi.\",\n  \"botitas\": \"Las extremidades inferiores son simples formas de cápsula sin definir claramente las botitas ni las suelas.\",\n  \"veredicto\": \"ITERAR\",\n  \"notas\": [\n    \"Modificar la sonrisa a forma de 'U' suave y hacer que las orejas caigan hacia los lados para mayor expresividad romántica.\",\n    \"Añadir la forma de espiral a la cola y modelar explícitamente las botitas con suela para completar el look de personaje.\"\n  ]\n}\n```",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1793301017,
+  "id": "20261030031011b4396dee832d4856",
+  "model": "glm-5v-turbo",
+  "object": "chat.completion",
+  "request_id": "20261030031011b4396dee832d4856",
+  "usage": {
+    "completion_tokens": 279,
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "prompt_tokens": 2852,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "total_tokens": 3131
+  }
+}

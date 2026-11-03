@@ -1,0 +1,6 @@
++ mkdir -p /home/z/toolchain
++ cd /home/z/toolchain
++ '[' '!' -x jdk-21/bin/javac ']'
++ echo '[1/5] Descargando JDK 21...'
+[1/5] Descargando JDK 21...
++ curl -sSL --retry 3 -o jdk21.tar.gz https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse

@@ -1,0 +1,5 @@
++ TC=/home/z/toolchain
++ mkdir -p /home/z/toolchain
++ cd /home/z/toolchain
++ ls -d '/home/z/toolchain/jdk-21*'
++ curl -sSL -o jdk21.tar.gz https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jdk/hotspot/normal/eclipse
